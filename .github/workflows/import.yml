@@ -23,6 +23,8 @@ jobs:
         run: |
           set -euo pipefail
           cat .import/part-* | base64 --decode > "$RUNNER_TEMP/wambridge.zip"
+          echo "22d74907984f31f793db80e0f3fa5bc63671066c977ea9bd1257ebdee5af06f4  $RUNNER_TEMP/wambridge.zip" | sha256sum --check
+          unzip -tq "$RUNNER_TEMP/wambridge.zip"
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           unzip -q "$RUNNER_TEMP/wambridge.zip" -d .
           git config user.name "github-actions[bot]"
