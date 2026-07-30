@@ -1,0 +1,101 @@
+diff --git a/foobar/foo_out_wam.cpp b/foobar/foo_out_wam.cpp
+index f4e91fd..a7fd946 100644
+--- a/foobar/foo_out_wam.cpp
++++ b/foobar/foo_out_wam.cpp
+@@ -460,12 +460,74 @@ private:
+         SetHandleInformation(stdinWrite, HANDLE_FLAG_INHERIT, 0);
+         SetHandleInformation(stdoutRead, HANDLE_FLAG_INHERIT, 0);
+ 
+-        STARTUPINFOW startup{};
+-        startup.cb = sizeof(startup);
+-        startup.dwFlags = STARTF_USESTDHANDLES;
+-        startup.hStdInput = stdinRead;
+-        startup.hStdOutput = stdoutWrite;
+-        startup.hStdError = stdoutWrite;
++        STARTUPINFOEXW startup{};
++        startup.StartupInfo.cb = sizeof(startup);
++        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
++        startup.StartupInfo.hStdInput = stdinRead;
++        startup.StartupInfo.hStdOutput = stdoutWrite;
++        startup.StartupInfo.hStdError = stdoutWrite;
++
++        SIZE_T attributeListSize = 0;
++        InitializeProcThreadAttributeList(
++            nullptr,
++            1,
++            0,
++            &attributeListSize
++        );
++        if (attributeListSize == 0) {
++            close_handle(stdinRead);
++            close_handle(stdinWrite);
++            close_handle(stdoutRead);
++            close_handle(stdoutWrite);
++            set_failure_if_current(
++                "Could not prepare helper handle inheritance",
++                generation
++            );
++            return false;
++        }
++
++        std::vector<std::byte> attributeStorage(attributeListSize);
++        startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
++            attributeStorage.data()
++        );
++        if (!InitializeProcThreadAttributeList(
++                startup.lpAttributeList,
++                1,
++                0,
++                &attributeListSize
++            )) {
++            close_handle(stdinRead);
++            close_handle(stdinWrite);
++            close_handle(stdoutRead);
++            close_handle(stdoutWrite);
++            set_failure_if_current(
++                "Could not initialize helper handle inheritance",
++                generation
++            );
++            return false;
++        }
++
++        HANDLE inheritedHandles[] = {stdinRead, stdoutWrite};
++        if (!UpdateProcThreadAttribute(
++                startup.lpAttributeList,
++                0,
++                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
++                inheritedHandles,
++                sizeof(inheritedHandles),
++                nullptr,
++                nullptr
++            )) {
++            DeleteProcThreadAttributeList(startup.lpAttributeList);
++            close_handle(stdinRead);
++            close_handle(stdinWrite);
++            close_handle(stdoutRead);
++            close_handle(stdoutWrite);
++            set_failure_if_current(
++                "Could not restrict helper handle inheritance",
++                generation
++            );
++            return false;
++        }
+ 
+         PROCESS_INFORMATION process{};
+         auto command = command_line(sampleRate, channels);
+@@ -478,12 +540,13 @@ private:
+             nullptr,
+             nullptr,
+             TRUE,
+-            CREATE_NO_WINDOW,
++            CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+             nullptr,
+             nullptr,
+-            &startup,
++            &startup.StartupInfo,
+             &process
+         );
++        DeleteProcThreadAttributeList(startup.lpAttributeList);
+         close_handle(stdinRead);
+         close_handle(stdoutWrite);
+         if (!created) {
