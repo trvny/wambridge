@@ -10,6 +10,8 @@ class FoobarSourceTests(TestCase):
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertIn("STARTUPINFOEXW startup{}", source)
+        self.assertNotIn("STARTUPINFOW startup{}", source)
+        self.assertIn("startup.StartupInfo.cb = sizeof(startup);", source)
         self.assertIn("PROC_THREAD_ATTRIBUTE_HANDLE_LIST", source)
         self.assertIn(
             "HANDLE inheritedHandles[] = {stdinRead, stdoutWrite};",
