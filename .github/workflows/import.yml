@@ -22,6 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          wc -c .import/part-*
+          sha256sum .import/part-*
           cat .import/part-* | base64 --decode > "$RUNNER_TEMP/wambridge.zip"
           echo "22d74907984f31f793db80e0f3fa5bc63671066c977ea9bd1257ebdee5af06f4  $RUNNER_TEMP/wambridge.zip" | sha256sum --check
           unzip -tq "$RUNNER_TEMP/wambridge.zip"
