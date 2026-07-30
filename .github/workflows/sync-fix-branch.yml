@@ -1,0 +1,41 @@
+name: Sync fix branch
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.head_ref == 'fix/restrict-helper-handles'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/restrict-helper-handles
+          fetch-depth: 0
+
+      - name: Merge current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if git merge-base --is-ancestor origin/main HEAD; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git merge --no-edit origin/main; then
+            git rm -f --ignore-unmatch .github/workflows/apply-patch.yml
+            git checkout --theirs .github/workflows/sync-fix-branch.yml
+            git add .github/workflows/sync-fix-branch.yml
+            git commit --no-edit
+          fi
+          if [[ -f .sync-trigger ]]; then
+            git rm .sync-trigger
+            git commit --amend --no-edit
+          fi
+          git push origin HEAD:fix/restrict-helper-handles
