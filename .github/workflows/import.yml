@@ -4,6 +4,8 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - ".import/ready"
 
 permissions:
   contents: write
@@ -20,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 --decode .import/wambridge.zip.b64 > "$RUNNER_TEMP/wambridge.zip"
+          cat .import/part-* | base64 --decode > "$RUNNER_TEMP/wambridge.zip"
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           unzip -q "$RUNNER_TEMP/wambridge.zip" -d .
           git config user.name "github-actions[bot]"
