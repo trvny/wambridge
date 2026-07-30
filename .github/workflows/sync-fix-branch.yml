@@ -1,16 +1,17 @@
 name: Sync fix branch
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - fix/restrict-helper-handles
+    paths:
+      - ".sync-trigger"
 
 permissions:
   contents: write
 
 jobs:
   sync:
-    if: github.head_ref == 'fix/restrict-helper-handles'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
