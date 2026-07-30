@@ -1,0 +1,35 @@
+name: Apply source patch
+
+on:
+  push:
+    branches:
+      - fix/restrict-helper-handles
+    paths:
+      - "patches/restrict-helper-handles.patch"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/restrict-helper-handles
+
+      - name: Apply patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_file="patches/restrict-helper-handles.patch"
+          if [[ ! -f "$patch_file" ]]; then
+            exit 0
+          fi
+          git apply "$patch_file"
+          git rm "$patch_file"
+          git add foobar/foo_out_wam.cpp
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Restrict helper handle inheritance"
+          git push origin HEAD:fix/restrict-helper-handles
