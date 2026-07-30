@@ -28,7 +28,12 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git merge --no-edit origin/main
+          if ! git merge --no-edit origin/main; then
+            git rm -f --ignore-unmatch .github/workflows/apply-patch.yml
+            git checkout --theirs .github/workflows/sync-fix-branch.yml
+            git add .github/workflows/sync-fix-branch.yml
+            git commit --no-edit
+          fi
           if [[ -f .sync-trigger ]]; then
             git rm .sync-trigger
             git commit --amend --no-edit
