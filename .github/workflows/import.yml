@@ -1,0 +1,32 @@
+name: Import WAM Bridge
+
+on:
+  push:
+    branches:
+      - import/wambridge
+    paths:
+      - ".github/workflows/import.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: import/wambridge
+
+      - name: Replace repository contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode .import/wambridge.zip.b64 > "$RUNNER_TEMP/wambridge.zip"
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          unzip -q "$RUNNER_TEMP/wambridge.zip" -d .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "Import WAM Bridge"
+          git push origin HEAD:import/wambridge
