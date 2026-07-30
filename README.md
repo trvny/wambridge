@@ -1,5 +1,7 @@
+![foobar2000 Badge](https://img.shields.io/badge/foobar2000-000?logo=foobar2000&logoColor=fff&style=for-the-badge) ![Samsung Badge](https://img.shields.io/badge/Samsung-1428A0?logo=samsung&logoColor=fff&style=for-the-badge) ![C++ Badge](https://img.shields.io/badge/C%2B%2B-00599C?logo=cplusplus&logoColor=fff&style=for-the-badge) ![Python Badge](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff&style=for-the-badge)
+
 <p align="center">
-  <img src="https://www.google.com/s2/favicons?domain=samsung.com&sz=64" alt="samsung">
+  <img src="https://www.google.com/s2/favicons?domain=samsung.com&sz=48" alt="samsung">
 </p>
 
 # WAM Bridge
