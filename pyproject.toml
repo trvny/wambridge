@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trvny-wambridge"
+version = "0.1.0"
+description = "Local Wi-Fi audio bridge for Samsung Wireless Audio Multiroom speakers"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "trvny" }]
+dependencies = []
+
+[project.scripts]
+wambridge = "wambridge.radio_cli:main"
+wambridge-pcm = "wambridge.pcm_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
