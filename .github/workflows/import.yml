@@ -1,11 +1,9 @@
 name: Import WAM Bridge
 
 on:
-  push:
+  pull_request:
     branches:
-      - import/wambridge
-    paths:
-      - ".github/workflows/import.yml"
+      - main
 
 permissions:
   contents: write
