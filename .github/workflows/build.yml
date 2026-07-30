@@ -1,0 +1,129 @@
+name: Build
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/build.yml"
+      - "foobar/**"
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build.yml"
+      - "foobar/**"
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Test Python package
+        run: |
+          python -m pip install -e .
+          python -m unittest discover -s tests -v
+
+      - name: Build standalone helper
+        shell: pwsh
+        run: |
+          python -m pip install pyinstaller
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onedir `
+            --name wambridge-pcm `
+            --distpath dist/helper `
+            --workpath build/pyinstaller `
+            --specpath build/pyinstaller `
+            foobar/wambridge_pcm_entry.py
+          & dist/helper/wambridge-pcm/wambridge-pcm.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Download foobar2000 SDK
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force external/foobar-sdk | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://www.foobar2000.org/downloads/SDK-2025-03-07.7z" `
+            -OutFile external/foobar-sdk.7z
+          7z x external/foobar-sdk.7z -oexternal/foobar-sdk -y
+
+          $sdkProject = Get-ChildItem external/foobar-sdk `
+            -Recurse -Filter foobar2000_SDK.vcxproj | Select-Object -First 1
+          if (-not $sdkProject) {
+            throw "foobar2000 SDK project not found after extraction"
+          }
+          $sdkRoot = Split-Path `
+            (Split-Path (Split-Path $sdkProject.FullName -Parent) -Parent) -Parent
+          "FOOBAR_SDK_ROOT=$sdkRoot" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build x64 component
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest `
+            -requires Microsoft.Component.MSBuild `
+            -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) {
+            throw "MSBuild not found"
+          }
+          & $msbuild foobar/foo_out_wam.vcxproj `
+            /t:Rebuild `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:VCToolsVersion=14.29.30133 `
+            "/p:FoobarSdkRoot=$env:FOOBAR_SDK_ROOT"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Package component and source
+        shell: pwsh
+        run: |
+          $output = "foobar/build/x64/Release/foo_out_wam.dll"
+          if (-not (Test-Path $output)) {
+            throw "foo_out_wam.dll was not produced"
+          }
+          New-Item -ItemType Directory -Force dist/component | Out-Null
+          Copy-Item $output dist/component/foo_out_wam.dll
+          Copy-Item `
+            dist/helper/wambridge-pcm `
+            dist/component/wambridge-pcm `
+            -Recurse
+          Push-Location dist/component
+          7z a -tzip ../foo_out_wam.fb2k-component *
+          Pop-Location
+          Copy-Item $output dist/foo_out_wam.dll
+          git archive `
+            --format=zip `
+            --output=dist/wambridge-source.zip `
+            HEAD
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foo_out_wam-x64
+          path: |
+            dist/foo_out_wam.dll
+            dist/foo_out_wam.fb2k-component
+            dist/wambridge-source.zip
+          if-no-files-found: error
