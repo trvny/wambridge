@@ -22,3 +22,15 @@ class FoobarSourceTests(TestCase):
             "DeleteProcThreadAttributeList(startup.lpAttributeList);",
             source,
         )
+
+    def test_pcm_batches_are_paced_in_realtime(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("buffered_frames_locked()", source)
+        self.assertIn("m_inflightFrames = batchFrames;", source)
+        self.assertIn("wait_for_batch_time(", source)
+        self.assertIn("batchStarted", source)
+        self.assertIn("pacing accepted=", source)
+        self.assertIn("flush requested", source)
+        self.assertIn("end of input", source)
+        self.assertIn('"0.1.4"', source)
