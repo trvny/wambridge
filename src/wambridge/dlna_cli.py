@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from time import monotonic, sleep
 
@@ -21,8 +22,8 @@ from .samsung import (
     probe,
     set_ip_info,
     set_mute,
+    set_playback_control,
     set_volume,
-    stop_playback,
 )
 
 LOGGER = logging.getLogger("wambridge")
@@ -138,6 +139,37 @@ def select_speaker(
     return speakers[0].ip, args.port
 
 
+def _is_timeout_error(error: BaseException) -> bool:
+    """Return whether a WAM failure ultimately came from a socket timeout."""
+
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, TimeoutError):
+            return True
+        reason = getattr(current, "reason", None)
+        if isinstance(reason, TimeoutError):
+            return True
+        if "timed out" in str(current).casefold():
+            return True
+        current = current.__cause__
+    return False
+
+
+def _allow_async_timeout(label: str, action: Callable[[], object]) -> None:
+    """Run a WAM command whose firmware response may never be closed."""
+
+    try:
+        action()
+    except WamApiError as error:
+        if not _is_timeout_error(error):
+            raise
+        LOGGER.warning(
+            "%s timed out waiting for the HTTP reply; continuing because "
+            "Samsung firmware may process this command asynchronously",
+            label,
+        )
+
+
 def _wait_for_completion(
     speaker_ip: str,
     speaker_port: int,
@@ -199,7 +231,13 @@ def _secure_stop(
     quiesced = not playback_touched
     if playback_touched:
         try:
-            stop_playback(speaker_ip, port=speaker_port)
+            set_playback_control(
+                speaker_ip,
+                "pause",
+                api_type="UIC",
+                port=speaker_port,
+                timeout=3.0,
+            )
             quiesced = True
         except WamApiError as error:
             LOGGER.warning("Could not stop Samsung share playback: %s", error)
@@ -275,27 +313,32 @@ def run(args: argparse.Namespace) -> int:
             server.duration or "unknown",
         )
 
+        _allow_async_timeout(
+            "SetIpInfo",
+            lambda: set_ip_info(
+                speaker_ip,
+                server.uuid,
+                server_address,
+                port=speaker_port,
+                timeout=2.0,
+            ),
+        )
+        sleep(0.3)
+
         set_volume(speaker_ip, 0, port=speaker_port)
         speaker_touched = True
         set_mute(speaker_ip, True, port=speaker_port)
-        try:
-            stop_playback(speaker_ip, port=speaker_port)
-        except WamApiError as error:
-            LOGGER.debug("Best-effort previous playback stop failed: %s", error)
 
-        set_ip_info(
-            speaker_ip,
-            server.uuid,
-            server_address,
-            port=speaker_port,
-        )
-        sleep(0.3)
-        play_share(
-            speaker_ip,
-            source_name=source.stem,
-            device_udn=server.udn,
-            object_id=server.object_id,
-            port=speaker_port,
+        _allow_async_timeout(
+            "SetSharePlaybackControl",
+            lambda: play_share(
+                speaker_ip,
+                source_name=source.stem,
+                device_udn=server.udn,
+                object_id=server.object_id,
+                port=speaker_port,
+                timeout=3.0,
+            ),
         )
         playback_touched = True
 
