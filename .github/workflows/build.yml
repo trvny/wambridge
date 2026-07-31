@@ -34,6 +34,12 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Check Python
+        run: |
+          python -m pip install "ruff>=0.12,<1"
+          python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py
+          python -m compileall -q src tests foobar/wambridge_pcm_entry.py
+
       - name: Test Python package
         run: |
           python -m pip install -e .
