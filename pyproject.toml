@@ -14,7 +14,7 @@ dependencies = []
 
 [project.scripts]
 wambridge = "wambridge.radio_cli:main"
-wambridge-dlna = "wambridge.dms_cli:main"
+wambridge-dlna = "wambridge.dms_entry:main"
 wambridge-pcm = "wambridge.pcm_cli:main"
 
 [tool.setuptools.packages.find]
