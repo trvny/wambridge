@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape
 
 from .dlna import MP3_CONTENT_FEATURES, MP3_PROTOCOL_INFO
 
@@ -313,13 +314,14 @@ class DlnaFileServer:
             self._bytes_sent += bytes_sent
 
     def _device_description(self) -> bytes:
+        friendly_name = escape(f"WAM Bridge ({self.source.stem})")
         return f'''<?xml version="1.0" encoding="UTF-8"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
   <device>
     <dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMS-1.50</dlna:X_DLNADOC>
     <deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
-    <friendlyName>WAM Bridge ({self.source.stem})</friendlyName>
+    <friendlyName>{friendly_name}</friendlyName>
     <manufacturer>trvny</manufacturer>
     <manufacturerURL>https://github.com/trvny/wambridge</manufacturerURL>
     <modelDescription>Single-file Samsung WAM media server</modelDescription>
