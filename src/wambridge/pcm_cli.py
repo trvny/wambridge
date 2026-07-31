@@ -275,9 +275,6 @@ def run(
             "encoder_started",
             timeout=args.startup_timeout,
         )
-        volume_changed = True
-        set_volume(speaker_ip, start_volume, port=speaker_port)
-        _raise_if_pcm_input_closed(input_stream)
         print("WAMBRIDGE READY", file=output_stream, flush=True)
 
         _wait_for_stream_event(

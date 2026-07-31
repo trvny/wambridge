@@ -58,4 +58,4 @@ class FoobarSourceTests(TestCase):
         self.assertIn("%u ms buffer", source)
         self.assertNotIn("%.2f s buffer", source)
         self.assertIn("} else if (!line.empty()) {", source)
-        self.assertIn('"0.1.9"', source)
+        self.assertIn('"0.1.10"', source)

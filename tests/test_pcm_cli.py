@@ -89,7 +89,6 @@ class PcmCliTests(TestCase):
             [
                 call("10.0.0.118", 0, port=55001),
                 call("10.0.0.118", 4, port=55001),
-                call("10.0.0.118", 4, port=55001),
             ],
         )
         self.assertEqual(
@@ -280,7 +279,7 @@ class PcmCliTests(TestCase):
         return_value=SimpleNamespace(method="SpkName"),
     )
     @patch("wambridge.pcm_cli.select_speaker", return_value=("10.0.0.118", 55001))
-    def test_restores_muted_volume_when_startup_ends_after_ready(
+    def test_keeps_muted_volume_when_startup_ends_after_ready(
         self,
         _select_mock,
         _probe_mock,
@@ -308,10 +307,4 @@ class PcmCliTests(TestCase):
                     protocol_output=StringIO(),
                 )
 
-        self.assertEqual(
-            volume_mock.call_args_list,
-            [
-                call("10.0.0.118", 4, port=55001),
-                call("10.0.0.118", 0, port=55001, timeout=1.0),
-            ],
-        )
+        self.assertEqual(volume_mock.call_args_list, [])

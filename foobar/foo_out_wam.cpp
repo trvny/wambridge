@@ -1086,7 +1086,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.9",
+    "0.1.10",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 
