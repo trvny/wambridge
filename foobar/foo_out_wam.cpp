@@ -378,13 +378,37 @@ private:
         return buffered >= m_capacityFrames ? 0 : m_capacityFrames - buffered;
     }
 
-    std::chrono::steady_clock::time_point reserve_batch_deadline(
+    bool reserve_batch_deadline(
         size_t batchFrames,
-        unsigned sampleRate
+        unsigned sampleRate,
+        unsigned channels,
+        uint64_t generation,
+        bool inputStarved,
+        std::chrono::steady_clock::time_point& deadline
     ) {
         std::lock_guard lock(m_mutex);
+        if (m_shutdown || m_restart || !m_failure.empty() ||
+            !session_matches_locked(generation, sampleRate, channels)) {
+            return false;
+        }
+
         const auto now = std::chrono::steady_clock::now();
-        if (m_pacedFrames == 0) m_pacingEpoch = now;
+        if (m_pacedFrames == 0) {
+            m_pacingEpoch = now;
+        } else if (inputStarved) {
+            const auto scheduledStart = m_pacingEpoch +
+                std::chrono::duration_cast<
+                    std::chrono::steady_clock::duration
+                >(
+                    std::chrono::duration<double>(
+                        static_cast<double>(m_pacedFrames) / sampleRate
+                    )
+                );
+            if (scheduledStart < now) {
+                m_pacingEpoch += now - scheduledStart;
+            }
+        }
+
         m_pacedFrames += batchFrames;
         const auto elapsed = std::chrono::duration_cast<
             std::chrono::steady_clock::duration
@@ -393,7 +417,8 @@ private:
                 static_cast<double>(m_pacedFrames) / sampleRate
             )
         );
-        return m_pacingEpoch + elapsed;
+        deadline = m_pacingEpoch + elapsed;
+        return true;
     }
 
     bool wait_for_batch_deadline(
@@ -770,9 +795,12 @@ private:
 
             bool sendSilence = false;
             bool stopAfterFlush = false;
+            bool inputStarved = false;
             size_t batchFrames = 0;
             {
                 std::unique_lock lock(m_mutex);
+                inputStarved = m_playing.load() && !m_flushing &&
+                    !m_paused.load() && m_queue.empty();
                 m_cv.wait_until(
                     lock,
                     m_flushing ? m_flushDeadline
@@ -855,10 +883,17 @@ private:
                 continue;
             }
 
-            const auto batchDeadline = reserve_batch_deadline(
-                batchFrames,
-                sampleRate
-            );
+            std::chrono::steady_clock::time_point batchDeadline;
+            if (!reserve_batch_deadline(
+                    batchFrames,
+                    sampleRate,
+                    channels,
+                    generation,
+                    inputStarved,
+                    batchDeadline
+                )) {
+                continue;
+            }
             const auto* bytes = reinterpret_cast<const std::byte*>(batch.data());
             size_t remaining = batch.size() * sizeof(float);
             bool writeFailed = false;
@@ -1042,7 +1077,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.5",
+    "0.1.6",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 
