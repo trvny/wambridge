@@ -53,7 +53,7 @@ class PcmAudioStreamServerTests(TestCase):
     @patch("wambridge.pcm_stream._read_chunk")
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
-    def test_applies_realtime_clock_before_pcm_input(
+    def test_uses_parent_paced_pcm_without_ffmpeg_realtime_clock(
         self,
         _which_mock,
         popen_mock,
@@ -78,7 +78,7 @@ class PcmAudioStreamServerTests(TestCase):
         try:
             server._serve_audio(BytesIO())
             command = popen_mock.call_args.args[0]
-            self.assertLess(command.index("-re"), command.index("-i"))
+            self.assertNotIn("-re", command)
             self.assertEqual(command[command.index("-ar") + 1], "48000")
         finally:
             server.close()
