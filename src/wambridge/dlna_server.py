@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import threading
 import uuid
@@ -401,14 +402,13 @@ class DlnaFileServer:
         soap_action = handler.headers.get("SOAPACTION", "").strip('"')
         if "#" in soap_action:
             return soap_action.rsplit("#", 1)[-1]
-        try:
-            root = ElementTree.fromstring(body)
-        except ElementTree.ParseError:
-            return ""
-        for element in root.iter():
-            local = element.tag.rsplit("}", 1)[-1]
-            if local not in {"Envelope", "Body"}:
-                return local
+        text = body.decode("utf-8", errors="ignore")
+        for match in re.finditer(
+            r"<(?:[A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)\b",
+            text,
+        ):
+            if match.group(1) not in {"Envelope", "Body"}:
+                return match.group(1)
         return ""
 
     @staticmethod
