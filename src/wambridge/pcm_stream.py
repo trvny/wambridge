@@ -136,7 +136,6 @@ class PcmAudioStreamServer(AudioStreamServer):
             "-hide_banner",
             "-loglevel",
             "warning",
-            "-re",
             *self.input_args,
             "-af",
             f"adelay={STARTUP_SILENCE_MS}:all=1",
