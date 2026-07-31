@@ -149,6 +149,22 @@ def _transport_state(service: UpnpService) -> str:
     return info.get("CurrentTransportState", "").upper()
 
 
+def _wait_for_completion(
+    service: UpnpService,
+    *,
+    poll_interval: float = 0.75,
+) -> None:
+    while True:
+        sleep(poll_interval)
+        try:
+            state = _transport_state(service)
+        except DlnaError as error:
+            LOGGER.debug("Cannot read AVTransport state: %s", error)
+            continue
+        if state == "STOPPED":
+            return
+
+
 def _secure_stop(
     service: UpnpService | None,
     *,
@@ -156,8 +172,12 @@ def _secure_stop(
     speaker_port: int,
     previous_volume: int | None,
     previous_mute: bool | None,
+    speaker_touched: bool,
     transport_touched: bool,
 ) -> None:
+    if not speaker_touched and not transport_touched:
+        return
+
     muted = False
     try:
         set_mute(speaker_ip, True, port=speaker_port)
@@ -244,6 +264,7 @@ def run(args: argparse.Namespace) -> int:
 
     previous_volume: int | None = None
     previous_mute: bool | None = None
+    speaker_touched = False
     transport_touched = False
     try:
         previous_volume = get_volume(speaker_ip, port=speaker_port)
@@ -260,6 +281,7 @@ def run(args: argparse.Namespace) -> int:
         LOGGER.info("Offering DLNA file %s to %s", media_url, speaker_ip)
 
         set_volume(speaker_ip, 0, port=speaker_port)
+        speaker_touched = True
         set_mute(speaker_ip, True, port=speaker_port)
         try:
             stop(service, timeout=3)
@@ -282,18 +304,8 @@ def run(args: argparse.Namespace) -> int:
             "Press Ctrl+C to stop."
         )
 
-        seen_active = False
-        while True:
-            sleep(0.75)
-            try:
-                state = _transport_state(service)
-            except DlnaError as error:
-                LOGGER.debug("Cannot read AVTransport state: %s", error)
-                continue
-            if state in {"PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING"}:
-                seen_active = True
-            elif seen_active and state == "STOPPED":
-                return 0
+        _wait_for_completion(service)
+        return 0
     except KeyboardInterrupt:
         print("\nStopping")
         return 130
@@ -305,6 +317,7 @@ def run(args: argparse.Namespace) -> int:
                 speaker_port=speaker_port,
                 previous_volume=previous_volume,
                 previous_mute=previous_mute,
+                speaker_touched=speaker_touched,
                 transport_touched=transport_touched,
             )
         finally:
