@@ -38,8 +38,9 @@ class FoobarSourceTests(TestCase):
         self.assertIn("scheduledStart < now", source)
         self.assertIn("m_pacingEpoch += now - scheduledStart;", source)
         self.assertIn("inputStarved,\n                    batchDeadline", source)
-        starvation_marker = "inputStarved = m_playing.load()"
+        starvation_marker = "inputStarved = m_pacedFrames > 0"
         self.assertEqual(source.count(starvation_marker), 1)
+        self.assertNotIn("inputStarved = m_playing.load()", source)
         starvation_check = source.index(starvation_marker)
         outer_wait = source.index("m_cv.wait(lock")
         self.assertLess(starvation_check, outer_wait)
@@ -49,4 +50,4 @@ class FoobarSourceTests(TestCase):
         self.assertIn("pacing accepted=", source)
         self.assertIn("flush requested", source)
         self.assertIn("end of input", source)
-        self.assertIn('"0.1.7"', source)
+        self.assertIn('"0.1.8"', source)
