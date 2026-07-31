@@ -521,7 +521,7 @@ private:
         command += L" --device " + quoted(m_settings.device);
         command += L" --sample-rate " + std::to_wstring(sampleRate);
         command += L" --channels " + std::to_wstring(channels);
-        command += L" --sample-format f32le --format flac --startup-timeout 45";
+        command += L" --sample-format f32le --format mp3 --startup-timeout 45";
         if (m_settings.volume.has_value()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         }
@@ -946,9 +946,9 @@ private:
             );
 
             bool logPacing = false;
-            double acceptedSeconds = 0.0;
-            double writtenSeconds = 0.0;
-            double queuedSeconds = 0.0;
+            unsigned acceptedMilliseconds = 0;
+            unsigned writtenMilliseconds = 0;
+            unsigned queuedMilliseconds = 0;
             {
                 std::lock_guard lock(m_mutex);
                 if (session_matches_locked(
@@ -962,13 +962,15 @@ private:
                     m_inflightFrames = 0;
                     const auto now = std::chrono::steady_clock::now();
                     if (now >= m_nextPacingLog) {
-                        acceptedSeconds =
-                            static_cast<double>(m_acceptedFrames) / sampleRate;
-                        writtenSeconds =
-                            static_cast<double>(m_writtenFrames) / sampleRate;
-                        queuedSeconds =
-                            static_cast<double>(queued_frames_locked()) /
-                            sampleRate;
+                        acceptedMilliseconds = static_cast<unsigned>(
+                            m_acceptedFrames * 1000 / sampleRate
+                        );
+                        writtenMilliseconds = static_cast<unsigned>(
+                            m_writtenFrames * 1000 / sampleRate
+                        );
+                        queuedMilliseconds = static_cast<unsigned>(
+                            queued_frames_locked() * 1000 / sampleRate
+                        );
                         m_nextPacingLog = now + kPacingLogInterval;
                         logPacing = true;
                     }
@@ -978,11 +980,11 @@ private:
 
             if (logPacing) {
                 console::printf(
-                    "%s: pacing accepted=%.1fs written=%.1fs queued=%.1fs",
+                    "%s: pacing accepted=%ums written=%ums queued=%ums",
                     kComponentName,
-                    acceptedSeconds,
-                    writtenSeconds,
-                    queuedSeconds
+                    acceptedMilliseconds,
+                    writtenMilliseconds,
+                    queuedMilliseconds
                 );
             }
             if (!current) continue;
@@ -1086,7 +1088,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.10",
+    "0.1.11",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 
