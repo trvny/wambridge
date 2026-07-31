@@ -74,6 +74,16 @@ class WamEventTests(TestCase):
         self.assertEqual(event.user_identifier, "abc-123")
         self.assertEqual(event.values["objectid"], "TRACK.mp3")
 
+    def test_preserves_markup_inside_cdata(self) -> None:
+        event = parse_event(
+            "<UIC><method>MusicInfo</method>"
+            '<response result="ok">'
+            "<title><![CDATA[Song <Live>]]></title>"
+            "</response></UIC>"
+        )
+
+        self.assertEqual(event.values["title"], "Song <Live>")
+
     def test_parses_parameter_style_value(self) -> None:
         event = parse_event(
             "<UIC><method>SpkName</method>"
