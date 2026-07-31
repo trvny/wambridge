@@ -14,6 +14,7 @@ from wambridge.samsung import (
     normalize_device_id,
     parse_response,
     pause_playback,
+    play_new_folder,
     play_share,
     resume_playback,
     set_ip_info,
@@ -314,7 +315,8 @@ class SamsungSharePlaybackTests(TestCase):
             "SetIpInfo",
             [
                 ("uuid", "12345678-1234-1234-1234-123456789abc", "str"),
-                ("ip", "10.0.0.103:49152", "str"),
+                ("ipinfo", "10.0.0.103:49152", "str"),
+                ("ideviceinfo", "", "str"),
             ],
             port=55001,
             timeout=10.0,
@@ -335,12 +337,41 @@ class SamsungSharePlaybackTests(TestCase):
 
         request_mock.assert_called_once_with(
             "10.0.0.118",
-            "SetSharePlaybackControl",
+            "SetSharePlayback",
             [
-                ("playbackcontrol", "play", "str"),
-                ("playertype", "allshare", "str"),
-                ("sourcename", "Starburster", "cdata"),
-                ("playtime", 0, "dec"),
+                ("type", "1", "str"),
+                ("flag", "1", "str"),
+                ("source", "Starburster", "str"),
+                ("playtime", "0", "str"),
+                (
+                    "device_udn",
+                    "uuid:12345678-1234-1234-1234-123456789abc",
+                    "str",
+                ),
+                ("objectid", "21329DC1305BF41B8AD9FCD0A6736302", "str"),
+            ],
+            port=55001,
+            timeout=10.0,
+        )
+
+    @patch("wambridge.samsung.request")
+    def test_starts_official_new_folder_fallback(self, request_mock) -> None:
+        request_mock.return_value = WamResponse(
+            method="NewFolderPlayback", result="ok", body=""
+        )
+
+        play_new_folder(
+            "10.0.0.118",
+            device_udn="uuid:12345678-1234-1234-1234-123456789abc",
+            object_id="21329DC1305BF41B8AD9FCD0A6736302",
+        )
+
+        request_mock.assert_called_once_with(
+            "10.0.0.118",
+            "SetNewFolderPlayback",
+            [
+                ("playtime", "1", "str"),
+                ("index", "0", "str"),
                 (
                     "device_udn",
                     "uuid:12345678-1234-1234-1234-123456789abc",
