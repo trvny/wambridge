@@ -30,3 +30,5 @@ jobs:
           git add foobar/foo_out_wam.cpp tests/test_foobar_source.py tools/apply_mp3_stream_debug.py .github/workflows/apply-mp3-stream-debug.yml
           git commit -m "Use MP3 for live WAM output"
           git push
+
+# one-shot
