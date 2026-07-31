@@ -1,0 +1,31 @@
+name: Apply PCM pacing fix
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/pace-foobar-pcm'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/pace-foobar-pcm
+
+      - name: Apply fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check patches/pace-foobar-pcm.patch
+          git apply patches/pace-foobar-pcm.patch
+          git rm patches/pace-foobar-pcm.patch
+          git rm .github/workflows/apply-pacing-fix.yml
+          git add foobar/foo_out_wam.cpp
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Pace foobar PCM writes"
+          git push origin HEAD:fix/pace-foobar-pcm
