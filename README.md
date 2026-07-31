@@ -246,6 +246,8 @@ When exactly one WAM speaker is discovered, `--speaker` may be omitted.
 py -m unittest discover -s tests -v
 ```
 
+---
+
 ## 📰 Mininewsy
 
 <!--README_FEED:START-->
