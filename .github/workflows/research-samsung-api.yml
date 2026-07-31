@@ -69,8 +69,8 @@ jobs:
           echo "jadx exit status: $jadx_status"
           test -d research/decompiled
 
-          pattern='SetSharePlaybackControl|SetNewFolderPlaybackControl|SetPlaylistPlaybackControl|onSetFolderPlaybackControl|SharePlayback|FolderPlayback|PlaylistPlayback|/DLNA/|browseID|browseId|objectID|objectId|deviceUDN|device_udn'
-          grep -R -n -C 50 -E "$pattern" research/decompiled \
+          pattern='SetSharePlaybackControl|SetNewFolderPlaybackControl|SetPlaylistPlaybackControl|SetFolderPlaybackControl|h2\.b\.C2|h2\.b\.f28569q2|h2\.b\.f28564p2|h2\.b\.f28614z2|DMSInterface|CreateDLNAServer|DLNAServerSetInfo|StartDLNAServer|StopDLNAServer|GenerateUUID|getUDN|/DLNA/|browseID|browseId|objectID|objectId|deviceUDN|device_udn'
+          grep -R -n -C 60 -E "$pattern" research/decompiled \
             > research/matches.txt || true
 
           mkdir -p research/matched-sources
@@ -79,6 +79,12 @@ jobs:
             mkdir -p "research/matched-sources/$(dirname "$relative")"
             cp "$file" "research/matched-sources/$relative"
           done < <(grep -R -l -E "$pattern" research/decompiled || true)
+
+          if [[ -d research/decompiled/sources/com/spika/dms ]]; then
+            mkdir -p research/matched-sources/sources/com/spika
+            cp -R research/decompiled/sources/com/spika/dms \
+              research/matched-sources/sources/com/spika/
+          fi
 
           find research/matched-sources -type f -print | sort \
             > research/matched-files.txt
