@@ -58,13 +58,19 @@ jobs:
             --output research/jadx.zip
           unzip -q research/jadx.zip -d research/jadx-bin
           chmod +x research/jadx-bin/bin/jadx
+
+          set +e
           research/jadx-bin/bin/jadx \
             --threads-count 2 \
             --output-dir research/decompiled \
-            "$apk"
+            "$apk" 2>&1 | tee research/jadx.log
+          jadx_status="${PIPESTATUS[0]}"
+          set -e
+          echo "jadx exit status: $jadx_status"
+          test -d research/decompiled
 
-          pattern='SetSharePlaybackControl|SetNewFolderPlaybackControl|SetPlaylistPlaybackControl|onSetFolderPlaybackControl|/DLNA/|browseID|browseId'
-          grep -R -n -C 40 -E "$pattern" research/decompiled \
+          pattern='SetSharePlaybackControl|SetNewFolderPlaybackControl|SetPlaylistPlaybackControl|onSetFolderPlaybackControl|SharePlayback|FolderPlayback|PlaylistPlayback|/DLNA/|browseID|browseId|objectID|objectId|deviceUDN|device_udn'
+          grep -R -n -C 50 -E "$pattern" research/decompiled \
             > research/matches.txt || true
 
           mkdir -p research/matched-sources
@@ -85,6 +91,7 @@ jobs:
           name: samsung-wam-api-research
           path: |
             research/certificate.txt
+            research/jadx.log
             research/matches.txt
             research/matched-files.txt
             research/matched-sources.tar.gz
