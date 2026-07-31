@@ -4,6 +4,7 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from wambridge.dlna_cli import (
+    _advertised_host,
     _allow_async_timeout,
     _is_timeout_error,
     _missing_request_error,
@@ -57,6 +58,36 @@ class DlnaShutdownTests(TestCase):
         )
 
         stop_mock.assert_not_called()
+        volume_mock.assert_called_once_with(
+            "10.0.0.118", 18, port=55001
+        )
+        self.assertEqual(
+            mute_mock.call_args_list[-1].args,
+            ("10.0.0.118", False),
+        )
+
+    @patch("wambridge.dlna_cli.set_playback_control")
+    @patch("wambridge.dlna_cli.set_volume")
+    @patch("wambridge.dlna_cli.set_mute")
+    def test_restores_state_when_failed_source_is_closed(
+        self,
+        mute_mock,
+        volume_mock,
+        stop_mock,
+    ) -> None:
+        stop_mock.side_effect = WamApiError("rejected")
+
+        _secure_stop(
+            speaker_ip="10.0.0.118",
+            speaker_port=55001,
+            previous_volume=18,
+            previous_mute=False,
+            speaker_touched=True,
+            playback_touched=True,
+            source_closed=True,
+        )
+
+        stop_mock.assert_called_once()
         volume_mock.assert_called_once_with(
             "10.0.0.118", 18, port=55001
         )
@@ -171,3 +202,10 @@ class DlnaIdentityTests(TestCase):
                 self.assertEqual(server.uuid, f"samsung-{original_uuid}")
             finally:
                 server.close()
+
+
+class DlnaInterfaceTests(TestCase):
+    @patch("wambridge.dlna_cli.local_ip_for", return_value="10.0.0.103")
+    def test_advertises_address_selected_by_route(self, local_ip_mock) -> None:
+        self.assertEqual(_advertised_host("10.0.0.118"), "10.0.0.103")
+        local_ip_mock.assert_called_once_with("10.0.0.118")
