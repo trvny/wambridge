@@ -37,8 +37,11 @@ jobs:
           set -euo pipefail
           apk="$(find research/apk -type f -name '*.apk' -print -quit)"
           test -n "$apk"
-          keytool -printcert -jarfile "$apk" | tee research/certificate.txt
-          cert_sha256="$(sed -n 's/^[[:space:]]*SHA256: //p' research/certificate.txt | tr -d ':' | tr '[:upper:]' '[:lower:]' | head -n 1)"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose --print-certs "$apk" \
+            | tee research/certificate.txt
+          cert_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' research/certificate.txt | tr '[:upper:]' '[:lower:]' | head -n 1)"
           expected="43920a268512629943fc2f301d292352f4cd31ca78141965cfe48c1e248d42d5"
           if [[ "$cert_sha256" != "$expected" ]]; then
             echo "Unexpected certificate SHA-256: $cert_sha256" >&2
