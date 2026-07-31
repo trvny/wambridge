@@ -1,4 +1,4 @@
-"""Standalone DLNA file playback probe for Samsung WAM speakers."""
+"""Standalone Samsung WAM share-playback probe for one local MP3."""
 
 from __future__ import annotations
 
@@ -6,30 +6,23 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 
 from .cli import DEFAULT_MAX_START_VOLUME, choose_start_volume, volume_level
 from .discovery import discover, local_ip_for
-from .dlna import (
-    DlnaError,
-    UpnpService,
-    build_mp3_metadata,
-    discover_av_transport,
-    get_transport_info,
-    pause,
-    play,
-    set_transport_uri,
-    stop,
-)
 from .dlna_server import DlnaFileServer
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
     WamApiError,
     get_mute,
+    get_play_status,
     get_volume,
+    play_share,
     probe,
+    set_ip_info,
     set_mute,
     set_volume,
+    stop_playback,
 )
 
 LOGGER = logging.getLogger("wambridge")
@@ -39,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wambridge-dlna",
         description=(
-            "Play one local MP3 through the speaker's DLNA AVTransport service."
+            "Play one local MP3 through Samsung WAM share playback and a tiny "
+            "local UPnP MediaServer."
         ),
     )
     parser.add_argument("source", type=Path, help="Local MP3 file")
@@ -89,13 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--discovery-timeout",
         type=float,
         default=5.0,
-        help="Seconds to wait for SSDP replies",
+        help="Seconds to wait while resolving speakers",
     )
     parser.add_argument(
         "--interface",
         action="append",
         dest="interfaces",
-        help="Local IPv4 used for SSDP; repeat for multiple interfaces",
+        help="Local IPv4 used for discovery; repeat for multiple interfaces",
     )
     parser.add_argument(
         "--no-scan",
@@ -144,38 +138,55 @@ def select_speaker(
     return speakers[0].ip, args.port
 
 
-def _transport_state(service: UpnpService) -> str:
-    info = get_transport_info(service)
-    return info.get("CurrentTransportState", "").upper()
-
-
 def _wait_for_completion(
-    service: UpnpService,
+    speaker_ip: str,
+    speaker_port: int,
+    server: DlnaFileServer,
     *,
     poll_interval: float = 0.75,
 ) -> None:
+    """Keep the MediaServer alive until WAM leaves DLNA or duration elapses."""
+
+    fallback_seconds = (server.duration_ms or 0) / 1000 + 20
+    fallback_deadline = monotonic() + max(60, fallback_seconds)
+    seen_dlna = False
+
     while True:
         sleep(poll_interval)
         try:
-            state = _transport_state(service)
-        except DlnaError as error:
-            LOGGER.debug("Cannot read AVTransport state: %s", error)
-            continue
-        if state == "STOPPED":
+            status = get_play_status(speaker_ip, port=speaker_port)
+        except WamApiError as error:
+            LOGGER.debug("Cannot read WAM playback state: %s", error)
+        else:
+            submode = (status.submode or "").casefold()
+            play_status = (status.play_status or "").casefold()
+            LOGGER.debug(
+                "WAM playback state: submode=%s playstatus=%s",
+                submode or "?",
+                play_status or "?",
+            )
+            if submode == "dlna":
+                seen_dlna = True
+            elif seen_dlna:
+                return
+            if seen_dlna and play_status in {"stop", "stopped"}:
+                return
+
+        if monotonic() >= fallback_deadline:
+            LOGGER.info("Playback duration elapsed; stopping local MediaServer")
             return
 
 
 def _secure_stop(
-    service: UpnpService | None,
     *,
     speaker_ip: str,
     speaker_port: int,
     previous_volume: int | None,
     previous_mute: bool | None,
     speaker_touched: bool,
-    transport_touched: bool,
+    playback_touched: bool,
 ) -> None:
-    if not speaker_touched and not transport_touched:
+    if not speaker_touched and not playback_touched:
         return
 
     muted = False
@@ -185,53 +196,40 @@ def _secure_stop(
     except WamApiError as error:
         LOGGER.warning("Could not mute speaker during shutdown: %s", error)
 
-    quiesced = not transport_touched
-    if service is not None and transport_touched:
+    quiesced = not playback_touched
+    if playback_touched:
         try:
-            stop(service)
+            stop_playback(speaker_ip, port=speaker_port)
             quiesced = True
-        except DlnaError as stop_error:
-            try:
-                quiesced = _transport_state(service) == "STOPPED"
-            except DlnaError:
-                quiesced = False
-            if not quiesced:
-                try:
-                    pause(service)
-                except DlnaError as pause_error:
-                    LOGGER.warning(
-                        "AVTransport stop failed (%s); pause also failed (%s)",
-                        stop_error,
-                        pause_error,
-                    )
-                else:
-                    LOGGER.warning(
-                        "AVTransport stop failed; playback was paused and left muted: %s",
-                        stop_error,
-                    )
+        except WamApiError as error:
+            LOGGER.warning("Could not stop Samsung share playback: %s", error)
 
-    if (
-        quiesced
-        and previous_volume is not None
-        and previous_mute is not None
-    ):
+    if quiesced and previous_volume is not None and previous_mute is not None:
         try:
-            set_volume(
-                speaker_ip,
-                previous_volume,
-                port=speaker_port,
-            )
-            set_mute(
-                speaker_ip,
-                previous_mute,
-                port=speaker_port,
-            )
+            set_volume(speaker_ip, previous_volume, port=speaker_port)
+            set_mute(speaker_ip, previous_mute, port=speaker_port)
         except WamApiError as error:
             LOGGER.warning("Could not restore speaker state: %s", error)
     elif muted:
-        LOGGER.warning(
-            "Speaker remains muted because AVTransport stop was not confirmed"
+        LOGGER.warning("Speaker remains muted because playback stop was not confirmed")
+
+
+def _missing_request_error(server: DlnaFileServer) -> str:
+    if not server.description_requested.is_set():
+        return (
+            "M5 accepted the share command but did not contact the local "
+            "MediaServer; allow the EXE through Windows Firewall or pass "
+            "--interface with the LAN IPv4"
         )
+    if not server.browse_requested.is_set():
+        return (
+            "M5 read description.xml but did not Browse the ContentDirectory; "
+            "run again with --verbose and report the HTTP trace"
+        )
+    return (
+        "M5 browsed the ContentDirectory but did not request the MP3; "
+        "run again with --verbose and report the HTTP trace"
+    )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -239,7 +237,7 @@ def run(args: argparse.Namespace) -> int:
     if not source.is_file():
         raise RuntimeError(f"Audio file does not exist: {source}")
     if source.suffix.casefold() != ".mp3":
-        raise RuntimeError("Initial DLNA playback supports local MP3 files only")
+        raise RuntimeError("Samsung share playback currently supports local MP3 only")
 
     store = ProfileStore(args.config)
     speaker_ip, speaker_port = select_speaker(args, store)
@@ -250,22 +248,13 @@ def run(args: argparse.Namespace) -> int:
         response.method or "XML",
     )
 
-    service = discover_av_transport(
-        speaker_ip,
-        timeout=args.discovery_timeout,
-        local_addresses=args.interfaces,
-    )
-    host_ip = local_ip_for(speaker_ip)
-    server = DlnaFileServer(
-        source,
-        bind=args.bind,
-        port=args.http_port,
-    )
+    host_ip = args.interfaces[0] if args.interfaces else local_ip_for(speaker_ip)
+    server = DlnaFileServer(source, bind=args.bind, port=args.http_port)
 
     previous_volume: int | None = None
     previous_mute: bool | None = None
     speaker_touched = False
-    transport_touched = False
+    playback_touched = False
     try:
         previous_volume = get_volume(speaker_ip, port=speaker_port)
         previous_mute = get_mute(speaker_ip, port=speaker_port)
@@ -276,35 +265,51 @@ def run(args: argparse.Namespace) -> int:
         )
 
         server.start()
-        media_url = server.url(host_ip)
-        metadata = build_mp3_metadata(media_url, source)
-        LOGGER.info("Offering DLNA file %s to %s", media_url, speaker_ip)
+        server_address = f"{host_ip}:{server.port}"
+        LOGGER.info("MediaServer description: %s", server.description_url(host_ip))
+        LOGGER.info(
+            "Offering object %s as %s (%s bytes, duration %s)",
+            server.object_id,
+            server.url(host_ip),
+            server.size,
+            server.duration or "unknown",
+        )
 
         set_volume(speaker_ip, 0, port=speaker_port)
         speaker_touched = True
         set_mute(speaker_ip, True, port=speaker_port)
         try:
-            stop(service, timeout=3)
-        except DlnaError:
-            pass
-        set_transport_uri(service, media_url, metadata)
-        transport_touched = True
-        play(service)
+            stop_playback(speaker_ip, port=speaker_port)
+        except WamApiError as error:
+            LOGGER.debug("Best-effort previous playback stop failed: %s", error)
+
+        set_ip_info(
+            speaker_ip,
+            server.uuid,
+            server_address,
+            port=speaker_port,
+        )
+        sleep(0.3)
+        play_share(
+            speaker_ip,
+            source_name=source.stem,
+            device_udn=server.udn,
+            object_id=server.object_id,
+            port=speaker_port,
+        )
+        playback_touched = True
 
         if not server.request_started.wait(timeout=20):
-            raise RuntimeError(
-                "AVTransport accepted playback but the speaker did not request "
-                "the MP3; check Windows Firewall"
-            )
+            raise RuntimeError(_missing_request_error(server))
 
         set_volume(speaker_ip, start_volume, port=speaker_port)
         set_mute(speaker_ip, False, port=speaker_port)
         print(
-            f"DLNA playback started on {speaker_ip} at volume {start_volume}. "
-            "Press Ctrl+C to stop."
+            f"Samsung share playback started on {speaker_ip} at volume "
+            f"{start_volume}. Press Ctrl+C to stop."
         )
 
-        _wait_for_completion(service)
+        _wait_for_completion(speaker_ip, speaker_port, server)
         return 0
     except KeyboardInterrupt:
         print("\nStopping")
@@ -312,13 +317,12 @@ def run(args: argparse.Namespace) -> int:
     finally:
         try:
             _secure_stop(
-                service,
                 speaker_ip=speaker_ip,
                 speaker_port=speaker_port,
                 previous_volume=previous_volume,
                 previous_mute=previous_mute,
                 speaker_touched=speaker_touched,
-                transport_touched=transport_touched,
+                playback_touched=playback_touched,
             )
         finally:
             server.close()
@@ -333,13 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         return run(args)
-    except (
-        DlnaError,
-        ProfileError,
-        RuntimeError,
-        ValueError,
-        WamApiError,
-    ) as error:
+    except (ProfileError, RuntimeError, ValueError, WamApiError) as error:
         LOGGER.error("%s", error)
         return 1
 
