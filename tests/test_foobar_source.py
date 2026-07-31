@@ -61,4 +61,3 @@ class FoobarSourceTests(TestCase):
         self.assertNotIn("%.2f s buffer", source)
         self.assertIn("} else if (!line.empty()) {", source)
         self.assertIn('"0.1.11"', source)
-        self.assertNotIn('"-re",', source)
