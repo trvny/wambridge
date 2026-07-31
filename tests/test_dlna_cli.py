@@ -8,6 +8,7 @@ from wambridge.dlna_cli import (
     _is_timeout_error,
     _missing_request_error,
     _secure_stop,
+    _start_share,
 )
 from wambridge.dlna_server import DlnaFileServer
 from wambridge.samsung import WamApiError
@@ -35,6 +36,33 @@ class DlnaShutdownTests(TestCase):
         mute_mock.assert_not_called()
         volume_mock.assert_not_called()
         stop_mock.assert_not_called()
+
+    @patch("wambridge.dlna_cli.set_playback_control")
+    @patch("wambridge.dlna_cli.set_volume")
+    @patch("wambridge.dlna_cli.set_mute")
+    def test_restores_state_when_share_never_started(
+        self,
+        mute_mock,
+        volume_mock,
+        stop_mock,
+    ) -> None:
+        _secure_stop(
+            speaker_ip="10.0.0.118",
+            speaker_port=55001,
+            previous_volume=18,
+            previous_mute=False,
+            speaker_touched=True,
+            playback_touched=False,
+        )
+
+        stop_mock.assert_not_called()
+        volume_mock.assert_called_once_with(
+            "10.0.0.118", 18, port=55001
+        )
+        self.assertEqual(
+            mute_mock.call_args_list[-1].args,
+            ("10.0.0.118", False),
+        )
 
     def test_reports_precise_missing_request_stage(self) -> None:
         with TemporaryDirectory() as directory:
@@ -72,3 +100,56 @@ class DlnaAsyncCommandTests(TestCase):
                 "SetIpInfo",
                 Mock(side_effect=WamApiError("rejected")),
             )
+
+
+class DlnaShareCommandTests(TestCase):
+    @patch("wambridge.dlna_cli.play_new_folder")
+    @patch("wambridge.dlna_cli.play_share")
+    def test_uses_exact_share_command_without_fallback(
+        self,
+        share_mock,
+        folder_mock,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "track.mp3"
+            source.write_bytes(b"test")
+            server = DlnaFileServer(source, bind="127.0.0.1")
+            try:
+                _start_share("10.0.0.118", 55001, server)
+            finally:
+                server.close()
+
+        share_mock.assert_called_once_with(
+            "10.0.0.118",
+            source_name="WAMBridge",
+            device_udn=server.udn,
+            object_id=server.object_id,
+            port=55001,
+            timeout=3.0,
+        )
+        folder_mock.assert_not_called()
+
+    @patch("wambridge.dlna_cli.play_new_folder")
+    @patch("wambridge.dlna_cli.play_share")
+    def test_uses_official_folder_fallback_after_rejection(
+        self,
+        share_mock,
+        folder_mock,
+    ) -> None:
+        share_mock.side_effect = WamApiError("rejected")
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "track.mp3"
+            source.write_bytes(b"test")
+            server = DlnaFileServer(source, bind="127.0.0.1")
+            try:
+                _start_share("10.0.0.118", 55001, server)
+            finally:
+                server.close()
+
+        folder_mock.assert_called_once_with(
+            "10.0.0.118",
+            device_udn=server.udn,
+            object_id=server.object_id,
+            port=55001,
+            timeout=3.0,
+        )
