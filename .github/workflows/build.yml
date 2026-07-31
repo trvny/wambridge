@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -28,24 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: fix/pace-foobar-pcm
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-
-      - name: Apply startup handshake fix
-        shell: pwsh
-        run: |
-          python tools/apply_ready_before_volume.py
-          Remove-Item tools/apply_ready_before_volume.py
-          Remove-Item .github/workflows/apply-ready-before-volume.yml
-          git checkout HEAD~1 -- .github/workflows/build.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Release PCM before restoring speaker volume"
-          git push origin HEAD:fix/pace-foobar-pcm
 
       - name: Test Python package
         run: |
