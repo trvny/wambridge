@@ -9,6 +9,7 @@ from wambridge.dlna_cli import (
     _missing_request_error,
     _secure_stop,
     _start_share,
+    _use_samsung_identity,
 )
 from wambridge.dlna_server import DlnaFileServer
 from wambridge.samsung import WamApiError
@@ -153,3 +154,20 @@ class DlnaShareCommandTests(TestCase):
             port=55001,
             timeout=3.0,
         )
+
+
+class DlnaIdentityTests(TestCase):
+    def test_adds_official_samsung_uuid_prefix(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "track.mp3"
+            source.write_bytes(b"test")
+            server = DlnaFileServer(source, bind="127.0.0.1")
+            try:
+                original_uuid = server.uuid
+                _use_samsung_identity(server)
+                self.assertEqual(server.uuid, f"samsung-{original_uuid}")
+                self.assertEqual(server.udn, f"uuid:{server.uuid}")
+                _use_samsung_identity(server)
+                self.assertEqual(server.uuid, f"samsung-{original_uuid}")
+            finally:
+                server.close()
