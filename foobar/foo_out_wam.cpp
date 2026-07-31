@@ -285,12 +285,15 @@ public:
         }
 
         if (formatChanged) {
+            const unsigned bufferMilliseconds = static_cast<unsigned>(
+                (static_cast<uint64_t>(capacityFrames) * 1000) / sampleRate
+            );
             console::printf(
-                "%s: PCM %u Hz, %u channels, %.2f s buffer",
+                "%s: PCM %u Hz, %u channels, %u ms buffer",
                 kComponentName,
                 sampleRate,
                 channels,
-                static_cast<double>(capacityFrames) / sampleRate
+                bufferMilliseconds
             );
         }
         m_cv.notify_all();
@@ -727,6 +730,12 @@ private:
                         line.c_str()
                     );
                     set_failure_if_current(line.substr(16), generation);
+                } else if (!line.empty()) {
+                    console::printf(
+                        "%s: helper %s",
+                        kComponentName,
+                        line.c_str()
+                    );
                 }
             }
         }
@@ -1077,7 +1086,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.8",
+    "0.1.9",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 

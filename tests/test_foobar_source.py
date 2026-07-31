@@ -54,4 +54,7 @@ class FoobarSourceTests(TestCase):
         self.assertIn("pacing accepted=", source)
         self.assertIn("flush requested", source)
         self.assertIn("end of input", source)
-        self.assertIn('"0.1.8"', source)
+        self.assertIn("%u ms buffer", source)
+        self.assertNotIn("%.2f s buffer", source)
+        self.assertIn("} else if (!line.empty()) {", source)
+        self.assertIn('"0.1.9"', source)
