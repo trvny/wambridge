@@ -38,7 +38,9 @@ class FoobarSourceTests(TestCase):
         self.assertIn("scheduledStart < now", source)
         self.assertIn("m_pacingEpoch += now - scheduledStart;", source)
         self.assertIn("inputStarved,\n                    batchDeadline", source)
-        starvation_check = source.index("inputStarved = m_playing.load()")
+        starvation_marker = "inputStarved = m_playing.load()"
+        self.assertEqual(source.count(starvation_marker), 1)
+        starvation_check = source.index(starvation_marker)
         outer_wait = source.index("m_cv.wait(lock")
         self.assertLess(starvation_check, outer_wait)
         self.assertIn("m_pacingEpoch", source)
