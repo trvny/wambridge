@@ -572,3 +572,63 @@ def play_url(
         port=port,
         timeout=timeout,
     )
+
+
+def set_ip_info(
+    speaker_ip: str,
+    server_uuid: str,
+    server_address: str,
+    *,
+    port: int = DEFAULT_PORT,
+    timeout: float = 10.0,
+) -> WamResponse:
+    """Register a local UPnP media server address with the speaker."""
+    if not server_uuid or server_uuid.startswith("uuid:"):
+        raise ValueError("Server UUID must be a raw UUID without the uuid: prefix")
+    if not server_address:
+        raise ValueError("Server address must be host:port")
+    return request(
+        speaker_ip,
+        "SetIpInfo",
+        [
+            ("uuid", server_uuid, "str"),
+            ("ip", server_address, "str"),
+        ],
+        port=port,
+        timeout=timeout,
+    )
+
+
+def play_share(
+    speaker_ip: str,
+    *,
+    source_name: str,
+    device_udn: str,
+    object_id: str,
+    playtime: int = 0,
+    port: int = DEFAULT_PORT,
+    timeout: float = 10.0,
+) -> WamResponse:
+    """Start one item from a registered UPnP MediaServer."""
+    if not source_name:
+        raise ValueError("Source name cannot be empty")
+    if not device_udn.startswith("uuid:"):
+        raise ValueError("MediaServer UDN must start with uuid:")
+    if not object_id:
+        raise ValueError("Object ID cannot be empty")
+    if isinstance(playtime, bool) or not isinstance(playtime, int) or playtime < 0:
+        raise ValueError("Playtime must be a non-negative integer")
+    return request(
+        speaker_ip,
+        "SetSharePlaybackControl",
+        [
+            ("playbackcontrol", "play", "str"),
+            ("playertype", "allshare", "str"),
+            ("sourcename", source_name, "cdata"),
+            ("playtime", playtime, "dec"),
+            ("device_udn", device_udn, "str"),
+            ("objectid", object_id, "str"),
+        ],
+        port=port,
+        timeout=timeout,
+    )
