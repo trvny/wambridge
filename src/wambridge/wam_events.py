@@ -19,9 +19,12 @@ _CONTENT_LENGTH_RE = re.compile(
 _METHOD_RE = re.compile(r"<method>\s*([^<]+?)\s*</method>", re.IGNORECASE | re.DOTALL)
 _RESPONSE_RE = re.compile(r"<response\b([^>]*)>", re.IGNORECASE | re.DOTALL)
 _ATTRIBUTE_RE = re.compile(r"([A-Za-z_][\w:.-]*)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
-_LEAF_RE = re.compile(
-    r"<([A-Za-z_][\w.-]*)\b[^>]*>\s*"
-    r"(?:<!\[CDATA\[)?([^<]*?)(?:\]\]>)?\s*</\1>",
+_CDATA_LEAF_RE = re.compile(
+    r"<([A-Za-z_][\w.-]*)\b[^>]*>\s*<!\[CDATA\[(.*?)\]\]>\s*</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TEXT_LEAF_RE = re.compile(
+    r"<([A-Za-z_][\w.-]*)\b[^>]*>\s*([^<]*?)\s*</\1>",
     re.IGNORECASE | re.DOTALL,
 )
 _PARAMETER_RE = re.compile(
@@ -87,6 +90,12 @@ class WamHttpStreamParser:
         return bodies
 
 
+def _store_leaf(values: dict[str, str], name: str, value: str) -> None:
+    normalized = value.strip()
+    if normalized and name.casefold() not in {"method", "response"}:
+        values[name] = normalized
+
+
 def parse_event(body: str) -> WamEvent:
     """Extract useful fields without trusting network XML entity expansion."""
     method_match = _METHOD_RE.search(body)
@@ -99,10 +108,11 @@ def parse_event(body: str) -> WamEvent:
     }
 
     values: dict[str, str] = {}
-    for name, value in _LEAF_RE.findall(body):
-        normalized = value.strip()
-        if normalized and name.casefold() not in {"method", "response"}:
-            values[name] = normalized
+    for name, value in _CDATA_LEAF_RE.findall(body):
+        _store_leaf(values, name, value)
+    for name, value in _TEXT_LEAF_RE.findall(body):
+        if name not in values:
+            _store_leaf(values, name, value)
     for _, name, _, value in _PARAMETER_RE.findall(body):
         if name and value and value != "empty":
             values[name] = value
@@ -113,15 +123,18 @@ def parse_event(body: str) -> WamEvent:
             user_identifier = value
             break
 
+    result = None
     error_code = None
     for key, value in response_attributes.items():
-        if key.casefold() == "errcode":
+        normalized_key = key.casefold()
+        if normalized_key == "result":
+            result = value
+        elif normalized_key == "errcode":
             error_code = value
-            break
 
     return WamEvent(
         method=method_match.group(1).strip() if method_match else None,
-        result=response_attributes.get("result"),
+        result=result,
         user_identifier=user_identifier,
         error_code=error_code,
         values=values,
