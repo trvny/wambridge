@@ -18,6 +18,7 @@ from .samsung import (
     get_mute,
     get_play_status,
     get_volume,
+    play_new_folder,
     play_share,
     probe,
     set_ip_info,
@@ -170,6 +171,43 @@ def _allow_async_timeout(label: str, action: Callable[[], object]) -> None:
         )
 
 
+def _start_share(
+    speaker_ip: str,
+    speaker_port: int,
+    server: DlnaFileServer,
+) -> None:
+    """Send the exact Samsung command and its official rejection fallback."""
+
+    try:
+        _allow_async_timeout(
+            "SetSharePlayback",
+            lambda: play_share(
+                speaker_ip,
+                source_name="WAMBridge",
+                device_udn=server.udn,
+                object_id=server.object_id,
+                port=speaker_port,
+                timeout=3.0,
+            ),
+        )
+    except WamApiError as error:
+        LOGGER.warning(
+            "SetSharePlayback was rejected (%s); trying Samsung's "
+            "SetNewFolderPlayback fallback",
+            error,
+        )
+        _allow_async_timeout(
+            "SetNewFolderPlayback",
+            lambda: play_new_folder(
+                speaker_ip,
+                device_udn=server.udn,
+                object_id=server.object_id,
+                port=speaker_port,
+                timeout=3.0,
+            ),
+        )
+
+
 def _wait_for_completion(
     speaker_ip: str,
     speaker_port: int,
@@ -255,8 +293,8 @@ def _secure_stop(
 def _missing_request_error(server: DlnaFileServer) -> str:
     if not server.description_requested.is_set():
         return (
-            "M5 accepted the share command but did not contact the local "
-            "MediaServer; allow the EXE through Windows Firewall or pass "
+            "M5 did not contact the local MediaServer after the Samsung "
+            "share command; allow the EXE through Windows Firewall or pass "
             "--interface with the LAN IPv4"
         )
     if not server.browse_requested.is_set():
@@ -329,21 +367,11 @@ def run(args: argparse.Namespace) -> int:
         speaker_touched = True
         set_mute(speaker_ip, True, port=speaker_port)
 
-        _allow_async_timeout(
-            "SetSharePlaybackControl",
-            lambda: play_share(
-                speaker_ip,
-                source_name=source.stem,
-                device_udn=server.udn,
-                object_id=server.object_id,
-                port=speaker_port,
-                timeout=3.0,
-            ),
-        )
-        playback_touched = True
+        _start_share(speaker_ip, speaker_port, server)
 
         if not server.request_started.wait(timeout=20):
             raise RuntimeError(_missing_request_error(server))
+        playback_touched = True
 
         set_volume(speaker_ip, start_volume, port=speaker_port)
         set_mute(speaker_ip, False, port=speaker_port)
