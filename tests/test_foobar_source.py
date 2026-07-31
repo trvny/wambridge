@@ -52,7 +52,6 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_pacedFrames += batchFrames;", source)
         self.assertNotIn("batchStarted + duration", source)
         self.assertIn("pacing accepted=%ums", source)
-        self.assertNotIn("pacing accepted=%.1f", source)
         self.assertIn("--format mp3", source)
         self.assertNotIn("--format flac", source)
         self.assertIn("flush requested", source)
@@ -62,3 +61,4 @@ class FoobarSourceTests(TestCase):
         self.assertNotIn("%.2f s buffer", source)
         self.assertIn("} else if (!line.empty()) {", source)
         self.assertIn('"0.1.11"', source)
+        self.assertNotIn('"-re",', source)
