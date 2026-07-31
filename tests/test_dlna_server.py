@@ -83,6 +83,17 @@ class DlnaFileServerTests(TestCase):
             finally:
                 server.close()
 
+    def test_escapes_filename_in_description(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "a&b.mp3"
+            source.write_bytes(b"test")
+            server = DlnaFileServer(source, bind="127.0.0.1")
+            try:
+                description = server._device_description().decode()
+                self.assertIn("WAM Bridge (a&amp;b)", description)
+            finally:
+                server.close()
+
     def test_rejects_unsatisfiable_range(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "track.mp3"
