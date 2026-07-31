@@ -30,10 +30,14 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_inflightFrames = batchFrames;", source)
         self.assertIn("reserve_batch_deadline(", source)
         self.assertIn("wait_for_batch_deadline(", source)
-        self.assertIn("session_matches_locked(generation, sampleRate, channels)", source)
+        self.assertIn(
+            "session_matches_locked(generation, sampleRate, channels)",
+            source,
+        )
         self.assertIn("bool inputStarved", source)
         self.assertIn("scheduledStart < now", source)
         self.assertIn("m_pacingEpoch += now - scheduledStart;", source)
+        self.assertIn("inputStarved,\n                    batchDeadline", source)
         self.assertIn("m_pacingEpoch", source)
         self.assertIn("m_pacedFrames += batchFrames;", source)
         self.assertNotIn("batchStarted + duration", source)
