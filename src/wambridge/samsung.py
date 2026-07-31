@@ -592,11 +592,19 @@ def set_ip_info(
         "SetIpInfo",
         [
             ("uuid", server_uuid, "str"),
-            ("ip", server_address, "str"),
+            ("ipinfo", server_address, "str"),
+            ("ideviceinfo", "", "str"),
         ],
         port=port,
         timeout=timeout,
     )
+
+
+def _validate_share_target(device_udn: str, object_id: str) -> None:
+    if not device_udn.startswith("uuid:"):
+        raise ValueError("MediaServer UDN must start with uuid:")
+    if not object_id:
+        raise ValueError("Object ID cannot be empty")
 
 
 def play_share(
@@ -609,23 +617,49 @@ def play_share(
     port: int = DEFAULT_PORT,
     timeout: float = 10.0,
 ) -> WamResponse:
-    """Start one item from a registered UPnP MediaServer."""
+    """Start one item using Samsung's proprietary share-playback command."""
     if not source_name:
         raise ValueError("Source name cannot be empty")
-    if not device_udn.startswith("uuid:"):
-        raise ValueError("MediaServer UDN must start with uuid:")
-    if not object_id:
-        raise ValueError("Object ID cannot be empty")
+    _validate_share_target(device_udn, object_id)
     if isinstance(playtime, bool) or not isinstance(playtime, int) or playtime < 0:
         raise ValueError("Playtime must be a non-negative integer")
     return request(
         speaker_ip,
-        "SetSharePlaybackControl",
+        "SetSharePlayback",
         [
-            ("playbackcontrol", "play", "str"),
-            ("playertype", "allshare", "str"),
-            ("sourcename", source_name, "cdata"),
-            ("playtime", playtime, "dec"),
+            ("type", "1", "str"),
+            ("flag", "1", "str"),
+            ("source", source_name, "str"),
+            ("playtime", str(playtime), "str"),
+            ("device_udn", device_udn, "str"),
+            ("objectid", object_id, "str"),
+        ],
+        port=port,
+        timeout=timeout,
+    )
+
+
+def play_new_folder(
+    speaker_ip: str,
+    *,
+    device_udn: str,
+    object_id: str,
+    playtime: int = 1,
+    index: int = 0,
+    port: int = DEFAULT_PORT,
+    timeout: float = 10.0,
+) -> WamResponse:
+    """Use the fallback issued by Samsung Multiroom after share failure."""
+    _validate_share_target(device_udn, object_id)
+    for label, value in (("playtime", playtime), ("index", index)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{label.capitalize()} must be a non-negative integer")
+    return request(
+        speaker_ip,
+        "SetNewFolderPlayback",
+        [
+            ("playtime", str(playtime), "str"),
+            ("index", str(index), "str"),
             ("device_udn", device_udn, "str"),
             ("objectid", object_id, "str"),
         ],
