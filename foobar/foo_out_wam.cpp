@@ -743,8 +743,11 @@ private:
             unsigned channels = 0;
             uint64_t generation = 0;
             bool restart = false;
+            bool inputStarved = false;
             {
                 std::unique_lock lock(m_mutex);
+                inputStarved = m_playing.load() && !m_flushing &&
+                    !m_paused.load() && m_queue.empty();
                 m_cv.wait(lock, [this] {
                     return m_shutdown ||
                         (m_failure.empty() && (
@@ -795,12 +798,9 @@ private:
 
             bool sendSilence = false;
             bool stopAfterFlush = false;
-            bool inputStarved = false;
             size_t batchFrames = 0;
             {
                 std::unique_lock lock(m_mutex);
-                inputStarved = m_playing.load() && !m_flushing &&
-                    !m_paused.load() && m_queue.empty();
                 m_cv.wait_until(
                     lock,
                     m_flushing ? m_flushDeadline
@@ -1077,7 +1077,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.6",
+    "0.1.7",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 
