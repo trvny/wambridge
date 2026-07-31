@@ -1,0 +1,36 @@
+name: Apply outer-wait starvation fix
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/pace-foobar-pcm'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/pace-foobar-pcm
+
+      - name: Apply fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_file=patches/pcm-pacing-0.1.7.patch.b64
+          if [[ ! -f "$patch_file" ]]; then
+            exit 0
+          fi
+          base64 --decode "$patch_file" > /tmp/pcm-pacing.patch
+          git apply --check --ignore-space-change --ignore-whitespace /tmp/pcm-pacing.patch
+          git apply --ignore-space-change --ignore-whitespace /tmp/pcm-pacing.patch
+          git rm "$patch_file"
+          git rm .github/workflows/apply-outer-starvation-fix.yml
+          git add foobar/foo_out_wam.cpp tests/test_foobar_source.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Detect outer-wait PCM starvation"
+          git push origin HEAD:fix/pace-foobar-pcm
