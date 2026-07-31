@@ -57,6 +57,7 @@ jobs:
             https://github.com/skylot/jadx/releases/download/v1.5.5/jadx-1.5.5.zip \
             --output research/jadx.zip
           unzip -q research/jadx.zip -d research/jadx-bin
+          chmod +x research/jadx-bin/bin/jadx
           research/jadx-bin/bin/jadx \
             --threads-count 2 \
             --output-dir research/decompiled \
