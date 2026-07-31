@@ -1,3 +1,4 @@
+import argparse
 from unittest import TestCase
 from urllib.parse import parse_qs, urlsplit
 
@@ -123,5 +124,5 @@ class WamEventTests(TestCase):
         value = client_uuid("B00524C5-87B8-4439-9BB6-010545A40948")
 
         self.assertEqual(value, "b00524c5-87b8-4439-9bb6-010545a40948")
-        with self.assertRaisesRegex(Exception, "valid UUID"):
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "valid UUID"):
             client_uuid("not-a-uuid")
