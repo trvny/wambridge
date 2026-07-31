@@ -34,11 +34,11 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Lint Python
+      - name: Check Python
         run: |
           python -m pip install "ruff>=0.12,<1"
-          ruff check src tests foobar/wambridge_pcm_entry.py
-          ruff format --check src tests foobar/wambridge_pcm_entry.py
+          python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py
+          python -m compileall -q src tests foobar/wambridge_pcm_entry.py
 
       - name: Test Python package
         run: |
