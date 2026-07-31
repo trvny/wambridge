@@ -9,9 +9,9 @@
 Windows-first bridge for streaming audio over Wi-Fi to Samsung Wireless Audio
 Multiroom speakers, including Shape M5 (`WAM550`/`WAM551`).
 
-WAM Bridge decodes local files, internet radio and foobar2000 PCM with FFmpeg,
-serves a short-lived tokenized stream in the LAN and starts it through Samsung's
-local `SetUrlPlayback` API.
+The current stable path serves a short-lived tokenized stream in the LAN and
+starts it through Samsung's local `SetUrlPlayback` API. Finite local-file
+playback through Samsung's DMS and queue protocol is under active research.
 
 ## Status
 
@@ -19,11 +19,17 @@ This repository is the source of truth after migration from `trvny/trvny`.
 
 - CLI discovery, saved devices, playback controls, custom radio stations and
   native TuneIn presets are implemented.
-- The foobar2000 2.x x64 output component is built by GitHub Actions with a
-  bundled standalone helper.
-- The current component candidate passed 70 automated tests and a full Windows
-  build. Physical validation on a Samsung M5 is still required before merging
-  [PR #2](https://github.com/trvny/wambridge/pull/2).
+- GitHub Actions builds a bundled helper and foobar2000 2.x x64 component.
+- The foobar output remains experimental. Long PCM sessions have shown timing
+  instability on a physical M5 and must not be treated as release-ready.
+- PR #2 covers helper handle isolation, PR #4 covers PCM pacing and PR #7
+  researches finite local MP3 playback through a Samsung-compatible DMS.
+- None of PR #2, #4 or #7 should be merged without its physical M5 test.
+
+Current architecture, failed approaches and continuation notes are in
+[`docs/DEVELOPMENT_STATUS.md`](docs/DEVELOPMENT_STATUS.md). Measured protocol
+facts from a physical `SPK-WAM550` are in
+[`docs/WAM_PROTOCOL.md`](docs/WAM_PROTOCOL.md).
 
 ## Foobar2000 output
 
@@ -40,7 +46,8 @@ Open the `.fb2k-component` file with foobar2000 2.x x64, then select:
 Preferences → Playback → Output → Samsung M5 (Wi-Fi)
 ```
 
-Configuration, behaviour and manual test notes are documented in
+The artifact is for development testing, not a stable release. Configuration,
+known limitations and the physical checklist are documented in
 [`foobar/README.md`](foobar/README.md).
 
 ## Requirements
@@ -117,27 +124,36 @@ wambridge --forget M5
 
 ## Startup volume safety
 
-Old WAM firmware may jump to a high level while switching to URL playback.
-WAM Bridge mutes the speaker, starts the stream with 1.5 seconds of silence and
-then applies a bounded level after decoding begins.
+The tested Shape M5 firmware uses raw API volume steps `0..30`. Values above 30
+are silently clamped to maximum while still returning success. The current
+client has not yet implemented model-aware percentage conversion, so treat
+volume arguments as raw M5 steps:
 
-Choose an explicit level:
+- `3` is approximately 10 percent,
+- `6` is approximately 20 percent,
+- `30` is maximum.
+
+Old WAM firmware may jump to a high level while switching to URL playback. WAM
+Bridge mutes the speaker, starts the stream with 1.5 seconds of silence and then
+applies the requested bounded step after decoding begins.
+
+Choose a cautious explicit level:
 
 ```powershell
-wambridge "D:\Music\track.opus" --device M5 --volume 6
+wambridge "D:\Music\track.opus" --device M5 --volume 3
 ```
 
 Change only the startup ceiling while preserving quieter current settings:
 
 ```powershell
-wambridge "D:\Music\track.opus" --device M5 --max-start-volume 20
+wambridge "D:\Music\track.opus" --device M5 --max-start-volume 3
 ```
 
 ## Remote control
 
 ```powershell
 wambridge --device M5 --status
-wambridge --device M5 --set-volume 6
+wambridge --device M5 --set-volume 3
 wambridge --device M5 --mute
 wambridge --device M5 --unmute
 wambridge --device M5 --pause
@@ -158,7 +174,7 @@ Save a direct HTTP or HTTPS audio stream. Fallback URLs are tried in order:
 wambridge --radio-add paradise "https://primary.example/radio.mp3" `
   "https://backup.example/radio.ogg"
 wambridge --radio-list
-wambridge --radio-play paradise --device M5 --volume 6
+wambridge --radio-play paradise --device M5 --volume 3
 wambridge --radio-remove paradise
 ```
 
@@ -173,9 +189,9 @@ Import the bundled BBC Radio 1, PR3 Trójka and PR4 Czwórka pack:
 ```powershell
 wambridge --radio-import top3
 wambridge --radio-list
-wambridge --radio-play bbc1 --device M5 --volume 4
-wambridge --radio-play trojka --device M5 --volume 4
-wambridge --radio-play czworka --device M5 --volume 4
+wambridge --radio-play bbc1 --device M5 --volume 3
+wambridge --radio-play trojka --device M5 --volume 3
+wambridge --radio-play czworka --device M5 --volume 3
 ```
 
 These are WAM Bridge stations and do not overwrite the three presets selected
@@ -187,8 +203,8 @@ Read and start TuneIn presets already stored by the speaker:
 
 ```powershell
 wambridge --device M5 --tunein-list
-wambridge --device M5 --tunein-play 0 --volume 6
-wambridge --device M5 --tunein-play "Radio Paradise" --volume 6
+wambridge --device M5 --tunein-play 0 --volume 3
+wambridge --device M5 --tunein-play "Radio Paradise" --volume 3
 ```
 
 Changing the speaker's TuneIn account or preset list still belongs to Samsung's
@@ -213,11 +229,13 @@ When exactly one WAM speaker is discovered, `--speaker` may be omitted.
 
 ## Notes
 
-- The local stream uses HTTP/1.0 without chunked transfer for old-firmware
+- The local URL stream uses HTTP/1.0 without chunked transfer for old-firmware
   compatibility.
 - The URL contains a random session token and exists only while the command is
   running.
-- Do not expose port `55001` or the bridge HTTP port to the internet.
+- Do not expose port `55001` or a bridge HTTP port to the internet.
+- The tested M5 does not expose a standard UPnP AVTransport renderer. See the
+  protocol notes before restarting generic UPnP work.
 - `SetUrlPlayback` may freeze malformed firmware when the served body is not
   playable audio. The bridge exposes only FFmpeg output and returns `404` for
   other paths.
