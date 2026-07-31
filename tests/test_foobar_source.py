@@ -40,6 +40,10 @@ class FoobarSourceTests(TestCase):
         self.assertIn("inputStarved,\n                    batchDeadline", source)
         starvation_marker = "inputStarved = m_pacedFrames > 0"
         self.assertEqual(source.count(starvation_marker), 1)
+        self.assertIn(
+            "inputStarved = m_pacedFrames > 0 && !m_flushing &&",
+            source,
+        )
         self.assertNotIn("inputStarved = m_playing.load()", source)
         starvation_check = source.index(starvation_marker)
         outer_wait = source.index("m_cv.wait(lock")
