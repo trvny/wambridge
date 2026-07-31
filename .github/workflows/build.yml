@@ -37,8 +37,8 @@ jobs:
       - name: Check Python
         run: |
           python -m pip install "ruff>=0.12,<1"
-          python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py
-          python -m compileall -q src tests foobar/wambridge_pcm_entry.py
+          python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py foobar/wambridge_dlna_entry.py
+          python -m compileall -q src tests foobar/wambridge_pcm_entry.py foobar/wambridge_dlna_entry.py
 
       - name: Test Python package
         run: |
@@ -59,6 +59,23 @@ jobs:
             --specpath build/pyinstaller `
             foobar/wambridge_pcm_entry.py
           & dist/helper/wambridge-pcm/wambridge-pcm.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Build standalone DLNA probe
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name wambridge-dlna `
+            --distpath dist/dlna `
+            --workpath build/pyinstaller-dlna `
+            --specpath build/pyinstaller-dlna `
+            foobar/wambridge_dlna_entry.py
+          & dist/dlna/wambridge-dlna.exe --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -131,5 +148,6 @@ jobs:
           path: |
             dist/foo_out_wam.dll
             dist/foo_out_wam.fb2k-component
+            dist/dlna/wambridge-dlna.exe
             dist/wambridge-source.zip
           if-no-files-found: error
