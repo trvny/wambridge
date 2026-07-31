@@ -41,7 +41,7 @@ jobs:
           test -x "$apksigner"
           "$apksigner" verify --verbose --print-certs "$apk" \
             | tee research/certificate.txt
-          cert_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' research/certificate.txt | tr '[:upper:]' '[:lower:]' | head -n 1)"
+          cert_sha256="$(sed -n 's/^.*certificate SHA-256 digest: //p' research/certificate.txt | tr '[:upper:]' '[:lower:]' | head -n 1)"
           expected="43920a268512629943fc2f301d292352f4cd31ca78141965cfe48c1e248d42d5"
           if [[ "$cert_sha256" != "$expected" ]]; then
             echo "Unexpected certificate SHA-256: $cert_sha256" >&2
