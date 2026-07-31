@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: "_"
+message: kurde
+type: software
+authors:
+  - name: trvny
+  - name: github-actions[bot]
+  - name: dependabot[bot]
+  - name: actions-user
+  - name: claude
+  - name: codex
+  - name: chatgpt
+identifiers:
+  - type: url
+    value: 'https://github.com/trvny'
+repository-code: 'https://github.com/trvny/wambridge'
+url: 'https://tvpi.pages.dev/'
+license: ISC
+version: 0.0.0
+date-released: '2026-07-29'
