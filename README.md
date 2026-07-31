@@ -1,42 +1,60 @@
-![foobar2000 Badge](https://img.shields.io/badge/foobar2000-000?logo=foobar2000&logoColor=fff&style=for-the-badge) ![Samsung Badge](https://img.shields.io/badge/Samsung-1428A0?logo=samsung&logoColor=fff&style=for-the-badge) ![C++ Badge](https://img.shields.io/badge/C%2B%2B-00599C?logo=cplusplus&logoColor=fff&style=for-the-badge) ![Python Badge](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff&style=for-the-badge)
+![foobar2000](https://img.shields.io/badge/foobar2000-000?logo=foobar2000&logoColor=fff&style=for-the-badge) ![Samsung](https://img.shields.io/badge/Samsung-1428A0?logo=samsung&logoColor=fff&style=for-the-badge) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?logo=cplusplus&logoColor=fff&style=for-the-badge) ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff&style=for-the-badge)
 
-<p align="center">
-  <img src="https://www.google.com/s2/favicons?domain=samsung.com&sz=48" alt="samsung">
-</p>
+[![Build](https://github.com/trvny/wambridge/actions/workflows/build.yml/badge.svg)](https://github.com/trvny/wambridge/actions/workflows/build.yml)
 
 # WAM Bridge
-<img src="https://images.samsung.com/is/image/samsung/pl_WAM550-EN_014_Front_black?$330_330_JPG$" width="128" alt="wam550">
 
-Windows-first proof of concept for streaming audio over Wi-Fi to Samsung
-Wireless Audio Multiroom speakers, including Shape M5 (`WAM550`/`WAM551`).
+<img src="https://images.samsung.com/is/image/samsung/pl_WAM550-EN_014_Front_black?$330_330_JPG$" width="128" alt="Samsung Shape M5">
 
-It runs FFmpeg locally, exposes a tokenized HTTP stream in the LAN and starts
-it through Samsung's local `SetUrlPlayback` API. Source formats are decoded by
-FFmpeg, so Opus, Ogg Vorbis, AAC, FLAC, MP3 and radio streams can all be sent
-as a conservative FLAC or MP3 stream understood by the speaker.
+Windows-first bridge for streaming audio over Wi-Fi to Samsung Wireless Audio
+Multiroom speakers, including Shape M5 (`WAM550`/`WAM551`).
+
+WAM Bridge decodes local files, internet radio and foobar2000 PCM with FFmpeg,
+serves a short-lived tokenized stream in the LAN and starts it through Samsung's
+local `SetUrlPlayback` API.
 
 ## Status
 
-Working CLI bridge with discovery, saved devices, radio presets and native
-TuneIn control. An experimental foobar2000 2.x x64 output component is built
-by GitHub Actions and still requires final validation on a physical M5.
+This repository is the source of truth after migration from `trvny/trvny`.
+
+- CLI discovery, saved devices, playback controls, custom radio stations and
+  native TuneIn presets are implemented.
+- The foobar2000 2.x x64 output component is built by GitHub Actions with a
+  bundled standalone helper.
+- The current component candidate passed 70 automated tests and a full Windows
+  build. Physical validation on a Samsung M5 is still required before merging
+  [PR #2](https://github.com/trvny/wambridge/pull/2).
 
 ## Foobar2000 output
 
-The Windows workflow builds `foo_out_wam.fb2k-component` with a bundled
-`wambridge-pcm.exe`. Configuration and test notes are in
+The [`Build`](https://github.com/trvny/wambridge/actions/workflows/build.yml)
+workflow produces the `foo_out_wam-x64` artifact containing:
+
+- `foo_out_wam.fb2k-component`
+- `foo_out_wam.dll`
+- a source archive
+
+Open the `.fb2k-component` file with foobar2000 2.x x64, then select:
+
+```text
+Preferences → Playback → Output → Samsung M5 (Wi-Fi)
+```
+
+Configuration, behaviour and manual test notes are documented in
 [`foobar/README.md`](foobar/README.md).
 
 ## Requirements
 
-- Windows 10/11 or another system with Python 3.11+
+- Python 3.13+
 - FFmpeg available in `PATH`
 - computer and speaker reachable in the same LAN
-- Windows Firewall access for Python on private networks
+- Windows 10/11 and foobar2000 2.x x64 for the native output component
+- Windows Firewall access for the bridge on private networks
 
-## Install
+## Install the CLI
 
 ```powershell
+git clone https://github.com/trvny/wambridge.git
 cd wambridge
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -49,18 +67,15 @@ Confirm FFmpeg is visible:
 ffmpeg -version
 ```
 
-## Use
-
-Discover speakers:
+## Discover speakers
 
 ```powershell
 wambridge --discover
 ```
 
-Discovery sends repeated SSDP requests through every active IPv4 adapter.
-When old firmware stays silent, it falls back to checking Samsung's API on
-port `55001` in nearby `/24` networks. The result shows whether the speaker
-was found through `ssdp` or `api-scan`.
+Discovery sends repeated SSDP requests through active IPv4 adapters. When old
+firmware stays silent, it can fall back to checking Samsung's API on port
+`55001` in nearby `/24` networks.
 
 Useful diagnostics:
 
@@ -70,10 +85,9 @@ wambridge --discover --interface 192.168.1.25
 wambridge --discover --no-scan
 ```
 
-### Saved devices
+## Saved devices
 
-A DHCP address may change. Save the speaker once under an alias instead of
-using its IP permanently:
+Save a speaker under an alias instead of relying on its DHCP address:
 
 ```powershell
 wambridge --speaker 10.0.0.118 --remember M5
@@ -82,11 +96,18 @@ wambridge --device M5 --probe
 wambridge "D:\Music\track.opus" --device M5
 ```
 
-The profile stores the speaker's stable `device_id` and only caches its last
-working IP. If the address stops matching that ID, WAM Bridge searches the
-LAN, finds the same device and updates the profile. On Windows profiles are
-stored in `%LOCALAPPDATA%\WAMBridge\devices.json`; this is also the device
-source planned for the foobar2000 component.
+The profile stores the stable Samsung `device_id` and caches the latest working
+IP. If the address changes, WAM Bridge searches the LAN for the same device and
+updates the profile.
+
+On Windows profiles are stored in:
+
+```text
+%LOCALAPPDATA%\WAMBridge\devices.json
+```
+
+The foobar2000 component passes the configured alias to the same helper and
+profile resolver.
 
 Remove a saved profile:
 
@@ -94,13 +115,11 @@ Remove a saved profile:
 wambridge --forget M5
 ```
 
-### Startup volume safety
+## Startup volume safety
 
-Old WAM firmware may jump to a high volume while switching to URL playback.
-WAM Bridge keeps the speaker at `0`, starts the stream with 1.5 seconds of
-silence, then applies the requested level after decoding has begun. Without
-an explicit value, the current level is preserved only up to the default
-ceiling of `10`.
+Old WAM firmware may jump to a high level while switching to URL playback.
+WAM Bridge mutes the speaker, starts the stream with 1.5 seconds of silence and
+then applies a bounded level after decoding begins.
 
 Choose an explicit level:
 
@@ -108,15 +127,13 @@ Choose an explicit level:
 wambridge "D:\Music\track.opus" --device M5 --volume 6
 ```
 
-Change only the safety ceiling while preserving quieter current settings:
+Change only the startup ceiling while preserving quieter current settings:
 
 ```powershell
 wambridge "D:\Music\track.opus" --device M5 --max-start-volume 20
 ```
 
-### Remote control
-
-Inspect and control the saved speaker without opening Samsung's application:
+## Remote control
 
 ```powershell
 wambridge --device M5 --status
@@ -129,16 +146,13 @@ wambridge --device M5 --stop
 wambridge --device M5 --standby
 ```
 
-Native content providers such as TuneIn use their CPM play, pause and stop
-commands. DLNA uses UIC pause and resume. Samsung URL playback cannot be
-reliably resumed, so `--stop` pauses and mutes it; start the source command
-again to play it. `--standby` also mutes native playback so the speaker can
-enter its automatic standby state.
+Native providers such as TuneIn use their CPM commands. DLNA uses UIC pause and
+resume. Samsung URL playback cannot be resumed reliably, so starting the source
+again creates a new session.
 
-### Radio stations
+## Radio stations
 
-Save any direct HTTP or HTTPS radio stream under your own alias. Optional
-fallback URLs are tried in order when a stream fails:
+Save a direct HTTP or HTTPS audio stream. Fallback URLs are tried in order:
 
 ```powershell
 wambridge --radio-add paradise "https://primary.example/radio.mp3" `
@@ -148,13 +162,13 @@ wambridge --radio-play paradise --device M5 --volume 6
 wambridge --radio-remove paradise
 ```
 
-The station list is stored in
-`%LOCALAPPDATA%\WAMBridge\stations.json` on Windows. Existing files containing
-only one `url` per station remain compatible. Sources are decoded by FFmpeg,
-so the M5 receives the same conservative FLAC or MP3 stream as it does for
-local files.
+Station definitions are stored in:
 
-Import the bundled three-station set:
+```text
+%LOCALAPPDATA%\WAMBridge\stations.json
+```
+
+Import the bundled BBC Radio 1, PR3 Trójka and PR4 Czwórka pack:
 
 ```powershell
 wambridge --radio-import top3
@@ -164,17 +178,12 @@ wambridge --radio-play trojka --device M5 --volume 4
 wambridge --radio-play czworka --device M5 --volume 4
 ```
 
-The `top3` pack contains BBC Radio 1, PR3 Trójka and PR4 Czwórka, each with a
-primary and backup stream. TuneIn web-page addresses are not included because
-they are pages rather than direct audio inputs.
+These are WAM Bridge stations and do not overwrite the three presets selected
+by the physical button on the speaker.
 
-This pack is stored and played by WAM Bridge. It does not overwrite the three
-native presets selected by the physical button on the M5 because no reliable
-preset-write API is known.
+## Native TuneIn presets
 
-WAM Bridge can also read and start the native TuneIn presets stored by the
-speaker. This includes the `my` presets synchronized after signing in through
-Samsung's TuneIn plugin:
+Read and start TuneIn presets already stored by the speaker:
 
 ```powershell
 wambridge --device M5 --tunein-list
@@ -182,25 +191,14 @@ wambridge --device M5 --tunein-play 0 --volume 6
 wambridge --device M5 --tunein-play "Radio Paradise" --volume 6
 ```
 
-Custom stations are managed by WAM Bridge. Native TuneIn presets are read and
-played from the speaker; changing the speaker's TuneIn account or preset list
-still belongs to Samsung's plugin because no reliable write API is known.
+Changing the speaker's TuneIn account or preset list still belongs to Samsung's
+plugin because no reliable write API is known.
 
-Test a known speaker:
+## Direct playback
 
 ```powershell
 wambridge --speaker 192.168.1.50 --probe
-```
-
-Play an internet radio stream:
-
-```powershell
 wambridge "https://example.net/radio-stream" --speaker 192.168.1.50
-```
-
-Play a local Opus or Ogg file:
-
-```powershell
 wambridge "D:\Music\track.opus" --speaker 192.168.1.50
 wambridge "D:\Music\track.ogg" --speaker 192.168.1.50
 ```
@@ -215,16 +213,14 @@ When exactly one WAM speaker is discovered, `--speaker` may be omitted.
 
 ## Notes
 
-- The local stream uses HTTP/1.0 without chunked transfer for compatibility
-  with old firmware.
-- The URL contains a random session token and exists only while the command
-  is running.
+- The local stream uses HTTP/1.0 without chunked transfer for old-firmware
+  compatibility.
+- The URL contains a random session token and exists only while the command is
+  running.
 - Do not expose port `55001` or the bridge HTTP port to the internet.
-- URL playback in Samsung firmware has unreliable pause/resume behaviour.
-  This PoC stops the session instead of attempting to preserve it.
 - `SetUrlPlayback` may freeze malformed firmware when the served body is not
-  audio. The bridge only exposes FFmpeg output and returns `404` for other
-  paths.
+  playable audio. The bridge exposes only FFmpeg output and returns `404` for
+  other paths.
 
 ## Validate
 
