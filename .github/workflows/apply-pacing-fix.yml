@@ -2,7 +2,7 @@ name: Apply PCM pacing fix
 
 on:
   pull_request:
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
@@ -20,6 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          printf '\n' >> patches/pace-foobar-pcm.patch
           git apply --check patches/pace-foobar-pcm.patch
           git apply patches/pace-foobar-pcm.patch
           git rm patches/pace-foobar-pcm.patch
