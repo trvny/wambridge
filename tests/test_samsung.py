@@ -14,7 +14,9 @@ from wambridge.samsung import (
     normalize_device_id,
     parse_response,
     pause_playback,
+    play_share,
     resume_playback,
+    set_ip_info,
     set_mute,
     set_playback_control,
     set_volume,
@@ -292,3 +294,60 @@ class SamsungCommandTests(TestCase):
 
         with self.assertRaisesRegex(WamApiError, "cannot be resumed"):
             resume_playback("10.0.0.118")
+
+
+class SamsungSharePlaybackTests(TestCase):
+    @patch("wambridge.samsung.request")
+    def test_registers_media_server_address(self, request_mock) -> None:
+        request_mock.return_value = WamResponse(
+            method="IpInfo", result="ok", body=""
+        )
+
+        set_ip_info(
+            "10.0.0.118",
+            "12345678-1234-1234-1234-123456789abc",
+            "10.0.0.103:49152",
+        )
+
+        request_mock.assert_called_once_with(
+            "10.0.0.118",
+            "SetIpInfo",
+            [
+                ("uuid", "12345678-1234-1234-1234-123456789abc", "str"),
+                ("ip", "10.0.0.103:49152", "str"),
+            ],
+            port=55001,
+            timeout=10.0,
+        )
+
+    @patch("wambridge.samsung.request")
+    def test_starts_allshare_object(self, request_mock) -> None:
+        request_mock.return_value = WamResponse(
+            method="SharePlayback", result="ok", body=""
+        )
+
+        play_share(
+            "10.0.0.118",
+            source_name="Starburster",
+            device_udn="uuid:12345678-1234-1234-1234-123456789abc",
+            object_id="21329DC1305BF41B8AD9FCD0A6736302",
+        )
+
+        request_mock.assert_called_once_with(
+            "10.0.0.118",
+            "SetSharePlaybackControl",
+            [
+                ("playbackcontrol", "play", "str"),
+                ("playertype", "allshare", "str"),
+                ("sourcename", "Starburster", "cdata"),
+                ("playtime", 0, "dec"),
+                (
+                    "device_udn",
+                    "uuid:12345678-1234-1234-1234-123456789abc",
+                    "str",
+                ),
+                ("objectid", "21329DC1305BF41B8AD9FCD0A6736302", "str"),
+            ],
+            port=55001,
+            timeout=10.0,
+        )
