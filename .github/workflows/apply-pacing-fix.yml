@@ -23,7 +23,7 @@ jobs:
           printf '\n' >> patches/pace-foobar-pcm.patch
           git apply --check patches/pace-foobar-pcm.patch
           git apply patches/pace-foobar-pcm.patch
-          git rm patches/pace-foobar-pcm.patch
+          git rm -f patches/pace-foobar-pcm.patch
           git rm .github/workflows/apply-pacing-fix.yml
           git add foobar/foo_out_wam.cpp
           git config user.name "github-actions[bot]"
