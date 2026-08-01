@@ -10,16 +10,26 @@ maskuje poczatkowy zryw buforowania i podpowiada bledny wniosek - stad przyrost.
       | py -m wambridge.pcm_cli --speaker $WAM_SPEAKER \
             --sample-rate 44100 --channels 2 --sample-format s16le
 
-KOTWICA. Sam czas od startu procesu NIE nadaje sie na punkt odniesienia: zanim
-poleci dzwiek, mija discovery, przekazanie URL-a i wlasne buforowanie pcm_cli,
-a te sekundy wpadlyby do wyniku jako rzekomy zapas glosnika. Dlatego sonda
-podlacza sie w tle na 55001 i czeka na StartPlaybackEvent - jedyne zdarzenie,
-ktore potwierdza dzwiek (AGENTS.md L18-19; MusicInfo i PlayStatus potrafia
-klamac). Kolumna "w locie" liczy sie dopiero od niego.
+KOTWICA (WAM_ANCHOR=1, DOMYSLNIE WYLACZONA - patrz ostrzezenie nizej).
 
-Bez WAM_SPEAKER sonda dziala dalej, ale mierzy wylacznie przeplyw: kolumna
-"w locie" pokazuje "-", bo bez potwierdzenia nie ma od czego liczyc. Sesja
-pobrana i przemilczana wygladalaby wtedy identycznie jak grajaca.
+Sam czas od startu procesu NIE nadaje sie na punkt odniesienia: zanim poleci
+dzwiek, mija discovery, przekazanie URL-a i wlasne buforowanie pcm_cli, a te
+sekundy wpadlyby do wyniku jako rzekomy zapas glosnika. Kotwica probuje to
+naprawic, nasluchujac StartPlaybackEvent - jedynego zdarzenia potwierdzajacego
+dzwiek (AGENTS.md L18-19; MusicInfo i PlayStatus potrafia klamac).
+
+OSTRZEZENIE, zmierzone 2026-08-01: M5 obsluguje w praktyce JEDNO polaczenie
+sterujace na 55001. Kotwica otwiera wlasne, wiec rywalizuje z pcm_cli i potrafi
+wywalic caly odtwarzacz na "Cannot reach Samsung WAM ...: timed out". Nasluch
+sam w sobie dziala (widac CurrentFunc, SpkName, VolumeLevel, MuteStatus), ale
+kosztem odtwarzania. Dlatego domyslnie jest wylaczona.
+
+Poprawne rozwiazanie nie polega na drugim polaczeniu: docs/WAM_PROTOCOL.md
+(sekcja z kolejnoscia krokow) przewiduje JEDEN trwaly czytnik na 55001, ktory
+wysyla komendy i czyta zdarzenia. Kotwice trzeba wpiac tam, a nie obok.
+
+Bez kotwicy kolumna "w locie" pokazuje "-": bez potwierdzenia nie ma od czego
+liczyc, a sesja pobrana i przemilczana wygladalaby identycznie jak grajaca.
 
 Zmierzone na M5 (2026-08-01, 100 s ciaglej gry, 44.1/16 stereo) BEZ kotwicy,
 czyli z czasem liczonym od startu procesu:
@@ -55,6 +65,7 @@ REALTIME = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE
 INTERVAL = float(os.environ.get("WAM_INTERVAL", "5"))
 CHUNK = 8192
 SPEAKER = os.environ.get("WAM_SPEAKER", "")
+ANCHOR = os.environ.get("WAM_ANCHOR", "") == "1"
 
 # Ustawiany przez watek nasluchu w chwili StartPlaybackEvent (zegar monotoniczny).
 _playback_start: float | None = None
@@ -76,8 +87,14 @@ def _watch_for_playback() -> None:
         )
         return
 
+    seen: set[str] = set()
     try:
         for event in listen_events(SPEAKER, str(uuid.uuid4()), stop=_stop):
+            # Kazda metoda raz - inaczej VolumeLevel zaleje pomiar. Bez tego nie
+            # da sie odroznic "glosnik nie wysyla zdarzenia" od "nasluch nie dziala".
+            if event.method and event.method not in seen:
+                seen.add(event.method)
+                print("[nasluch] %s" % event.method, file=sys.stderr, flush=True)
             if event.method == "StartPlaybackEvent":
                 _playback_start = time.monotonic()
                 print("[kotwica] StartPlaybackEvent", file=sys.stderr, flush=True)
@@ -94,11 +111,16 @@ def _in_flight(audio_emitted: float) -> str:
 
 
 def main() -> int:
-    if SPEAKER:
+    if ANCHOR and SPEAKER:
+        print(
+            "[kotwica] wlaczona - rywalizuje z pcm_cli o 55001, moze wywalic odtwarzanie",
+            file=sys.stderr,
+            flush=True,
+        )
         threading.Thread(target=_watch_for_playback, daemon=True).start()
     else:
         print(
-            "[kotwica] WAM_SPEAKER nieustawiony - kolumna 'w locie' bedzie pusta",
+            "[kotwica] wylaczona - kolumna 'w locie' bedzie pusta (WAM_ANCHOR=1 wlacza)",
             file=sys.stderr,
             flush=True,
         )
