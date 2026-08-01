@@ -9,49 +9,73 @@ from wambridge.wam_events import WamEvent
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
 
 
-class FakeConnection:
-    def __init__(self, event: WamEvent) -> None:
-        self.event = event
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        return None
-
-    def events(self, *, stop):
-        return [self.event]
-
-
 class PlaybackWatcherErrorTests(TestCase):
-    def test_armed_error_event_aborts_without_identity_filtering(self) -> None:
-        for identifier in (
-            CLIENT_UUID,
-            "public",
-            "00000000-0000-4000-8000-000000000099",
-            None,
-        ):
-            with self.subTest(identifier=identifier):
-                watcher = PlaybackWatcher(
-                    "10.0.0.118",
-                    CLIENT_UUID,
-                    port=55001,
-                )
-                event = WamEvent(
-                    method="ErrorEvent",
-                    result="ng",
-                    user_identifier=identifier,
-                    error_code="NETWORK_TIMEOUT_ERROR",
-                )
-                with patch(
-                    "wambridge.pcm_cli.WamEventConnection",
-                    return_value=FakeConnection(event),
-                ):
-                    watcher.arm()
-                    watcher._run()
+    def _run_event(
+        self,
+        watcher: PlaybackWatcher,
+        *,
+        code: str,
+        identifier: str | None = None,
+    ) -> None:
+        event = WamEvent(
+            method="ErrorEvent",
+            result="ng",
+            user_identifier=identifier,
+            error_code=code,
+        )
+        with patch(
+            "wambridge.pcm_cli.WamEventConnection",
+        ) as connection_class:
+            connection = connection_class.return_value.__enter__.return_value
+            connection.events.return_value = [event]
+            watcher._run()
 
-                with self.assertRaisesRegex(
-                    StreamError,
-                    "NETWORK_TIMEOUT_ERROR",
-                ):
-                    watcher.wait_for_start(timeout=0.01)
+    def test_unmatched_error_before_stream_request_is_diagnostic(self) -> None:
+        watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
+        watcher.arm()
+
+        self._run_event(
+            watcher,
+            code="NETWORK_TIMEOUT_ERROR",
+            identifier="public",
+        )
+
+        with self.assertRaisesRegex(
+            StreamError,
+            "did not confirm StartPlaybackEvent",
+        ):
+            watcher.wait_for_start(timeout=0.01)
+
+    def test_network_timeout_after_stream_request_aborts_startup(self) -> None:
+        watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
+        watcher.arm()
+        watcher.mark_stream_active()
+
+        self._run_event(
+            watcher,
+            code="NETWORK_TIMEOUT_ERROR",
+            identifier=None,
+        )
+
+        with self.assertRaisesRegex(
+            StreamError,
+            "NETWORK_TIMEOUT_ERROR",
+        ):
+            watcher.wait_for_start(timeout=0.01)
+
+    def test_other_error_after_stream_request_remains_diagnostic(self) -> None:
+        watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
+        watcher.arm()
+        watcher.mark_stream_active()
+
+        self._run_event(
+            watcher,
+            code="71",
+            identifier=CLIENT_UUID,
+        )
+
+        with self.assertRaisesRegex(
+            StreamError,
+            "did not confirm StartPlaybackEvent",
+        ):
+            watcher.wait_for_start(timeout=0.01)
