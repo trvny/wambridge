@@ -79,3 +79,32 @@ class PlaybackWatcherErrorTests(TestCase):
             "did not confirm StartPlaybackEvent",
         ):
             watcher.wait_for_start(timeout=0.01)
+
+    def test_start_event_keeps_shared_connection_available(self) -> None:
+        watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
+        watcher.arm()
+        event = WamEvent(
+            method="StartPlaybackEvent",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+        )
+
+        with patch(
+            "wambridge.pcm_cli.WamEventConnection",
+        ) as connection_class:
+            connection = connection_class.return_value.__enter__.return_value
+
+            def events(*, stop):
+                yield event
+                stop.wait(timeout=1.0)
+
+            connection.events.side_effect = events
+            with watcher:
+                watcher.wait_for_start(timeout=0.1)
+                watcher.set_volume(7)
+
+            connection.send.assert_called_with(
+                method="SetVolume",
+                arguments=[("volume", 7, "dec")],
+                power_on=True,
+            )
