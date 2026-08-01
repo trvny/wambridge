@@ -14,9 +14,18 @@ class FoobarMenuSourceTests(TestCase):
         self.assertIn('"WAM Bridge"', source)
         self.assertIn("return kMenuGroupGuid;", source)
         self.assertNotIn('"WAM Bridge: Emergency stop"', source)
+        for label in (
+            "Emergency stop",
+            "Standby",
+            "Volume up",
+            "Volume down",
+            "Volume to safe level",
+        ):
+            self.assertIn(f'"{label}"', source)
 
     def test_control_action_logs_use_narrow_strings(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertNotIn("%ls", source)
         self.assertIn('queued %s", kComponentName, label.c_str()', source)
+        self.assertIn("const auto label = action_label(action.name);", source)
