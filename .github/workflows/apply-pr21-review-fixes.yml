@@ -18,6 +18,10 @@ jobs:
           ref: fix/foobar-output-clock
           fetch-depth: 0
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
       - name: Apply focused fixes
         shell: bash
         run: |
