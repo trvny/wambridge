@@ -66,14 +66,15 @@ A 100-second unanchored `ffmpeg | pcm_cli` control run showed an initial burst a
 throughput near 1.00x after roughly 25 seconds. Its apparent `+23 s` reserve included
 startup, so it is only an upper bound and must not become a latency target.
 
-PR #21 currently experiments with gating `WAMBRIDGE PLAYING` on an armed
-`StartPlaybackEvent` carrying either the client UUID or `user_identifier=public`. The exact
-public-aware build has not yet been verified on the physical M5. An earlier statement that
-working `SetUrlPlayback` streams do not emit the event was retracted because successful
-runs did not record event method names. `audio_started` still means only that encoded bytes
-entered the HTTP response. Unmatched `ErrorEvent` values are diagnostics, not attributable
-startup failures. `force_play()` must remain a transient drain request and must not close
-helper stdin permanently.
+PR #21 now starts its bounded transport clock at `audio_started`, keeps that clock anchored
+to cumulative real time, and never moves the anchor to pipe-write completion. A physical
+run of `90d8193` proved why both details matter: waiting for `StartPlaybackEvent` starved the
+stream after four seconds, while resetting the anchor to `now` let foobar advance at about
+94x. Repeated audible URL/PCM runs emitted no matching start event before the 45-second
+timeout, so that event remains diagnostic and is not a hard gate for this path. Unmatched
+`ErrorEvent` values remain diagnostics unless the active stream reports a concrete network
+timeout. `force_play()` remains a transient drain request and does not close helper stdin
+permanently.
 
 ### PR #7: finite local MP3 through Samsung DMS
 
@@ -175,8 +176,9 @@ compatibility.
 
 ## Next implementation order
 
-1. Verify PR #21 on the physical M5: public-aware start event, stable seekbar and audio,
-   transient `force_play()` drain, one FFmpeg at a time, and visible helper diagnostics.
+1. Verify the fixed-anchor PR #21 build on the physical M5: stable seekbar and audio,
+   no 45-second restart, transient `force_play()` drain, one FFmpeg at a time, and visible
+   helper diagnostics.
 2. Verify at least one complete 3–5 minute track against wall-clock duration, then a second
    track, stop and seek. Startup alone is not acceptance.
 3. Fix raw M5 volume handling to `0..30` or add model-aware translation.
