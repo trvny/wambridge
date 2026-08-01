@@ -427,8 +427,18 @@ private:
     uint64_t startup_delay_frames_locked(
         std::chrono::steady_clock::time_point now
     ) const {
-        if (!m_clockStarted || m_sampleRate == 0 || now >= m_clockAnchor) return 0;
-        const auto remaining = std::chrono::duration<double>(m_clockAnchor - now);
+        auto effectiveNow = now;
+        if (m_paused.load() &&
+            m_pauseStarted != std::chrono::steady_clock::time_point{}) {
+            effectiveNow = m_pauseStarted;
+        }
+        if (!m_clockStarted || m_sampleRate == 0 ||
+            effectiveNow >= m_clockAnchor) {
+            return 0;
+        }
+        const auto remaining = std::chrono::duration<double>(
+            m_clockAnchor - effectiveNow
+        );
         return static_cast<uint64_t>(
             remaining.count() * static_cast<double>(m_sampleRate)
         );
