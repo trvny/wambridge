@@ -45,3 +45,5 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_endOfInput = true;", source)
         self.assertIn("close_child_input(generation);", source)
         self.assertIn("expected = m_shutdown || m_restart || m_inputClosed", source)
+        self.assertIn("finish_playback_clock_if_drained_locked();", source)
+        self.assertIn("m_endOfInput && m_inputClosed", source)
