@@ -34,3 +34,5 @@ jobs:
           git add -A
           git commit -m "Synchronize foobar output clock"
           git push origin HEAD:fix/foobar-output-clock
+
+# Triggered through the temporary guarded workflow on main.
