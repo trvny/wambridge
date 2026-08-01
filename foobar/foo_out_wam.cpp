@@ -414,13 +414,7 @@ private:
             elapsed.count() * static_cast<double>(m_sampleRate)
         );
         const uint64_t target = m_clockAnchorFrames + elapsedFrames;
-        if (target >= m_submittedFrames) {
-            m_playedFrames = m_submittedFrames;
-            m_clockAnchor = now;
-            m_clockAnchorFrames = m_playedFrames;
-        } else {
-            m_playedFrames = target;
-        }
+        m_playedFrames = std::min(target, m_submittedFrames);
     }
 
     uint64_t startup_delay_frames_locked(
