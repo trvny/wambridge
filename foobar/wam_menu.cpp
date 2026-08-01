@@ -33,6 +33,14 @@ constexpr GUID kMenuModuleGuid = {
     {0xa5, 0xdd, 0xf8, 0xdf, 0x35, 0xea, 0x6c, 0x55},
 };
 
+// {72F78E03-3B8B-41F5-B61B-7EE7A47D4C86}
+constexpr GUID kMenuGroupGuid = {
+    0x72f78e03,
+    0x3b8b,
+    0x41f5,
+    {0xb6, 0x1b, 0x7e, 0xe7, 0xa4, 0x7d, 0x4c, 0x86},
+};
+
 // {28F99F89-5A55-474E-9F37-727E62434414}
 constexpr GUID kEmergencyStopGuid = {
     0x28f99f89,
@@ -84,35 +92,35 @@ struct MenuItem {
 constexpr std::array<MenuItem, 5> kMenuItems = {{
     {
         kEmergencyStopGuid,
-        "WAM Bridge: Emergency stop",
+        "Emergency stop",
         "Stop foobar and the speaker, unmute it and restore the configured safe volume.",
         L"emergency-stop",
         true,
     },
     {
         kStandbyGuid,
-        "WAM Bridge: Standby",
+        "Standby",
         "Stop foobar and leave the Samsung WAM speaker muted for standby.",
         L"standby",
         true,
     },
     {
         kVolumeUpGuid,
-        "WAM Bridge: Volume up",
+        "Volume up",
         "Raise the physical Samsung WAM volume by one raw step.",
         L"volume-up",
         false,
     },
     {
         kVolumeDownGuid,
-        "WAM Bridge: Volume down",
+        "Volume down",
         "Lower the physical Samsung WAM volume by one raw step.",
         L"volume-down",
         false,
     },
     {
         kSafeVolumeGuid,
-        "WAM Bridge: Volume to safe level",
+        "Volume to safe level",
         "Set the physical Samsung WAM volume to the configured startup level.",
         L"safe-volume",
         false,
@@ -267,6 +275,10 @@ struct ControlAction {
     std::wstring name;
 };
 
+std::string action_label(const std::wstring& action) {
+    return {action.begin(), action.end()};
+}
+
 class ControlDispatcher {
 public:
     ControlDispatcher() : m_worker(&ControlDispatcher::worker_loop, this) {}
@@ -282,7 +294,8 @@ public:
             m_queue.push_back({action});
         }
         m_cv.notify_one();
-        console::printf("%s: queued %ls", kComponentName, action);
+        const auto label = action_label(action);
+        console::printf("%s: queued %s", kComponentName, label.c_str());
     }
 
     void shutdown() {
@@ -320,18 +333,19 @@ private:
         const std::string& output
     ) const {
         const auto compact = compact_output(output);
+        const auto label = action_label(action.name);
         if (exitCode == 0) {
             if (compact.empty()) {
                 console::printf(
-                    "%s: %ls completed",
+                    "%s: %s completed",
                     kComponentName,
-                    action.name.c_str()
+                    label.c_str()
                 );
             } else {
                 console::printf(
-                    "%s: %ls completed: %s",
+                    "%s: %s completed: %s",
                     kComponentName,
-                    action.name.c_str(),
+                    label.c_str(),
                     compact.c_str()
                 );
             }
@@ -340,16 +354,16 @@ private:
 
         if (compact.empty()) {
             console::printf(
-                "%s: %ls failed with exit code %lu",
+                "%s: %s failed with exit code %lu",
                 kComponentName,
-                action.name.c_str(),
+                label.c_str(),
                 static_cast<unsigned long>(exitCode)
             );
         } else {
             console::printf(
-                "%s: %ls failed with exit code %lu: %s",
+                "%s: %s failed with exit code %lu: %s",
                 kComponentName,
-                action.name.c_str(),
+                label.c_str(),
                 static_cast<unsigned long>(exitCode),
                 compact.c_str()
             );
@@ -569,7 +583,7 @@ public:
     }
 
     GUID get_parent() override {
-        return mainmenu_groups::playback;
+        return kMenuGroupGuid;
     }
 
     void execute(
@@ -597,6 +611,12 @@ public:
     }
 };
 
+mainmenu_group_popup_factory g_wamMenuGroup(
+    kMenuGroupGuid,
+    mainmenu_groups::playback,
+    mainmenu_commands::sort_priority_dontcare,
+    "WAM Bridge"
+);
 mainmenu_commands_factory_t<WamMenuCommands> g_wamMenuCommands;
 
 }  // namespace
