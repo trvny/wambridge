@@ -18,9 +18,13 @@ traps that look like bugs in this code but are not.
 - On the share/DLNA path, only `StartPlaybackEvent` confirms playback. `MusicInfo` and
   `PlayStatus` report a playing state with nothing playing, and mix in fields from earlier
   sessions.
-- `SetUrlPlayback` did not emit `StartPlaybackEvent` during measured working PCM streams.
-  Do not gate that path on the event until a different reliable signal is proved on the
-  physical M5.
+- On the URL/PCM path, `audio_started` means only that the first encoded bytes reached the
+  HTTP response; it is not proof of audible playback. The current experiment arms the event
+  listener immediately before `SetUrlPlayback` and accepts `StartPlaybackEvent` from either
+  the stable client UUID or `user_identifier=public`. An earlier claim that this event never
+  arrives was based only on failed runs with event logging and was retracted. Keep the gate
+  until the public-filtered build is tested on the physical M5; do not silently fall back to
+  `audio_started`.
 - A command timeout is not a failure. The firmware answers late, and often with an
   unrelated event, so replies must be matched against the command that was sent.
 - Do not gate `SetUrlPlayback` on submode, and never tell anyone to power cycle the speaker.
