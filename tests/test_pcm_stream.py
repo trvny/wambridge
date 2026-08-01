@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
-from wambridge.pcm_stream import PcmAudioStreamServer
+from wambridge.pcm_stream import PcmAudioStreamServer, _read_startup_payload
 from wambridge.stream import StreamError
 
 
@@ -152,3 +152,46 @@ class PcmAudioStreamServerTests(TestCase):
             self.assertTrue(server.audio_started.is_set())
         finally:
             server.close()
+
+
+class StartupPayloadProgressTests(TestCase):
+    """The startup read must end on lack of progress, not on a falsy chunk.
+
+    A stream returning something truthy that adds no bytes used to spin forever:
+    the loop only broke on a falsy chunk and had no iteration limit. Mocking
+    ``Popen().stdout`` with a bare ``MagicMock`` hit exactly that and consumed
+    25 GB before the machine ran out of commit charge.
+    """
+
+    def test_truthy_chunk_that_adds_no_bytes_terminates(self) -> None:
+        class NeverGrows:
+            """Truthy on every read, but yields nothing when extended."""
+
+            def __init__(self) -> None:
+                self.reads = 0
+
+            def read1(self, _size: int) -> object:
+                self.reads += 1
+                if self.reads > 10_000:  # pragma: no cover - guards the guard
+                    raise AssertionError("read loop did not terminate")
+                return _TruthyEmpty()
+
+        class _TruthyEmpty:
+            def __bool__(self) -> bool:
+                return True
+
+            def __iter__(self):
+                return iter(())
+
+        stream = NeverGrows()
+        with self.assertRaises(StreamError):
+            _read_startup_payload(stream, "flac")
+        self.assertLess(stream.reads, 10_000)
+
+    def test_empty_stream_still_reports_no_audio(self) -> None:
+        with self.assertRaises(StreamError) as caught:
+            _read_startup_payload(BytesIO(b""), "flac")
+        self.assertIn("no audio", str(caught.exception))
+
+    def test_non_flac_payload_is_returned(self) -> None:
+        self.assertEqual(_read_startup_payload(BytesIO(b"abc"), "mp3"), b"abc")

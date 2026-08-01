@@ -55,9 +55,13 @@ def _read_startup_payload(stream: BinaryIO, extension: str) -> bytes:
     while len(payload) < MAX_STARTUP_PAYLOAD_SIZE:
         remaining = MAX_STARTUP_PAYLOAD_SIZE - len(payload)
         chunk = _read_chunk(stream, min(STARTUP_CHUNK_SIZE, remaining))
-        if not chunk:
-            break
+        before = len(payload)
         payload.extend(chunk)
+        # Exit on lack of progress, not on a falsy chunk. A stream that keeps
+        # returning something truthy which adds no bytes would otherwise spin
+        # forever, and this loop has no iteration limit to fall back on.
+        if len(payload) == before:
+            break
         if extension != "flac" or _contains_flac_audio_frame(payload):
             return bytes(payload)
 
