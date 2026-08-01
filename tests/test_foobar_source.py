@@ -45,6 +45,9 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_pauseStarted = now;", source)
         self.assertIn("m_clockAnchor += now - m_pauseStarted;", source)
         self.assertIn("if (m_paused.load()) m_pauseStarted = now;", source)
+        self.assertIn("auto effectiveNow = now;", source)
+        self.assertIn("effectiveNow = m_pauseStarted;", source)
+        self.assertIn("m_clockAnchor - effectiveNow", source)
         self.assertNotIn(
             "m_clockAnchor = now;\n"
             "                m_clockAnchorFrames = m_playedFrames;",
