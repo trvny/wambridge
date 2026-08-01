@@ -80,6 +80,19 @@ class PlaybackWatcherErrorTests(TestCase):
         ):
             watcher.wait_for_start(timeout=0.01)
 
+    def test_listener_failure_before_startup_remains_fatal(self) -> None:
+        watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
+
+        with patch(
+            "wambridge.pcm_cli.WamEventConnection",
+        ) as connection_class:
+            connection = connection_class.return_value.__enter__.return_value
+            connection.events.side_effect = ValueError("malformed response")
+            watcher._run()
+
+        with self.assertRaisesRegex(StreamError, "malformed response"):
+            watcher.raise_if_failed()
+
     def test_listener_failure_after_startup_is_diagnostic(self) -> None:
         watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
         watcher.mark_startup_complete()
