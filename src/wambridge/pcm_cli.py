@@ -201,7 +201,7 @@ def _wait_for_stream_event(
 
 
 class PlaybackWatcher:
-    """Wait for the speaker event that belongs to the active playback attempt."""
+    """Wait for the speaker start event that belongs to this playback attempt."""
 
     def __init__(self, speaker_ip: str, client_uuid: str, *, port: int) -> None:
         self._speaker_ip = speaker_ip
@@ -209,7 +209,6 @@ class PlaybackWatcher:
         self._port = port
         self._armed = threading.Event()
         self._started = threading.Event()
-        self._failed = threading.Event()
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._error = ""
@@ -230,7 +229,7 @@ class PlaybackWatcher:
             self._thread.join()
 
     def arm(self) -> None:
-        """Accept events only after this attempt is about to send its command."""
+        """Accept start events only after this attempt is sending its command."""
         self._armed.set()
 
     def wait_for_start(self, *, timeout: float) -> None:
@@ -240,14 +239,16 @@ class PlaybackWatcher:
                 timeout=min(0.1, max(0.0, deadline - monotonic()))
             ):
                 return
-            if self._failed.is_set():
-                raise StreamError(
-                    self._error or "Speaker playback event listener failed"
-                )
+            if self._error:
+                raise StreamError(self._error)
         raise StreamError(f"Speaker did not confirm {_SUCCESS_EVENT}")
 
     def _belongs_to_attempt(self, event: WamEvent) -> bool:
-        if not self._armed.is_set() or not event.user_identifier:
+        if (
+            event.method != _SUCCESS_EVENT
+            or not self._armed.is_set()
+            or not event.user_identifier
+        ):
             return False
         identifier = event.user_identifier.casefold()
         return identifier in {self._client_uuid, _PUBLIC_IDENTIFIER}
@@ -261,21 +262,21 @@ class PlaybackWatcher:
                 stop=self._stop,
                 ready=self._ready,
             ):
-                if not self._belongs_to_attempt(event):
-                    continue
-                if event.method == _SUCCESS_EVENT:
+                if self._belongs_to_attempt(event):
                     self._started.set()
                     return
-                if event.method == _FAILURE_EVENT:
+                if event.method == _FAILURE_EVENT and self._armed.is_set():
                     code = event.error_code or event.values.get("errCode") or (
                         event.values.get("errcode", "")
                     )
-                    self._error = f"Speaker reported {_FAILURE_EVENT} {code}".strip()
-                    self._failed.set()
-                    return
+                    LOGGER.warning(
+                        "Ignoring uncorrelated %s %s while waiting for %s",
+                        _FAILURE_EVENT,
+                        code,
+                        _SUCCESS_EVENT,
+                    )
         except Exception as error:  # noqa: BLE001 - surface listener failure
             self._error = f"Event listener failed: {error}"
-            self._failed.set()
 
 
 def _offer_stream(
