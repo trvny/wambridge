@@ -62,6 +62,11 @@ latency, bound the total queued and in-flight audio, and release capacity from a
 real-time clock. Keep FFmpeg without `-re`; do not confuse output accounting with a second
 speaker-facing pacing layer.
 
+A 100-second `ffmpeg | pcm_cli` control run measured an initial reserve of about 23 seconds
+and stable throughput near 1.00x after it filled. The helper must gate `WAMBRIDGE PLAYING`
+and the output clock on `StartPlaybackEvent`, and EOF before that confirmation must remain
+a visible startup failure.
+
 ### PR #7: finite local MP3 through Samsung DMS
 
 Branch: `feat/dlna-file-playback`
