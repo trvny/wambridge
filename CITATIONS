@@ -11,6 +11,7 @@ authors:
   - name: codex
   - name: chatgpt
   - name: co-tam[bot]
+  - name: chatgpt-codex-connector[bot]
 identifiers:
   - type: url
     value: 'https://github.com/trvny'
