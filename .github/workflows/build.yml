@@ -46,6 +46,7 @@ jobs:
         run: |
           python -m pip install -e .
           python -m unittest discover -s tests -v
+          wambridge-control --help | Out-Null
           wambridge-events --help | Out-Null
 
       - name: Build standalone helper
@@ -62,6 +63,23 @@ jobs:
             --specpath build/pyinstaller `
             foobar/wambridge_pcm_entry.py
           & dist/helper/wambridge-pcm/wambridge-pcm.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Build standalone control helper
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name wambridge-control `
+            --distpath dist/control `
+            --workpath build/pyinstaller-control `
+            --specpath build/pyinstaller-control `
+            tools/wambridge_control_entry.py
+          & dist/control/wambridge-control.exe --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -136,6 +154,10 @@ jobs:
             dist/helper/wambridge-pcm `
             dist/component/wambridge-pcm `
             -Recurse
+          New-Item -ItemType Directory -Force dist/component/wambridge-control | Out-Null
+          Copy-Item `
+            dist/control/wambridge-control.exe `
+            dist/component/wambridge-control/wambridge-control.exe
           Push-Location dist/component
           7z a -tzip ../foo_out_wam.fb2k-component *
           Pop-Location
@@ -149,6 +171,7 @@ jobs:
         with:
           name: foo_out_wam-x64
           path: |
+            dist/control/wambridge-control.exe
             dist/events/wambridge-events.exe
             dist/foo_out_wam.dll
             dist/foo_out_wam.fb2k-component
