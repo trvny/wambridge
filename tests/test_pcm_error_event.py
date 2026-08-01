@@ -9,6 +9,20 @@ from wambridge.wam_events import WamEvent
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
 
 
+class FakeConnection:
+    def __init__(self, event: WamEvent) -> None:
+        self.event = event
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def events(self, *, stop):
+        return [self.event]
+
+
 class PlaybackWatcherErrorTests(TestCase):
     def test_armed_error_event_aborts_without_identity_filtering(self) -> None:
         for identifier in (
@@ -30,8 +44,8 @@ class PlaybackWatcherErrorTests(TestCase):
                     error_code="NETWORK_TIMEOUT_ERROR",
                 )
                 with patch(
-                    "wambridge.pcm_cli.listen_events",
-                    return_value=[event],
+                    "wambridge.pcm_cli.WamEventConnection",
+                    return_value=FakeConnection(event),
                 ):
                     watcher.arm()
                     watcher._run()
