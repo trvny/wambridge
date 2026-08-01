@@ -157,6 +157,13 @@ class PcmAudioStreamServer(AudioStreamServer):
             self.channels,
             self.sample_format,
         )
+        # Every encoder started here inherits the same stdin, so two of them
+        # would split one PCM stream between themselves and the speaker would
+        # hear the audio jump forward. The speaker does open further connections
+        # -- retries leave the earlier ones in CloseWait -- so a previous encoder
+        # must be retired before this one starts, not left running beside it.
+        self._retire_previous_encoder()
+
         process = subprocess.Popen(  # nosec B603 - argv list, resolved executable
             command,
             stdin=self.pcm_input,
@@ -191,6 +198,27 @@ class PcmAudioStreamServer(AudioStreamServer):
                 process.kill()
                 process.wait(timeout=3)
             with self._process_lock:
-                self._process = None
+                # Only clear the slot if a newer request has not claimed it, or
+                # a late-finishing handler would strand the live encoder.
+                if self._process is process:
+                    self._process = None
             if process.returncode not in {0, -15, 1}:
                 LOGGER.error("FFmpeg exited with %s", process.returncode)
+
+    def _retire_previous_encoder(self) -> None:
+        """Stop an encoder left over from an earlier request, if any."""
+        with self._process_lock:
+            previous = self._process
+            self._process = None
+        if previous is None or previous.poll() is not None:
+            return
+        LOGGER.warning(
+            "Retiring the previous FFmpeg: the speaker opened another stream "
+            "while one was still running"
+        )
+        previous.terminate()
+        try:
+            previous.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            previous.kill()
+            previous.wait(timeout=3)

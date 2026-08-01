@@ -121,6 +121,53 @@ class PcmAudioStreamServerTests(TestCase):
     @patch("wambridge.pcm_stream._read_chunk")
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
+    def test_second_request_retires_the_previous_encoder(
+        self,
+        _which_mock,
+        popen_mock,
+        read_mock,
+    ) -> None:
+        # Every encoder inherits the same stdin, so a leftover one would split
+        # the PCM stream and the speaker would hear the audio jump forward.
+        terminated: list[str] = []
+        stale = SimpleNamespace(
+            stdout=BytesIO(),
+            returncode=0,
+            poll=lambda: None,  # still running
+            wait=lambda timeout: 0,
+            terminate=lambda: terminated.append("stale"),
+            kill=lambda: terminated.append("killed"),
+        )
+        fresh = SimpleNamespace(
+            stdout=BytesIO(),
+            returncode=0,
+            poll=lambda: None,
+            wait=lambda timeout: 0,
+            terminate=lambda: None,
+            kill=lambda: None,
+        )
+        popen_mock.return_value = fresh
+        read_mock.side_effect = [b""]
+
+        server = PcmAudioStreamServer(
+            BytesIO(),
+            sample_rate=44100,
+            channels=2,
+        )
+        try:
+            server._process = stale
+            # The fresh encoder produces nothing here; what matters is that the
+            # stale one was retired before it ever started.
+            with self.assertRaises(StreamError):
+                server._serve_audio(BytesIO())
+            self.assertEqual(terminated, ["stale"])
+            self.assertIsNone(server._process)
+        finally:
+            server.close()
+
+    @patch("wambridge.pcm_stream._read_chunk")
+    @patch("wambridge.pcm_stream.subprocess.Popen")
+    @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
     def test_accepts_flac_after_metadata_and_frame_sync(
         self,
         _which_mock,
