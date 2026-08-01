@@ -31,25 +31,42 @@ class OutputProfile:
     extension: str
     content_type: str
     ffmpeg_args: tuple[str, ...]
+    max_sample_rate: int | None = None
+    """Highest rate confirmed on a physical M5, or None for a fixed-rate codec."""
+
+    def args_for(self, sample_rate: int | None) -> tuple[str, ...]:
+        """Return encoder arguments for one source rate.
+
+        The rate is passed through untouched so a 44.1 kHz track is not
+        needlessly resampled and a high-resolution one is not thrown away.
+        Resampling is added only above the rate confirmed on the device.
+        """
+
+        if not sample_rate or self.max_sample_rate is None:
+            return self.ffmpeg_args
+        if sample_rate <= self.max_sample_rate:
+            return self.ffmpeg_args
+        return ("-ar", str(self.max_sample_rate), *self.ffmpeg_args)
 
 
 OUTPUT_PROFILES: dict[str, OutputProfile] = {
     "flac": OutputProfile(
         extension="flac",
         content_type="audio/flac",
+        # No fixed -ar or -sample_fmt. FLAC is lossless, so forcing 48000/s16
+        # resampled every 44.1 kHz track for nothing and discarded anything
+        # above CD depth. A physical M5 plays FLAC up to 96 kHz / 24-bit, and
+        # FFmpeg negotiates a sample format the encoder supports on its own.
         ffmpeg_args=(
             "-vn",
             "-ac",
             "2",
-            "-ar",
-            "48000",
-            "-sample_fmt",
-            "s16",
             "-c:a",
             "flac",
             "-f",
             "flac",
         ),
+        max_sample_rate=96000,
     ),
     "mp3": OutputProfile(
         extension="mp3",
@@ -156,7 +173,7 @@ class AudioStreamServer:
             "0:a:0",
             "-t",
             "0.25",
-            *self.profile.ffmpeg_args,
+            *self.profile.args_for(None),
             "pipe:1",
         ]
         try:
@@ -251,7 +268,7 @@ class AudioStreamServer:
             self.source,
             "-af",
             f"adelay={STARTUP_SILENCE_MS}:all=1",
-            *self.profile.ffmpeg_args,
+            *self.profile.args_for(None),
             "pipe:1",
         ]
         LOGGER.info("Starting FFmpeg for %s", self.source)
