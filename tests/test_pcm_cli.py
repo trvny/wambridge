@@ -2,7 +2,7 @@ from io import BytesIO, StringIO
 from threading import Event
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock, call, patch
+from unittest.mock import call, patch
 
 from wambridge.pcm_cli import PlaybackWatcher, build_parser, run
 from wambridge.samsung import WamApiError
@@ -45,6 +45,8 @@ class FakePlaybackWatcher:
     def __init__(self, *_args, **_kwargs) -> None:
         self.armed = False
         self.waited = False
+        self.offered: list[str] = []
+        self.volumes: list[int] = []
         self.__class__.instances.append(self)
 
     def __enter__(self):
@@ -55,6 +57,12 @@ class FakePlaybackWatcher:
 
     def arm(self) -> None:
         self.armed = True
+
+    def offer_stream(self, stream_url: str) -> None:
+        self.offered.append(stream_url)
+
+    def set_volume(self, level: int) -> None:
+        self.volumes.append(level)
 
     def wait_for_start(self, *, timeout: float) -> None:
         self.waited = True
@@ -89,7 +97,6 @@ class PcmCliTests(TestCase):
             ]
         )
 
-    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=37)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -106,12 +113,8 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        command_mock,
     ) -> None:
         protocol = StringIO()
-        sequence = Mock()
-        sequence.attach_mock(volume_mock, "set_volume")
-        sequence.attach_mock(command_mock, "send_mobile_command")
 
         result = run(
             self._args("--volume", "4"),
@@ -125,52 +128,15 @@ class PcmCliTests(TestCase):
             ["WAMBRIDGE READY", "WAMBRIDGE PLAYING volume=4"],
         )
         self.assertEqual(len(FakePlaybackWatcher.instances), 1)
-        self.assertTrue(FakePlaybackWatcher.instances[0].armed)
-        self.assertTrue(FakePlaybackWatcher.instances[0].waited)
+        watcher = FakePlaybackWatcher.instances[0]
+        self.assertTrue(watcher.armed)
+        self.assertTrue(watcher.waited)
         self.assertEqual(
-            volume_mock.call_args_list,
-            [
-                call("10.0.0.118", 0, port=55001),
-                call("10.0.0.118", 4, port=55001),
-                call("10.0.0.118", 4, port=55001),
-            ],
+            watcher.offered,
+            ["http://10.0.0.103:1234/stream/test.flac"],
         )
-        command_mock.assert_called_once_with(
-            "10.0.0.118",
-            CLIENT_UUID,
-            method="SetUrlPlayback",
-            arguments=[
-                ("url", "http://10.0.0.103:1234/stream/test.flac", "cdata"),
-                ("buffersize", 0, "dec"),
-                ("seektime", 0, "dec"),
-                ("resume", 0, "dec"),
-            ],
-            port=55001,
-            timeout=10.0,
-        )
-        self.assertEqual(
-            sequence.mock_calls[:2],
-            [
-                call.set_volume("10.0.0.118", 0, port=55001),
-                call.send_mobile_command(
-                    "10.0.0.118",
-                    CLIENT_UUID,
-                    method="SetUrlPlayback",
-                    arguments=[
-                        (
-                            "url",
-                            "http://10.0.0.103:1234/stream/test.flac",
-                            "cdata",
-                        ),
-                        ("buffersize", 0, "dec"),
-                        ("seektime", 0, "dec"),
-                        ("resume", 0, "dec"),
-                    ],
-                    port=55001,
-                    timeout=10.0,
-                ),
-            ],
-        )
+        self.assertEqual(watcher.volumes, [4, 4])
+        volume_mock.assert_called_once_with("10.0.0.118", 0, port=55001)
 
     def test_watcher_correlates_only_start_events_after_arming(self) -> None:
         watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID.upper(), port=55001)
@@ -226,7 +192,6 @@ class PcmCliTests(TestCase):
             )
         )
 
-    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=4)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -243,7 +208,6 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         _volume_mock,
-        _command_mock,
     ) -> None:
         class MissingEventWatcher(FakePlaybackWatcher):
             def wait_for_start(self, *, timeout: float) -> None:
@@ -263,7 +227,6 @@ class PcmCliTests(TestCase):
 
         self.assertEqual(protocol.getvalue().splitlines(), ["WAMBRIDGE READY"])
 
-    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -280,7 +243,6 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _command_mock,
     ) -> None:
         volume_mock.side_effect = [
             WamApiError("Cannot reach Samsung WAM at 10.0.0.118:55001: timed out"),
@@ -302,7 +264,6 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -318,7 +279,6 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _command_mock,
     ) -> None:
         class SilentServer(FakePcmServer):
             def start(self) -> None:
@@ -346,7 +306,6 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -362,7 +321,6 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _command_mock,
     ) -> None:
         class SilentServer(FakePcmServer):
             def start(self) -> None:
@@ -393,7 +351,6 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=0)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -409,7 +366,6 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _command_mock,
     ) -> None:
         class ReadyServer(FakePcmServer):
             def start(self) -> None:
@@ -432,8 +388,5 @@ class PcmCliTests(TestCase):
 
         self.assertEqual(
             volume_mock.call_args_list,
-            [
-                call("10.0.0.118", 4, port=55001),
-                call("10.0.0.118", 0, port=55001, timeout=1.0),
-            ],
+            [call("10.0.0.118", 0, port=55001, timeout=1.0)],
         )
