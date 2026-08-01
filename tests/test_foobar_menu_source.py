@@ -29,3 +29,5 @@ class FoobarMenuSourceTests(TestCase):
         self.assertNotIn("%ls", source)
         self.assertIn('queued %s", kComponentName, label.c_str()', source)
         self.assertIn("const auto label = action_label(action.name);", source)
+        self.assertIn("character >= 0 && character <= 0x7f", source)
+        self.assertIn("static_cast<char>(character)", source)
