@@ -78,7 +78,9 @@ class PcmAudioStreamServerTests(TestCase):
         try:
             server._serve_audio(BytesIO())
             command = popen_mock.call_args.args[0]
-            self.assertLess(command.index("-re"), command.index("-i"))
+            # The speaker paces itself through TCP backpressure; an FFmpeg clock
+            # on an already real-time pipe only adds drift.
+            self.assertNotIn("-re", command)
             self.assertEqual(command[command.index("-ar") + 1], "48000")
         finally:
             server.close()
