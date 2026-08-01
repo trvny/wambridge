@@ -15,12 +15,17 @@ traps that look like bugs in this code but are not.
 
 ## Trusting the speaker
 
-- Only `StartPlaybackEvent` on TCP 55001 confirms playback. `MusicInfo` and `PlayStatus`
-  report a playing state with nothing playing, and mix in fields from earlier sessions.
+- On the share/DLNA path, only `StartPlaybackEvent` confirms playback. `MusicInfo` and
+  `PlayStatus` report a playing state with nothing playing, and mix in fields from earlier
+  sessions.
+- `SetUrlPlayback` did not emit `StartPlaybackEvent` during measured working PCM streams.
+  Do not gate that path on the event until a different reliable signal is proved on the
+  physical M5.
 - A command timeout is not a failure. The firmware answers late, and often with an
   unrelated event, so replies must be matched against the command that was sent.
 - Check submode before local playback. In `cp` the speaker fetches the object and stays
-  silent; nothing but a power cycle clears it, and it drifts back there on its own.
+  silent; nothing but a power cycle clears it. Do not assume why it entered `cp` without a
+  measured command trace.
 - Never send remote URLs to `SetUrlPlayback`: HTTPS errors out, Ogg is silent and HLS
   wedges the control port. Proxy through FFmpeg and the local HTTP server instead.
 
