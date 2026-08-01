@@ -24,6 +24,7 @@ DEFAULT_MAX_START_VOLUME = 10
 _BROKEN_PIPE_ERRORS = {109, 233}
 _SUCCESS_EVENT = "StartPlaybackEvent"
 _FAILURE_EVENT = "ErrorEvent"
+_PUBLIC_IDENTIFIER = "public"
 
 
 def sample_rate(value: str) -> int:
@@ -200,12 +201,13 @@ def _wait_for_stream_event(
 
 
 class PlaybackWatcher:
-    """Wait for the matching speaker event that confirms playback."""
+    """Wait for the speaker event that belongs to the active playback attempt."""
 
     def __init__(self, speaker_ip: str, client_uuid: str, *, port: int) -> None:
         self._speaker_ip = speaker_ip
         self._client_uuid = client_uuid.casefold()
         self._port = port
+        self._armed = threading.Event()
         self._started = threading.Event()
         self._failed = threading.Event()
         self._ready = threading.Event()
@@ -227,6 +229,10 @@ class PlaybackWatcher:
         if self._thread is not None:
             self._thread.join()
 
+    def arm(self) -> None:
+        """Accept events only after this attempt is about to send its command."""
+        self._armed.set()
+
     def wait_for_start(self, *, timeout: float) -> None:
         deadline = monotonic() + timeout
         while monotonic() < deadline:
@@ -240,11 +246,11 @@ class PlaybackWatcher:
                 )
         raise StreamError(f"Speaker did not confirm {_SUCCESS_EVENT}")
 
-    def _belongs_to_client(self, event: WamEvent) -> bool:
-        return bool(
-            event.user_identifier
-            and event.user_identifier.casefold() == self._client_uuid
-        )
+    def _belongs_to_attempt(self, event: WamEvent) -> bool:
+        if not self._armed.is_set() or not event.user_identifier:
+            return False
+        identifier = event.user_identifier.casefold()
+        return identifier in {self._client_uuid, _PUBLIC_IDENTIFIER}
 
     def _run(self) -> None:
         try:
@@ -255,7 +261,7 @@ class PlaybackWatcher:
                 stop=self._stop,
                 ready=self._ready,
             ):
-                if not self._belongs_to_client(event):
+                if not self._belongs_to_attempt(event):
                     continue
                 if event.method == _SUCCESS_EVENT:
                     self._started.set()
@@ -358,6 +364,7 @@ def run(
             port=speaker_port,
         ) as watcher:
             LOGGER.info("Offering %s to %s", stream_url, speaker_ip)
+            watcher.arm()
             _offer_stream(
                 speaker_ip,
                 stream_url,
