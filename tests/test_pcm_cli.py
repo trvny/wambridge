@@ -4,9 +4,13 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
-from wambridge.pcm_cli import build_parser, run
+from wambridge.pcm_cli import PlaybackWatcher, build_parser, run
 from wambridge.samsung import WamApiError
 from wambridge.stream import StreamError
+from wambridge.wam_events import WamEvent
+
+
+CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
 
 
 class FakePcmServer:
@@ -63,7 +67,7 @@ class PcmCliTests(TestCase):
         self.addCleanup(patcher.stop)
         uuid_patcher = patch(
             "wambridge.pcm_cli.load_client_uuid",
-            return_value="00000000-0000-4000-8000-000000000001",
+            return_value=CLIENT_UUID,
         )
         uuid_patcher.start()
         self.addCleanup(uuid_patcher.stop)
@@ -81,7 +85,7 @@ class PcmCliTests(TestCase):
             ]
         )
 
-    @patch("wambridge.pcm_cli.play_url")
+    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=37)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -98,12 +102,12 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        play_url_mock,
+        command_mock,
     ) -> None:
         protocol = StringIO()
         sequence = Mock()
         sequence.attach_mock(volume_mock, "set_volume")
-        sequence.attach_mock(play_url_mock, "play_url")
+        sequence.attach_mock(command_mock, "send_mobile_command")
 
         result = run(
             self._args("--volume", "4"),
@@ -126,56 +130,78 @@ class PcmCliTests(TestCase):
                 call("10.0.0.118", 4, port=55001),
             ],
         )
+        command_mock.assert_called_once_with(
+            "10.0.0.118",
+            CLIENT_UUID,
+            method="SetUrlPlayback",
+            arguments=[
+                ("url", "http://10.0.0.103:1234/stream/test.flac", "cdata"),
+                ("buffersize", 0, "dec"),
+                ("seektime", 0, "dec"),
+                ("resume", 0, "dec"),
+            ],
+            port=55001,
+            timeout=10.0,
+        )
         self.assertEqual(
             sequence.mock_calls[:2],
             [
                 call.set_volume("10.0.0.118", 0, port=55001),
-                call.play_url(
+                call.send_mobile_command(
                     "10.0.0.118",
-                    "http://10.0.0.103:1234/stream/test.flac",
+                    CLIENT_UUID,
+                    method="SetUrlPlayback",
+                    arguments=[
+                        (
+                            "url",
+                            "http://10.0.0.103:1234/stream/test.flac",
+                            "cdata",
+                        ),
+                        ("buffersize", 0, "dec"),
+                        ("seektime", 0, "dec"),
+                        ("resume", 0, "dec"),
+                    ],
                     port=55001,
+                    timeout=10.0,
                 ),
             ],
         )
 
-    @patch("wambridge.pcm_cli.play_url")
-    @patch("wambridge.pcm_cli.set_volume")
-    @patch("wambridge.pcm_cli.get_volume", return_value=4)
-    @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
-    @patch(
-        "wambridge.pcm_cli.probe",
-        return_value=SimpleNamespace(method="SpkName"),
-    )
-    @patch("wambridge.pcm_cli.select_speaker", return_value=("10.0.0.118", 55001))
-    @patch("wambridge.pcm_cli.PcmAudioStreamServer", FakePcmServer)
-    def test_accepts_pause_event_during_url_handoff(
-        self,
-        _select_mock,
-        _probe_mock,
-        _local_ip_mock,
-        _get_volume_mock,
-        _volume_mock,
-        play_url_mock,
-    ) -> None:
-        play_url_mock.side_effect = WamApiError(
-            "Samsung WAM rejected PausePlaybackEvent "
-            "(error GetCurrentPlayTime fail)"
-        )
-        protocol = StringIO()
+    def test_watcher_matches_only_the_active_client(self) -> None:
+        watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID.upper(), port=55001)
 
-        result = run(
-            self._args("--volume", "4"),
-            pcm_input=BytesIO(),
-            protocol_output=protocol,
+        self.assertTrue(
+            watcher._belongs_to_client(
+                WamEvent(
+                    method="StartPlaybackEvent",
+                    result="ok",
+                    user_identifier=CLIENT_UUID,
+                    error_code=None,
+                )
+            )
         )
-
-        self.assertEqual(result, 0)
-        self.assertEqual(
-            protocol.getvalue().splitlines(),
-            ["WAMBRIDGE READY", "WAMBRIDGE PLAYING volume=4"],
+        self.assertFalse(
+            watcher._belongs_to_client(
+                WamEvent(
+                    method="StartPlaybackEvent",
+                    result="ok",
+                    user_identifier="00000000-0000-4000-8000-000000000099",
+                    error_code=None,
+                )
+            )
+        )
+        self.assertFalse(
+            watcher._belongs_to_client(
+                WamEvent(
+                    method="StartPlaybackEvent",
+                    result="ok",
+                    user_identifier=None,
+                    error_code=None,
+                )
+            )
         )
 
-    @patch("wambridge.pcm_cli.play_url")
+    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=4)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -192,7 +218,7 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         _volume_mock,
-        _play_url_mock,
+        _command_mock,
     ) -> None:
         class MissingEventWatcher(FakePlaybackWatcher):
             def wait_for_start(self, *, timeout: float) -> None:
@@ -212,7 +238,7 @@ class PcmCliTests(TestCase):
 
         self.assertEqual(protocol.getvalue().splitlines(), ["WAMBRIDGE READY"])
 
-    @patch("wambridge.pcm_cli.play_url")
+    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -229,7 +255,7 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _play_url_mock,
+        _command_mock,
     ) -> None:
         volume_mock.side_effect = [
             WamApiError("Cannot reach Samsung WAM at 10.0.0.118:55001: timed out"),
@@ -251,7 +277,7 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    @patch("wambridge.pcm_cli.play_url")
+    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -267,7 +293,7 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _play_url_mock,
+        _command_mock,
     ) -> None:
         class SilentServer(FakePcmServer):
             def start(self) -> None:
@@ -295,7 +321,7 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    @patch("wambridge.pcm_cli.play_url")
+    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -311,7 +337,7 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _play_url_mock,
+        _command_mock,
     ) -> None:
         class SilentServer(FakePcmServer):
             def start(self) -> None:
@@ -342,7 +368,7 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    @patch("wambridge.pcm_cli.play_url")
+    @patch("wambridge.pcm_cli.send_mobile_command")
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=0)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -358,7 +384,7 @@ class PcmCliTests(TestCase):
         _local_ip_mock,
         _get_volume_mock,
         volume_mock,
-        _play_url_mock,
+        _command_mock,
     ) -> None:
         class ReadyServer(FakePcmServer):
             def start(self) -> None:
