@@ -11,7 +11,8 @@ updates:
         patterns: ["*"]
   - package-ecosystem: "pip"
     directory: "/"
-    schedule: { interval: weekly }
+    schedule:
+      interval: "weekly"
     groups:
       pip:
         patterns: ["*"]
