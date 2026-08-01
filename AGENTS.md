@@ -19,8 +19,11 @@ traps that look like bugs in this code but are not.
   report a playing state with nothing playing, and mix in fields from earlier sessions.
 - A command timeout is not a failure. The firmware answers late, and often with an
   unrelated event, so replies must be matched against the command that was sent.
-- Check submode before local playback. In `cp` the speaker fetches the object and stays
-  silent; nothing but a power cycle clears it, and it drifts back there on its own.
+- Do not gate `SetUrlPlayback` on submode, and never tell anyone to power cycle the speaker.
+  `cp` is the normal submode for that path: the speaker switches into it as the command runs
+  and plays for as long as you feed it. Measured by sampling submode every 2 s against a
+  100 s run that held 1.00x throughput throughout, all of it in `cp`. Whether `cp` blocks the
+  share path is a separate, unmeasured question — do not merge the two.
 - Never send remote URLs to `SetUrlPlayback`: HTTPS errors out, Ogg is silent and HLS
   wedges the control port. Proxy through FFmpeg and the local HTTP server instead.
 
