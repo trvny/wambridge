@@ -172,7 +172,7 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    def test_watcher_correlates_public_and_client_events_after_arming(self) -> None:
+    def test_watcher_correlates_only_start_events_after_arming(self) -> None:
         watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID.upper(), port=55001)
         own_event = WamEvent(
             method="StartPlaybackEvent",
@@ -194,6 +194,17 @@ class PcmCliTests(TestCase):
 
         self.assertTrue(watcher._belongs_to_attempt(own_event))
         self.assertTrue(watcher._belongs_to_attempt(public_event))
+        for identifier in (CLIENT_UUID, "public"):
+            self.assertFalse(
+                watcher._belongs_to_attempt(
+                    WamEvent(
+                        method="ErrorEvent",
+                        result="ng",
+                        user_identifier=identifier,
+                        error_code="71",
+                    )
+                )
+            )
         self.assertFalse(
             watcher._belongs_to_attempt(
                 WamEvent(
