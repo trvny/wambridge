@@ -1,7 +1,13 @@
 from unittest import TestCase
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlsplit
 
 from wambridge.wam_events import WamEventConnection
+
+
+def command_name(request: bytes) -> str:
+    target = request.split(b"\r\n", 1)[0].split(b" ", 2)[1].decode()
+    return parse_qs(urlsplit(target).query)["cmd"][0]
 
 
 class WamEventConnectionTests(TestCase):
@@ -28,8 +34,8 @@ class WamEventConnectionTests(TestCase):
         )
         self.assertEqual(control_socket.sendall.call_count, 2)
         probe, playback = [call.args[0] for call in control_socket.sendall.call_args_list]
-        self.assertIn(b"<name>GetFunc</name>", probe)
-        self.assertIn(b"<name>SetUrlPlayback</name>", playback)
+        self.assertIn("<name>GetFunc</name>", command_name(probe))
+        self.assertIn("<name>SetUrlPlayback</name>", command_name(playback))
         self.assertIn(b"Connection: keep-alive", probe)
         self.assertIn(b"Connection: keep-alive", playback)
         control_socket.close.assert_called_once_with()
