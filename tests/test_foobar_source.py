@@ -36,6 +36,11 @@ class FoobarSourceTests(TestCase):
 
         self.assertIn("elapsed.count() * static_cast<double>(m_sampleRate)", source)
         self.assertIn("m_clockAnchorFrames + elapsedFrames", source)
+        self.assertIn(
+            "m_playedFrames = std::min(target, m_submittedFrames);",
+            source,
+        )
+        self.assertNotIn("m_clockAnchor = now;", source)
         self.assertIn("startup_delay_frames_locked(now)", source)
         self.assertNotIn("--sample-format f32le --format flac --re", source)
 
