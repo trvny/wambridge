@@ -4,7 +4,7 @@
 
 # WAM Bridge
 
-<img src="https://images.samsung.com/is/image/samsung/pl_WAM550-EN_014_Front_black?$330_330_JPG$" width="128" alt="Samsung Shape M5">
+<img src="https://images.samsung.com/is/image/samsung/pl_WAM550-EN_014_Front_black?$330_330_JPG$" width="128" alt="Samsung Shape M5"><img src="https://images.samsung.com/is/image/samsung/pl_WAM551-EN_014_Front_white?$330_330_JPG$" width="128" alt="Samsung Shape M5">
 
 Windows-first bridge for streaming audio over Wi-Fi to Samsung Wireless Audio
 Multiroom speakers, including Shape M5 (`WAM550`/`WAM551`).
