@@ -147,11 +147,18 @@ The following values were useful experiments but are not faithful to the capture
 | DMS port `3921` | DMS port `49200` |
 | `device_udn` is the MediaServer UDN | `device_udn` is the client UUID |
 | `uuid:<server UUID>` | raw client UUID |
-| `playertype=allshare` | `playertype=myphone` during playback |
-| `sourcename=WAMBridge` | `sourcename=phone` |
 | numeric object ID `1` | flat `<hash>.mp3` |
 | success inferred from DMS HTTP contact | success reported by `DMSAddedEvent` and `StartPlaybackEvent` |
-| single-file share command as final path | captured session used a multi-queue |
+| object served from the server root | speaker requests `/DLNA/<objectid>` |
+
+Two earlier entries in this table were themselves wrong and have been removed after direct
+measurement (see below):
+
+- `playertype` and `sourcename` were listed as needing `myphone` / `phone`. Measured: they
+  make **no difference** to this path. `myphone` and `allshare` behave identically.
+- the single-file share command was listed as not being the final path because the captured
+  session used a multi-queue. Measured: `SetSharePlaybackControl` **works** on this firmware.
+  The official application simply chooses the queue path instead.
 
 The browse experiment remains valuable because the physical M5 fetched `description.xml`, service descriptions and executed `ContentDirectory.Browse`. It proved that the network path and basic Python MediaServer were reachable.
 
@@ -167,20 +174,113 @@ The passive listener observes speaker responses, not the exact requests sent by 
 
 Desktop binary strings show separate command families for `mypc`, `myphone` and `allshare`. Library browsing may use `mypc` while active playback reports `myphone`. Do not collapse these names into one global constant.
 
+## Share playback: measured working configuration
+
+`SetSharePlaybackControl` reaches audible playback on the physical M5. Verified with a
+control experiment that separates network faults from protocol faults, and confirmed by
+ear. Two independent bugs were stacked; fixing only one produces no observable change.
+
+| Variant | Speaker replied | HTTP fetches | Result |
+| --- | --- | --- | --- |
+| control: `SetUrlPlayback` | yes | 1 | proves the network path is open |
+| `device_udn` = raw UUID | yes | 5 retries | `ErrorEvent errCode=URL_OPEN_FAIL` |
+| `device_udn` = `uuid:` + UUID | **no reply at all** | 0 | silently ignored |
+| raw UUID **and** `/DLNA/` path | yes | 1 | `StartPlaybackEvent`, audio |
+
+1. **`device_udn` must be the raw registered UUID.** The `uuid:` prefix makes the firmware
+   ignore the command entirely — no reply, no error, no fetch. This is the "no contact"
+   symptom. The field resolves against the `SetIpInfo` registration, so it must match the
+   `uuid` sent there, which `set_ip_info_apk` already requires to be raw.
+2. **The object must be served at `/DLNA/<objectid>`.** Serving from the root returns 404,
+   the speaker retries five times and reports `URL_OPEN_FAIL`.
+
+`GetDmsList` entries do carry a `uuid:` prefix in `dmsid`. That is a different field and is
+the likely origin of the wrong assumption.
+
+Successful playback emits `MediaBufferStartEvent` → `MediaBufferEndEvent` →
+`StartPlaybackEvent`. `MusicInfo` and `PlayStatus` are **not** trustworthy: after a probe
+they returned `playstatus=play` with nothing playing, and mixed fields from the current
+command with `device_udn` and `objectid` left over from an earlier session.
+
+## Formats
+
+Measured through the share path, verdict taken from `StartPlaybackEvent`:
+
+| Format | Result | HTTP requests |
+| --- | --- | --- |
+| MP3 44.1/16 | plays | 1 |
+| WAV 44.1/16 PCM | plays | 1 |
+| FLAC 44.1/16 | plays | 1 |
+| FLAC 96/24 | plays | 1 |
+| AAC in MP4 (`.m4a`) | plays | 3 |
+| Opus 48k | `ErrorEvent` after 5 retries | 5 |
+
+- FLAC needs no transcoding, including high resolution.
+- `Range` support is mandatory for MP4: the speaker issues three requests (`0-`,
+  `<end>-`, `44-`) while locating the `moov` atom.
+- The player identifies as `Lavf52.104.0`, so format support follows libavformat.
+
+## Transport and pacing
+
+The speaker pulls. This removes the need for any manual pacing layer.
+
+Pushing WAV over HTTP as fast as the socket accepts it:
+
+```
++4s   4.43x realtime   <- initial buffer fill
++8s   2.70x
++12s  2.13x
++16s  1.84x
+average 1.18x
+```
+
+The TCP window closes and throughput converges to real time. Backpressure is the clock, and
+it is more accurate than FFmpeg `-re` or a timer in C++. Multiple pacing layers are a
+symptom of a **push** design; with a **pull** source the problem does not arise.
+
+This explains the direction, not every past symptom. Garbled or accelerated audio in the
+PCM path may still have had a separate cause in encoder timestamps; that was not
+re-measured.
+
+Endless streams of unknown length are accepted by `SetUrlPlayback`:
+
+| Response shape | Result |
+| --- | --- |
+| `Transfer-Encoding: chunked` | streams cleanly, one connection |
+| no `Content-Length`, `Connection: close` | streams cleanly, one connection |
+| MP3 with no length, radio style | streams cleanly, one connection |
+| oversized fake `Content-Length` | **worst** — four connections, three aborted |
+
+Do not fake `Content-Length`. Chunked or close-delimited is cleaner.
+
 ## Target architecture
 
-The next playback implementation should:
+The product goal is a foobar2000 output plugin that carries whatever foobar plays, including
+internet radio, and stays reusable for other host applications later. That rules out any
+design that assumes a finite local file.
+
+**Foundation — works for every source:**
 
 1. create or load one stable client UUID,
 2. open a persistent reader on TCP `55001`,
 3. send all commands with official mobile headers,
-4. serve the finite MP3 and artwork on port `49200`,
-5. register the same UUID through `SetIpInfo`,
-6. wait for `DMSAddedEvent`,
-7. construct a one-item multi-queue using a flat hash object ID,
-8. start playback using the matching multi-playback command,
-9. wait for `StartPlaybackEvent`,
-10. use `MusicPlayTime` for progress and `ErrorEvent` for diagnostics.
+4. serve the audio over local HTTP, chunked or close-delimited, never a faked
+   `Content-Length`,
+5. point the speaker at it with `SetUrlPlayback`,
+6. let the speaker pull; add no pacing layer,
+7. wait for `StartPlaybackEvent`, and treat `MusicInfo` and `PlayStatus` as unreliable,
+8. use `ErrorEvent` for diagnostics.
+
+**Optional layer — finite local files only**, when seek, pause and duration are wanted:
+
+1. serve the object at `/DLNA/<objectid>` on port `49200`,
+2. register the client UUID through `SetIpInfo`,
+3. send `SetSharePlaybackControl` with `device_udn` set to that same raw UUID,
+4. wait for `MediaBufferStartEvent` → `StartPlaybackEvent`.
+
+A single attempt is enough once both values are correct. The three-attempt strategy in
+PR #7 exists only because the working form was unknown, and should be removed rather than
+kept as a fallback.
 
 The response parser must preserve raw error fields including both `errcode` and `errCode` spellings.
 
