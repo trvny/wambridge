@@ -121,32 +121,26 @@ class PcmAudioStreamServerTests(TestCase):
     @patch("wambridge.pcm_stream._read_chunk")
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
-    def test_second_request_retires_the_previous_encoder(
+    def test_second_request_is_refused_while_one_encoder_serves(
         self,
         _which_mock,
         popen_mock,
         read_mock,
     ) -> None:
-        # Every encoder inherits the same stdin, so a leftover one would split
-        # the PCM stream and the speaker would hear the audio jump forward.
+        # Every encoder inherits the same stdin, so only one may run. The speaker
+        # issues a second request right after the first while the first is still
+        # the live one, so the newcomer must be refused -- retiring the older one
+        # kills the stream actually being served and starves its replacement.
         terminated: list[str] = []
-        stale = SimpleNamespace(
+        live = SimpleNamespace(
             stdout=BytesIO(),
             returncode=0,
             poll=lambda: None,  # still running
             wait=lambda timeout: 0,
-            terminate=lambda: terminated.append("stale"),
+            terminate=lambda: terminated.append("live"),
             kill=lambda: terminated.append("killed"),
         )
-        fresh = SimpleNamespace(
-            stdout=BytesIO(),
-            returncode=0,
-            poll=lambda: None,
-            wait=lambda timeout: 0,
-            terminate=lambda: None,
-            kill=lambda: None,
-        )
-        popen_mock.return_value = fresh
+        popen_mock.side_effect = AssertionError("must not start a second encoder")
         read_mock.side_effect = [b""]
 
         server = PcmAudioStreamServer(
@@ -155,13 +149,11 @@ class PcmAudioStreamServerTests(TestCase):
             channels=2,
         )
         try:
-            server._process = stale
-            # The fresh encoder produces nothing here; what matters is that the
-            # stale one was retired before it ever started.
-            with self.assertRaises(StreamError):
+            server._process = live
+            with self.assertRaisesRegex(StreamError, "already being served"):
                 server._serve_audio(BytesIO())
-            self.assertEqual(terminated, ["stale"])
-            self.assertIsNone(server._process)
+            self.assertEqual(terminated, [])
+            self.assertIs(server._process, live)
         finally:
             server.close()
 

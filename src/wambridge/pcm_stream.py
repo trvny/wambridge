@@ -158,11 +158,15 @@ class PcmAudioStreamServer(AudioStreamServer):
             self.sample_format,
         )
         # Every encoder started here inherits the same stdin, so two of them
-        # would split one PCM stream between themselves and the speaker would
-        # hear the audio jump forward. The speaker does open further connections
-        # -- retries leave the earlier ones in CloseWait -- so a previous encoder
-        # must be retired before this one starts, not left running beside it.
-        self._retire_previous_encoder()
+        # would split one PCM stream between themselves. Only one may run.
+        #
+        # Measured on the M5: the speaker issues a second stream request almost
+        # immediately after the first, while the first is still the live one.
+        # Retiring the older encoder therefore kills the stream that is actually
+        # being served, and the replacement starts on a stdin its predecessor has
+        # already drained -- "FFmpeg produced no audio", then NETWORK_TIMEOUT_ERROR
+        # from the speaker. Serve the first request and refuse the rest.
+        self._refuse_if_already_serving()
 
         process = subprocess.Popen(  # nosec B603 - argv list, resolved executable
             command,
@@ -205,20 +209,15 @@ class PcmAudioStreamServer(AudioStreamServer):
             if process.returncode not in {0, -15, 1}:
                 LOGGER.error("FFmpeg exited with %s", process.returncode)
 
-    def _retire_previous_encoder(self) -> None:
-        """Stop an encoder left over from an earlier request, if any."""
+    def _refuse_if_already_serving(self) -> None:
+        """Reject a second concurrent stream request; one encoder owns the PCM."""
         with self._process_lock:
-            previous = self._process
-            self._process = None
-        if previous is None or previous.poll() is not None:
+            current = self._process
+            busy = current is not None and current.poll() is None
+        if not busy:
             return
         LOGGER.warning(
-            "Retiring the previous FFmpeg: the speaker opened another stream "
-            "while one was still running"
+            "Refusing a second stream request: one encoder is already serving "
+            "this PCM input"
         )
-        previous.terminate()
-        try:
-            previous.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            previous.kill()
-            previous.wait(timeout=3)
+        raise StreamError("PCM input is already being served to the speaker")
