@@ -208,6 +208,7 @@ class PlaybackWatcher:
         self._client_uuid = client_uuid.casefold()
         self._port = port
         self._armed = threading.Event()
+        self._stream_active = threading.Event()
         self._started = threading.Event()
         self._ready = threading.Event()
         self._stop = threading.Event()
@@ -235,6 +236,10 @@ class PlaybackWatcher:
     def arm(self) -> None:
         """Accept playback events only after this attempt sends its command."""
         self._armed.set()
+
+    def mark_stream_active(self) -> None:
+        """Mark that the speaker requested this attempt's local HTTP stream."""
+        self._stream_active.set()
 
     def offer_stream(self, stream_url: str) -> None:
         """Send SetUrlPlayback through the connection that receives its events."""
@@ -318,10 +323,20 @@ class PlaybackWatcher:
                         code = event.error_code or event.values.get("errCode") or (
                             event.values.get("errcode", "")
                         )
-                        self._error = (
-                            f"Speaker reported {_FAILURE_EVENT} {code}"
-                        ).strip()
-                        return
+                        if (
+                            self._stream_active.is_set()
+                            and code == "NETWORK_TIMEOUT_ERROR"
+                        ):
+                            self._error = (
+                                f"Speaker reported {_FAILURE_EVENT} {code}"
+                            )
+                            return
+                        LOGGER.warning(
+                            "Ignoring unmatched ErrorEvent during PCM startup: "
+                            "code=%s user=%s",
+                            code or "unknown",
+                            event.user_identifier or "unknown",
+                        )
         except Exception as error:  # noqa: BLE001 - surface listener failure
             self._error = f"Event listener failed: {error}"
             self._ready.set()
@@ -399,12 +414,15 @@ def run(
                 input_stream,
                 timeout=args.startup_timeout,
             )
+            watcher.mark_stream_active()
+            print("WAMBRIDGE STREAM_REQUESTED", file=output_stream, flush=True)
             server.release_audio()
             _wait_for_stream_event(
                 server,
                 "encoder_started",
                 timeout=args.startup_timeout,
             )
+            print("WAMBRIDGE ENCODER_STARTED", file=output_stream, flush=True)
             volume_changed = True
             watcher.set_volume(start_volume)
             _raise_if_pcm_input_closed(input_stream)
@@ -415,6 +433,7 @@ def run(
                 "audio_started",
                 timeout=args.startup_timeout,
             )
+            print("WAMBRIDGE AUDIO_STARTED", file=output_stream, flush=True)
             watcher.set_volume(start_volume)
             watcher.wait_for_start(timeout=args.startup_timeout)
             startup_complete = True
