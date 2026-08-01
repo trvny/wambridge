@@ -276,7 +276,16 @@ struct ControlAction {
 };
 
 std::string action_label(const std::wstring& action) {
-    return {action.begin(), action.end()};
+    std::string label;
+    label.reserve(action.size());
+    for (const wchar_t character : action) {
+        label.push_back(
+            character >= 0 && character <= 0x7f
+                ? static_cast<char>(character)
+                : '?'
+        );
+    }
+    return label;
 }
 
 class ControlDispatcher {
