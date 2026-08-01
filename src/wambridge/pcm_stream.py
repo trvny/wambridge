@@ -131,12 +131,16 @@ class PcmAudioStreamServer(AudioStreamServer):
         del timeout
 
     def _serve_audio(self, output: BinaryIO) -> None:
+        # No "-re" here. The input on pipe:0 is already produced in real time by
+        # foobar, and the speaker paces the output itself: pushing over HTTP as
+        # fast as the socket allows converges to real time as its TCP window
+        # closes. An extra FFmpeg clock only adds drift.
+        # See "Transport and pacing" in docs/WAM_PROTOCOL.md.
         command = [
             self.ffmpeg,
             "-hide_banner",
             "-loglevel",
             "warning",
-            "-re",
             *self.input_args,
             "-af",
             f"adelay={STARTUP_SILENCE_MS}:all=1",
