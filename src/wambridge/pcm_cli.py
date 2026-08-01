@@ -268,9 +268,13 @@ class PlaybackWatcher:
                 timeout=min(0.1, max(0.0, deadline - monotonic()))
             ):
                 return
-            if self._error:
-                raise StreamError(self._error)
+            self.raise_if_failed()
         raise StreamError(f"Speaker did not confirm {_SUCCESS_EVENT}")
+
+    def raise_if_failed(self) -> None:
+        """Surface an asynchronous control-channel failure."""
+        if self._error:
+            raise StreamError(self._error)
 
     def _send_command(
         self,
@@ -318,6 +322,10 @@ class PlaybackWatcher:
                 for event in connection.events(stop=self._stop):
                     if self._belongs_to_attempt(event):
                         self._started.set()
+                        LOGGER.info(
+                            "Speaker emitted %s for URL playback",
+                            _SUCCESS_EVENT,
+                        )
                         continue
                     if event.method == _FAILURE_EVENT and self._armed.is_set():
                         code = event.error_code or event.values.get("errCode") or (
@@ -436,7 +444,7 @@ def run(
             )
             print("WAMBRIDGE AUDIO_STARTED", file=output_stream, flush=True)
             watcher.set_volume(start_volume)
-            watcher.wait_for_start(timeout=args.startup_timeout)
+            watcher.raise_if_failed()
             startup_complete = True
             print(
                 f"WAMBRIDGE PLAYING volume={start_volume}",
@@ -445,7 +453,8 @@ def run(
             )
 
             while not server.request_finished.wait(timeout=1):
-                pass
+                watcher.raise_if_failed()
+            watcher.raise_if_failed()
         if server.error:
             raise StreamError(server.error)
         return 0
