@@ -210,6 +210,7 @@ class PlaybackWatcher:
         self._armed = threading.Event()
         self._stream_active = threading.Event()
         self._started = threading.Event()
+        self._startup_complete = threading.Event()
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._error = ""
@@ -240,6 +241,10 @@ class PlaybackWatcher:
     def mark_stream_active(self) -> None:
         """Mark that the speaker requested this attempt's local HTTP stream."""
         self._stream_active.set()
+
+    def mark_startup_complete(self) -> None:
+        """Keep later listener transport failures diagnostic only."""
+        self._startup_complete.set()
 
     def offer_stream(self, stream_url: str) -> None:
         """Send SetUrlPlayback through the connection that receives its events."""
@@ -347,7 +352,11 @@ class PlaybackWatcher:
                             event.user_identifier or "unknown",
                         )
         except Exception as error:  # noqa: BLE001 - surface listener failure
-            self._error = f"Event listener failed: {error}"
+            message = f"Event listener failed: {error}"
+            if self._startup_complete.is_set():
+                LOGGER.warning("%s; continuing active PCM stream", message)
+            else:
+                self._error = message
             self._ready.set()
         finally:
             with self._connection_lock:
@@ -446,6 +455,7 @@ def run(
             watcher.set_volume(start_volume)
             watcher.raise_if_failed()
             startup_complete = True
+            watcher.mark_startup_complete()
             print(
                 f"WAMBRIDGE PLAYING volume={start_volume}",
                 file=output_stream,
