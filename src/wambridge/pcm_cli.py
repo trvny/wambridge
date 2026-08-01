@@ -15,13 +15,12 @@ from .discovery import local_ip_for
 from .identity import load_client_uuid
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
-from .samsung import WamApiError, get_volume, play_url, probe, set_volume
+from .samsung import WamApiError, get_volume, probe, set_volume
 from .stream import OUTPUT_PROFILES, StreamError
-from .wam_events import listen_events
+from .wam_events import WamEvent, listen_events, send_mobile_command
 
 LOGGER = logging.getLogger("wambridge")
 DEFAULT_MAX_START_VOLUME = 10
-_PAUSE_HANDOFF_ERROR = "Samsung WAM rejected PausePlaybackEvent"
 _BROKEN_PIPE_ERRORS = {109, 233}
 _SUCCESS_EVENT = "StartPlaybackEvent"
 _FAILURE_EVENT = "ErrorEvent"
@@ -201,11 +200,11 @@ def _wait_for_stream_event(
 
 
 class PlaybackWatcher:
-    """Wait for the speaker event that actually confirms playback."""
+    """Wait for the matching speaker event that confirms playback."""
 
     def __init__(self, speaker_ip: str, client_uuid: str, *, port: int) -> None:
         self._speaker_ip = speaker_ip
-        self._client_uuid = client_uuid
+        self._client_uuid = client_uuid.casefold()
         self._port = port
         self._started = threading.Event()
         self._failed = threading.Event()
@@ -241,6 +240,12 @@ class PlaybackWatcher:
                 )
         raise StreamError(f"Speaker did not confirm {_SUCCESS_EVENT}")
 
+    def _belongs_to_client(self, event: WamEvent) -> bool:
+        return bool(
+            event.user_identifier
+            and event.user_identifier.casefold() == self._client_uuid
+        )
+
     def _run(self) -> None:
         try:
             for event in listen_events(
@@ -250,6 +255,8 @@ class PlaybackWatcher:
                 stop=self._stop,
                 ready=self._ready,
             ):
+                if not self._belongs_to_client(event):
+                    continue
                 if event.method == _SUCCESS_EVENT:
                     self._started.set()
                     return
@@ -265,16 +272,30 @@ class PlaybackWatcher:
             self._failed.set()
 
 
-def _offer_stream(speaker_ip: str, stream_url: str, speaker_port: int) -> None:
+def _offer_stream(
+    speaker_ip: str,
+    stream_url: str,
+    speaker_port: int,
+    client_uuid: str,
+) -> None:
     try:
-        play_url(speaker_ip, stream_url, port=speaker_port)
-    except WamApiError as error:
-        if not str(error).startswith(_PAUSE_HANDOFF_ERROR):
-            raise
-        LOGGER.info(
-            "Speaker emitted PausePlaybackEvent during URL handoff; "
-            "waiting for the stream request"
+        send_mobile_command(
+            speaker_ip,
+            client_uuid,
+            method="SetUrlPlayback",
+            arguments=[
+                ("url", stream_url, "cdata"),
+                ("buffersize", 0, "dec"),
+                ("seektime", 0, "dec"),
+                ("resume", 0, "dec"),
+            ],
+            port=speaker_port,
+            timeout=10.0,
         )
+    except OSError as error:
+        raise WamApiError(
+            f"Cannot reach Samsung WAM at {speaker_ip}:{speaker_port}: {error}"
+        ) from error
 
 
 def run(
@@ -337,7 +358,12 @@ def run(
             port=speaker_port,
         ) as watcher:
             LOGGER.info("Offering %s to %s", stream_url, speaker_ip)
-            _offer_stream(speaker_ip, stream_url, speaker_port)
+            _offer_stream(
+                speaker_ip,
+                stream_url,
+                speaker_port,
+                client_uuid,
+            )
             _raise_if_pcm_input_closed(input_stream)
 
             _wait_for_stream_request(
