@@ -43,6 +43,7 @@ class FakePlaybackWatcher:
     instances: list["FakePlaybackWatcher"] = []
 
     def __init__(self, *_args, **_kwargs) -> None:
+        self.armed = False
         self.waited = False
         self.__class__.instances.append(self)
 
@@ -51,6 +52,9 @@ class FakePlaybackWatcher:
 
     def __exit__(self, *_exc: object) -> None:
         return None
+
+    def arm(self) -> None:
+        self.armed = True
 
     def wait_for_start(self, *, timeout: float) -> None:
         self.waited = True
@@ -121,6 +125,7 @@ class PcmCliTests(TestCase):
             ["WAMBRIDGE READY", "WAMBRIDGE PLAYING volume=4"],
         )
         self.assertEqual(len(FakePlaybackWatcher.instances), 1)
+        self.assertTrue(FakePlaybackWatcher.instances[0].armed)
         self.assertTrue(FakePlaybackWatcher.instances[0].waited)
         self.assertEqual(
             volume_mock.call_args_list,
@@ -167,21 +172,30 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    def test_watcher_matches_only_the_active_client(self) -> None:
+    def test_watcher_correlates_public_and_client_events_after_arming(self) -> None:
         watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID.upper(), port=55001)
-
-        self.assertTrue(
-            watcher._belongs_to_client(
-                WamEvent(
-                    method="StartPlaybackEvent",
-                    result="ok",
-                    user_identifier=CLIENT_UUID,
-                    error_code=None,
-                )
-            )
+        own_event = WamEvent(
+            method="StartPlaybackEvent",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
         )
+        public_event = WamEvent(
+            method="StartPlaybackEvent",
+            result="ok",
+            user_identifier="public",
+            error_code=None,
+        )
+
+        self.assertFalse(watcher._belongs_to_attempt(own_event))
+        self.assertFalse(watcher._belongs_to_attempt(public_event))
+
+        watcher.arm()
+
+        self.assertTrue(watcher._belongs_to_attempt(own_event))
+        self.assertTrue(watcher._belongs_to_attempt(public_event))
         self.assertFalse(
-            watcher._belongs_to_client(
+            watcher._belongs_to_attempt(
                 WamEvent(
                     method="StartPlaybackEvent",
                     result="ok",
@@ -191,7 +205,7 @@ class PcmCliTests(TestCase):
             )
         )
         self.assertFalse(
-            watcher._belongs_to_client(
+            watcher._belongs_to_attempt(
                 WamEvent(
                     method="StartPlaybackEvent",
                     result="ok",
