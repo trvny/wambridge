@@ -10,6 +10,7 @@ authors:
   - name: claude
   - name: codex
   - name: chatgpt
+  - name: co-tam[bot]
 identifiers:
   - type: url
     value: 'https://github.com/trvny'
