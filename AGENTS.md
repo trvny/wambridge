@@ -23,9 +23,8 @@ traps that look like bugs in this code but are not.
   physical M5.
 - A command timeout is not a failure. The firmware answers late, and often with an
   unrelated event, so replies must be matched against the command that was sent.
-- Check submode before local playback. In `cp` the speaker fetches the object and stays
-  silent; nothing but a power cycle clears it. Do not assume why it entered `cp` without a
-  measured command trace.
+- Record the speaker submode during local-playback failures, but do not treat `cp` alone as
+  proof of the cause. Whether it blocks this path is not yet established.
 - Never send remote URLs to `SetUrlPlayback`: HTTPS errors out, Ogg is silent and HLS
   wedges the control port. Proxy through FFmpeg and the local HTTP server instead.
 
