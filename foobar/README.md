@@ -1,5 +1,5 @@
 ![foobar2000](https://img.shields.io/badge/foobar2000-000?logo=foobar2000&logoColor=fff&style=for-the-badge) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?logo=cplusplus&logoColor=fff&style=for-the-badge)
-# Foobar2000 output
+# Foobar2000 output ![foobar2000](https://icons.duckduckgo.com/ip3/foobar2000.org.ico)
 
 `foo_out_wam` exposes `Samsung M5 (Wi-Fi)` as a foobar2000 2.x x64 output.
 It sends foobar's decoded PCM to the bundled `wambridge-pcm.exe`, which encodes
