@@ -1,22 +1,24 @@
 name: Apply output clock patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/foobar-output-clock
-    paths:
-      - patches/output-clock.patch.b64.*
-      - .github/workflows/apply-output-clock.yml
+      - main
+    types:
+      - opened
+      - synchronize
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.head_ref == 'fix/foobar-output-clock'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: fix/foobar-output-clock
           fetch-depth: 0
       - name: Apply patch
         shell: bash
