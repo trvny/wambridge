@@ -8,3 +8,4 @@ build/
 dist/
 foobar/build/
 .claude/
+.claude.local.md
