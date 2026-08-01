@@ -42,6 +42,15 @@ class Target:
     port: int
 
 
+@dataclass(frozen=True, slots=True)
+class Verification:
+    """Result of checking whether a mutation reached the requested state."""
+
+    confirmed: bool
+    available: bool
+    detail: str | None = None
+
+
 def raw_volume(value: str) -> int:
     """Parse the raw 0..30 volume scale measured on the physical M5."""
     try:
@@ -171,17 +180,21 @@ def _status_lines(status: WamStatus) -> list[str]:
     ]
 
 
-def _verify_recovery(target: Target, safe_volume: int) -> tuple[bool, str | None]:
+def _verify_recovery(target: Target, safe_volume: int) -> Verification:
     try:
         muted = get_mute(target.ip, port=target.port, timeout=2.0)
         volume = get_volume(target.ip, port=target.port, timeout=2.0)
     except WamApiError as error:
-        return False, str(error)
+        return Verification(False, False, str(error))
     if muted:
-        return False, "speaker still reports mute=on"
+        return Verification(False, True, "speaker still reports mute=on")
     if volume != safe_volume:
-        return False, f"speaker reports volume={volume}, expected {safe_volume}"
-    return True, None
+        return Verification(
+            False,
+            True,
+            f"speaker reports volume={volume}, expected {safe_volume}",
+        )
+    return Verification(True, True)
 
 
 def emergency_stop(
@@ -217,23 +230,27 @@ def emergency_stop(
             retry_delay=retry_delay,
         ),
     ]
-    verified, verification_error = _verify_recovery(target, safe_volume)
-    if not verified and not all(success for success, _ in results):
-        details = verification_error or next(
-            error for success, error in results if not success and error
+    verification = _verify_recovery(target, safe_volume)
+    mutations_sent = all(success for success, _ in results)
+    if (verification.available and not verification.confirmed) or (
+        not verification.available and not mutations_sent
+    ):
+        mutation_error = next(
+            (error for success, error in results if not success and error),
+            None,
         )
         raise ControlError(
             "Emergency stop could not be verified. The M5 control port may be wedged; "
-            f"power-cycle the speaker. Last detail: {details}"
+            f"power-cycle the speaker. Last detail: {verification.detail or mutation_error}"
         )
     lines = [
         "action=emergency-stop",
         f"volume={safe_volume}",
         "muted=off",
-        f"verified={'yes' if verified else 'no'}",
+        f"verified={'yes' if verification.confirmed else 'no'}",
     ]
-    if verification_error:
-        lines.append(f"warning={verification_error}")
+    if not verification.available and verification.detail:
+        lines.append(f"warning={verification.detail}")
     return lines
 
 
@@ -262,19 +279,30 @@ def standby(
         retry_delay=retry_delay,
     )
     try:
-        verified = get_mute(target.ip, port=target.port, timeout=2.0)
-        verification_error = None
+        muted = get_mute(target.ip, port=target.port, timeout=2.0)
+        verification = Verification(
+            muted,
+            True,
+            None if muted else "speaker still reports mute=off",
+        )
     except WamApiError as error:
-        verified = False
-        verification_error = str(error)
-    if not verified and not (stop_result[0] and mute_result[0]):
+        verification = Verification(False, False, str(error))
+    mutations_sent = stop_result[0] and mute_result[0]
+    if (verification.available and not verification.confirmed) or (
+        not verification.available and not mutations_sent
+    ):
         raise ControlError(
             "Standby could not be verified. The M5 control port may be wedged; "
-            f"power-cycle the speaker. Last detail: {verification_error or mute_result[1]}"
+            f"power-cycle the speaker. Last detail: "
+            f"{verification.detail or mute_result[1] or stop_result[1]}"
         )
-    lines = ["action=standby", "muted=on", f"verified={'yes' if verified else 'no'}"]
-    if verification_error:
-        lines.append(f"warning={verification_error}")
+    lines = [
+        "action=standby",
+        "muted=on",
+        f"verified={'yes' if verification.confirmed else 'no'}",
+    ]
+    if not verification.available and verification.detail:
+        lines.append(f"warning={verification.detail}")
     return lines
 
 
@@ -296,7 +324,10 @@ def change_volume(
     )
     if not success:
         raise ControlError(f"Could not set volume: {error}")
-    return [f"action={'volume-up' if delta > 0 else 'volume-down'}", f"volume={target_volume}"]
+    return [
+        f"action={'volume-up' if delta > 0 else 'volume-down'}",
+        f"volume={target_volume}",
+    ]
 
 
 def set_safe_volume(
