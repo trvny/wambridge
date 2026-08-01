@@ -51,33 +51,40 @@ class FoobarSourceTests(TestCase):
             source,
         )
 
-    def test_end_of_input_closes_the_helper_pipe_cleanly(self) -> None:
+    def test_force_play_is_a_transient_drain_request(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
-        self.assertIn("m_endOfInput = true;", source)
-        self.assertIn("close_child_input(generation);", source)
-        self.assertIn("expected = m_shutdown || m_restart ||", source)
-        self.assertIn("finish_playback_clock_if_drained_locked();", source)
-        self.assertIn("m_endOfInput && m_inputClosed", source)
-
-    def test_closed_stdin_does_not_hide_startup_failure(self) -> None:
-        source = SOURCE.read_text(encoding="utf-8")
-
-        self.assertNotIn("!m_inputClosed &&\n                m_failure.empty()", source)
+        self.assertIn("m_drainRequested = true;", source)
+        self.assertIn("m_drainRequested = false;", source)
+        self.assertIn("if (m_clockStarted) m_playing.store(true);", source)
         self.assertIn(
-            "(m_inputClosed && m_childReachedPlaying.load())",
+            "m_drainRequested && buffered_frames_locked() == 0",
             source,
         )
-        self.assertIn(
-            "m_inputClosed && m_childExited &&\n"
-            "                        m_childReachedPlaying.load()",
-            source,
-        )
+        self.assertNotIn("m_endOfInput", source)
+        self.assertNotIn("m_inputClosed", source)
+        self.assertNotIn("close_child_input", source)
 
-    def test_finite_input_stays_open_until_playback_is_confirmed(self) -> None:
+    def test_unexpected_helper_exit_is_not_treated_as_eof(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertIn(
-            "m_endOfInput && m_playing.load() &&",
+            "expected = m_shutdown || m_restart || m_childStopping.load();",
             source,
         )
+        self.assertIn(
+            'set_failure_if_current(\n'
+            '                    "wambridge-pcm exited unexpectedly",',
+            source,
+        )
+
+    def test_helper_protocol_and_logs_are_visible_in_console(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'console::printf("%s: %s", kComponentName, line.c_str());',
+            source,
+        )
+        self.assertIn('line == "WAMBRIDGE READY"', source)
+        self.assertIn('line.rfind("WAMBRIDGE PLAYING", 0)', source)
+        self.assertIn('line.rfind("WAMBRIDGE ERROR ", 0)', source)
