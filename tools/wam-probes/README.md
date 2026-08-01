@@ -31,6 +31,7 @@ Every script reads its addresses from the environment, so nothing is hardcoded t
 | `probe_formats.py` | What will the speaker play through the share path? | FLAC up to 96/24 |
 | `probe_livestream.py` | Will it play an HTTP stream with no known length? | Yes — which is what makes a foobar2000 output viable |
 | `probe_backpressure.py` | Does TCP backpressure pace the stream on its own? | Yes — this closed PR #4 as solving a non-problem |
+| `probe_clock_drift.py` | Does the PCM path hold tempo, and how deep is the cushion? | Locks at 1.00x after ~25 s, cushion constant at ~23 s |
 | `capture.py` | What does the official Samsung app actually send? | Produced `capture.log`, with a hard volume limiter so the tap cannot blast the room |
 | `wamtap.py` | Passive event tap and port diagnostics | Generally useful; no dependencies |
 
