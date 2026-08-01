@@ -1,6 +1,8 @@
 #pragma once
 
 #include <windows.h>
+#include <mmsystem.h>
+#include <objidl.h>
 
 #include <foobar2000/SDK/foobar2000.h>
 
