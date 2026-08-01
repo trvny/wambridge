@@ -293,13 +293,21 @@ public:
     void pause(bool state) override {
         {
             std::lock_guard lock(m_mutex);
+            const bool wasPaused = m_paused.load();
+            if (state == wasPaused) return;
+
             const auto now = std::chrono::steady_clock::now();
             refresh_playback_clock_locked(now);
-            m_paused.store(state);
-            if (!state && m_clockStarted) {
-                m_clockAnchor = now;
-                m_clockAnchorFrames = m_playedFrames;
+            if (state) {
+                m_pauseStarted = now;
+            } else {
+                if (m_clockStarted &&
+                    m_pauseStarted != std::chrono::steady_clock::time_point{}) {
+                    m_clockAnchor += now - m_pauseStarted;
+                }
+                m_pauseStarted = {};
             }
+            m_paused.store(state);
         }
         m_cv.notify_all();
     }
@@ -373,6 +381,7 @@ private:
         m_playedFrames = 0;
         m_clockAnchorFrames = 0;
         m_clockAnchor = {};
+        m_pauseStarted = {};
         m_clockStarted = false;
         m_endOfInput = false;
         m_inputClosed = false;
@@ -388,6 +397,7 @@ private:
         m_clockAnchor = now + std::chrono::duration_cast<
             std::chrono::steady_clock::duration
         >(std::chrono::duration<double>(kStartupLatencySeconds));
+        if (m_paused.load()) m_pauseStarted = now;
     }
 
     void refresh_playback_clock_locked(
@@ -453,8 +463,7 @@ private:
             std::lock_guard lock(m_mutex);
             if (!m_shutdown && !m_restart && !m_flushing &&
                 generation == m_generation &&
-                !m_childStopping.load() && !m_inputClosed &&
-                m_failure.empty()) {
+                !m_childStopping.load() && m_failure.empty()) {
                 m_failure = message;
                 recorded = true;
             }
@@ -714,7 +723,8 @@ private:
         bool expected = false;
         {
             std::lock_guard lock(m_mutex);
-            expected = m_shutdown || m_restart || m_inputClosed ||
+            expected = m_shutdown || m_restart ||
+                (m_inputClosed && m_childReachedPlaying.load()) ||
                 m_childStopping.load();
         }
         if (!expected) {
@@ -748,7 +758,8 @@ private:
                             m_restart || m_flushing ||
                             (m_sampleRate != 0 && m_channels != 0 && (
                                 !m_queue.empty() || m_childExited ||
-                                (m_endOfInput && !m_inputClosed) ||
+                                (m_endOfInput && m_playing.load() &&
+                                    !m_inputClosed) ||
                                 (m_paused.load() && m_helperReady.load())
                             ))
                         ));
@@ -776,6 +787,7 @@ private:
                 {
                     std::lock_guard lock(m_mutex);
                     expected = m_inputClosed && m_childExited &&
+                        m_childReachedPlaying.load() &&
                         generation == m_generation;
                 }
                 if (expected) {
@@ -831,7 +843,9 @@ private:
                             ) ||
                             (m_helperReady.load() && (
                                 m_flushing || m_paused.load() ||
-                                !m_queue.empty() || m_endOfInput
+                                !m_queue.empty() ||
+                                (m_endOfInput && m_playing.load() &&
+                                    !m_inputClosed)
                             ));
                     }
                 );
@@ -852,7 +866,8 @@ private:
                     batchFrames = 0;
                 } else if (!m_helperReady.load()) {
                     continue;
-                } else if (m_endOfInput && !sendSilence && m_queue.empty() &&
+                } else if (m_endOfInput && m_playing.load() &&
+                    !sendSilence && m_queue.empty() &&
                     m_writeInProgressFrames == 0 && !m_inputClosed) {
                     closeInput = true;
                 } else if (!sendSilence && m_queue.empty()) {
@@ -1074,6 +1089,7 @@ private:
     uint64_t m_playedFrames = 0;
     uint64_t m_clockAnchorFrames = 0;
     std::chrono::steady_clock::time_point m_clockAnchor{};
+    std::chrono::steady_clock::time_point m_pauseStarted{};
     bool m_clockStarted = false;
     bool m_endOfInput = false;
     bool m_inputClosed = false;
@@ -1106,7 +1122,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.4",
+    "0.1.5",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 
