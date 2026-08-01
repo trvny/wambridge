@@ -148,16 +148,20 @@ def build_mobile_request(
     client_uuid: str,
     *,
     method: str = "GetFunc",
+    arguments: list[tuple[str, str | int, str]] | None = None,
     port: int = DEFAULT_PORT,
     api_type: str = "UIC",
+    power_on: bool = False,
 ) -> bytes:
     """Build the raw request shape used by Samsung Multiroom clients."""
     parsed = urlsplit(
         build_api_url(
             speaker_ip,
             method,
+            arguments,
             port=port,
             api_type=api_type,
+            power_on=power_on,
         )
     )
     target = parsed.path
@@ -177,6 +181,36 @@ def build_mobile_request(
     ).encode("utf-8")
 
 
+def send_mobile_command(
+    speaker_ip: str,
+    client_uuid: str,
+    *,
+    method: str,
+    arguments: list[tuple[str, str | int, str]] | None = None,
+    port: int = DEFAULT_PORT,
+    timeout: float = 5.0,
+    api_type: str = "UIC",
+    power_on: bool = False,
+) -> None:
+    """Send one identity-bearing command without waiting for a reply.
+
+    The M5 often answers late or with an unrelated event. The persistent event
+    reader is the source of truth, so the writer only has to deliver the full
+    HTTP request and can close immediately afterwards.
+    """
+    request = build_mobile_request(
+        speaker_ip,
+        client_uuid,
+        method=method,
+        arguments=arguments,
+        port=port,
+        api_type=api_type,
+        power_on=power_on,
+    )
+    with socket.create_connection((speaker_ip, port), timeout=timeout) as writer:
+        writer.sendall(request)
+
+
 def send_probe(
     speaker_ip: str,
     client_uuid: str,
@@ -185,9 +219,13 @@ def send_probe(
     timeout: float = 5.0,
 ) -> None:
     """Send a harmless GetFunc command through a separate writer socket."""
-    request = build_mobile_request(speaker_ip, client_uuid, port=port)
-    with socket.create_connection((speaker_ip, port), timeout=timeout) as writer:
-        writer.sendall(request)
+    send_mobile_command(
+        speaker_ip,
+        client_uuid,
+        method="GetFunc",
+        port=port,
+        timeout=timeout,
+    )
 
 
 def listen_events(
