@@ -1,51 +1,50 @@
 # WAM probes
 
-Throwaway scripts that produced the measured facts in `docs/WAM_PROTOCOL.md`. They are kept
-because the measurements are expensive to repeat: each one isolates a single variable against a
-physical speaker, and several of them disproved an assumption the code was built on.
+One-shot diagnostic scripts that produced the measured facts in
+`docs/WAM_PROTOCOL.md`. They are kept because physical M5 measurements are expensive and
+several probes disproved assumptions that had already reached code or documentation.
 
-They are diagnostic artifacts, not a supported tool. Comments are in Polish, the style is
-one-shot, and nothing here is covered by the test suite.
+These are not supported user tools. Comments may be in Polish and the test suite does not
+cover them.
 
 ## Configuration
-
-Every script reads its addresses from the environment, so nothing is hardcoded to one network:
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `WAM_SPEAKER` | speaker address | `192.168.1.50` |
-| `WAM_HOST` | this machine, as the speaker sees it | `192.168.1.10` |
-| `WAM_MEDIA` | audio file to serve | `sample.mp3` |
-| `WAM_SCRATCH` | where ffmpeg writes test files | `_scratch/` next to the script |
+| `WAM_HOST` | this machine as seen by the speaker | `192.168.1.10` |
+| `WAM_MEDIA` | audio file | `sample.mp3` |
+| `WAM_SCRATCH` | generated files | `_scratch/` |
 
-`probe_share.py` holds the shared HTTP server and event plumbing; the other probes import it.
+## What the probes settled
 
-## What each probe settled
+| Script | Result |
+| --- | --- |
+| `probe_share.py` | Share playback requires raw client UUID and `/DLNA/<objectid>` |
+| `probe_playertype.py` | `playertype`/`sourcename` do not decide success |
+| `probe_dlna_headers.py` | Share playback requires the measured DLNA response shape |
+| `probe_confirm_audio.py` | Working share configuration was confirmed by ear |
+| `probe_formats.py` | Share path plays FLAC through 96/24 and MP4 with Range |
+| `probe_livestream.py` | `SetUrlPlayback` accepts streams with no known length |
+| `probe_backpressure.py` | Speaker HTTP throughput converges toward real time without `-re` |
+| `probe_clock_drift.py` | A run settles near 1.00x; the old `+21..23 s` number includes startup and is not a speaker-buffer target |
+| `capture.py` | Produced the preserved official-client session in `capture.log` |
+| `wamtap.py` | Standalone event and port diagnostics |
 
-| Script | Question | Answer |
-| --- | --- | --- |
-| `probe_share.py` | Does `SetSharePlaybackControl` work, and does the `device_udn` form matter? | Raw UUID is answered, `uuid:`-prefixed is silently ignored |
-| `probe_playertype.py` | `allshare` or `myphone`? | The official app sends `myphone` |
-| `probe_dlna_headers.py` | Does the renderer need DLNA response headers? | Yes — without them it fetches and stays silent |
-| `probe_confirm_audio.py` | Does the assembled configuration actually make sound? | Yes, confirmed by ear |
-| `probe_formats.py` | What will the speaker play through the share path? | FLAC up to 96/24 |
-| `probe_livestream.py` | Will it play an HTTP stream with no known length? | Yes — which is what makes a foobar2000 output viable |
-| `probe_backpressure.py` | Does TCP backpressure pace the stream on its own? | Yes — this closed PR #4 as solving a non-problem |
-| `probe_clock_drift.py` | Does the PCM path hold tempo, and how deep is the cushion? | Locks at 1.00x after ~25 s, cushion constant at ~23 s |
-| `capture.py` | What does the official Samsung app actually send? | Produced `capture.log`, with a hard volume limiter so the tap cannot blast the room |
-| `wamtap.py` | Passive event tap and port diagnostics | Generally useful; no dependencies |
+## Interpretation rules
 
-Verdicts rest on `StartPlaybackEvent` from TCP 55001. `MusicInfo` and `PlayStatus` were measured
-lying, so no probe trusts them.
+- Share/DLNA verdicts use `StartPlaybackEvent`.
+- URL/PCM does not hard-gate on that event. Physical foobar runs were audible after
+  `AUDIO_STARTED` without a matching event before the former timeout.
+- Do not run `probe_clock_drift.py`, `wamtap sniff` or another 55001 listener beside active
+  `pcm_cli`; the extra connection can disrupt playback.
+- A process-start-relative drift value includes discovery, URL handoff and helper startup.
+  Do not publish it as a measured M5 cushion.
+- `ReadTransferCount` and the tested process I/O counters are unusable on the current test
+  machine. Use beefweb position, process trees and TCP connection state instead.
 
 ## capture.log
 
-A session of the official Samsung Multiroom app talking to an M5, captured passively. This is the
-source of roughly half of `docs/WAM_PROTOCOL.md` and **cannot be reproduced** — the desktop app has
-no radio function, and the phone that recorded it is gone.
-
-Identifiers were replaced before committing, each original mapped to one fixed stand-in so the
-analysis still holds — in particular that `device_udn`, `user_identifier` and the `SetIpInfo` UUID
-carry the same value, and that `user_identifier` falls into three buckets. Addresses, MAC
-addresses, the Wi-Fi SSID and client UUIDs are stand-ins; timings, protocol fields and track titles
-are untouched.
+The preserved Samsung Multiroom session is not reproducible with the equipment still
+available. Identifiers and addresses were replaced consistently; timings, protocol fields
+and track titles remain intact.
