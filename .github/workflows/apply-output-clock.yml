@@ -24,6 +24,7 @@ jobs:
         shell: bash
         run: |
           cat patches/output-clock.patch.b64.* | base64 --decode > /tmp/output-clock.patch
+          sed -i 's/\r$//' /tmp/output-clock.patch
           git apply --check /tmp/output-clock.patch
           git apply /tmp/output-clock.patch
           rm patches/output-clock.patch.b64.*
@@ -34,5 +35,3 @@ jobs:
           git add -A
           git commit -m "Synchronize foobar output clock"
           git push origin HEAD:fix/foobar-output-clock
-
-# Triggered through the temporary guarded workflow on main.
