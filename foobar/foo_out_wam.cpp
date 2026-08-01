@@ -258,6 +258,9 @@ public:
         if (takenFrames == 0) return 0;
         m_flushing = false;
         m_drainRequested = false;
+        if (m_clockStarted && m_helperReady.load()) {
+            m_playing.store(true);
+        }
 
         const audio_sample* input = chunk.get_data();
         const size_t values = takenFrames * channels;

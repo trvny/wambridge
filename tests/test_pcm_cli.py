@@ -45,6 +45,7 @@ class FakePlaybackWatcher:
     def __init__(self, *_args, **_kwargs) -> None:
         self.armed = False
         self.stream_active = False
+        self.startup_complete = False
         self.waited = False
         self.failure_checks = 0
         self.offered: list[str] = []
@@ -62,6 +63,9 @@ class FakePlaybackWatcher:
 
     def mark_stream_active(self) -> None:
         self.stream_active = True
+
+    def mark_startup_complete(self) -> None:
+        self.startup_complete = True
 
     def offer_stream(self, stream_url: str) -> None:
         self.offered.append(stream_url)
@@ -145,6 +149,7 @@ class PcmCliTests(TestCase):
         watcher = FakePlaybackWatcher.instances[0]
         self.assertTrue(watcher.armed)
         self.assertTrue(watcher.stream_active)
+        self.assertTrue(watcher.startup_complete)
         self.assertFalse(watcher.waited)
         self.assertGreaterEqual(watcher.failure_checks, 2)
         self.assertEqual(
