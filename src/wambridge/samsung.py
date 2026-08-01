@@ -17,6 +17,10 @@ class WamApiError(RuntimeError):
     """Raised when a speaker rejects or cannot receive a command."""
 
 
+class WamModeError(WamApiError):
+    """Raised when the speaker's submode cannot accept local playback."""
+
+
 @dataclass(frozen=True, slots=True)
 class WamResponse:
     """Parsed response returned by the speaker."""
@@ -25,6 +29,14 @@ class WamResponse:
     result: str | None
     body: str
     values: dict[str, str] = field(default_factory=dict)
+    matched: bool = True
+    """False when the speaker answered with an unrelated event.
+
+    The firmware often replies to a command with whatever it happens to be
+    broadcasting, for example ``PausePlaybackEvent`` during a URL handover or
+    ``CurrentFunc`` right after ``SetIpInfo``. Such a body says nothing about
+    whether the command succeeded, so it must not be read as a rejection.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,8 +119,69 @@ def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def parse_response(body: str) -> WamResponse:
-    """Parse and validate one XML response from a Samsung WAM speaker."""
+# Commands whose reply carries an unrelated name. Only entries observed on a
+# physical M5 belong here; guesses would reintroduce the bug this table fixes.
+_RESPONSE_ALIASES: dict[str, tuple[str, ...]] = {
+    "SetPlaybackControl": ("PlaybackStatus",),
+    "SetSharePlaybackControl": ("MusicInfo",),
+    "SetNewFolderPlaybackControl": ("MusicInfo",),
+    "SetPlayPreset": ("RadioInfo", "CpInfo", "PlayStatus"),
+}
+
+# Unsolicited state changes. They can arrive in place of any reply and say
+# nothing about the command that was sent, so they never count as a match.
+_EVENT_SUFFIX = "Event"
+
+
+def _normalise_method(name: str) -> str:
+    stripped = name
+    for prefix in ("Set", "Get", "Current"):
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix) :]
+            break
+    return "".join(character for character in stripped if character.isalnum()).lower()
+
+
+def _methods_agree(command: str, response_method: str) -> bool:
+    """Report whether a reply belongs to the command that was sent."""
+
+    if command == response_method:
+        return True
+    if response_method.endswith(_EVENT_SUFFIX):
+        return False
+    if response_method in _RESPONSE_ALIASES.get(command, ()):
+        return True
+    left, right = _normalise_method(command), _normalise_method(response_method)
+    if not left or not right:
+        return False
+    return left in right or right in left
+
+
+def _error_code(root: ElementTree.Element, response_node: ElementTree.Element) -> str:
+    """Return the error code, whichever spelling and shape the firmware used.
+
+    Measured on a physical M5: the code arrives as a child element spelled
+    ``errCode``, not only as the ``errcode`` attribute the original parser
+    looked for. Missing it made every failure look identical.
+    """
+
+    for spelling in ("errcode", "errCode"):
+        if (attribute := response_node.get(spelling)) is not None:
+            return attribute
+    for spelling in ("errCode", "errcode"):
+        for node in (response_node, root):
+            if (text := node.findtext(spelling)) is not None and text.strip():
+                return text.strip()
+    return ""
+
+
+def parse_response(body: str, *, expected: str | None = None) -> WamResponse:
+    """Parse one XML response from a Samsung WAM speaker.
+
+    ``expected`` is the command that was sent. When the speaker answers with a
+    different method it is an unsolicited event rather than this command's
+    result, so it is returned with ``matched=False`` instead of raising.
+    """
     try:
         root = ElementTree.fromstring(body)  # nosec B314 - small local response
     except ElementTree.ParseError as error:
@@ -119,8 +192,15 @@ def parse_response(body: str) -> WamResponse:
     response_node = root.find("response")
     result = response_node.get("result") if response_node is not None else None
     response_method = root.findtext("method")
-    if result != "ok":
-        error_code = response_node.get("errcode") if response_node is not None else None
+
+    matched = True
+    if expected is not None and response_method is not None:
+        matched = _methods_agree(expected, response_method)
+
+    if matched and result != "ok":
+        error_code = (
+            _error_code(root, response_node) if response_node is not None else ""
+        )
         suffix = f" (error {error_code})" if error_code else ""
         raise WamApiError(
             f"Samsung WAM rejected {response_method or 'request'}{suffix}"
@@ -143,6 +223,7 @@ def parse_response(body: str) -> WamResponse:
         result=result,
         body=body,
         values=values,
+        matched=matched,
     )
 
 
@@ -175,7 +256,7 @@ def request(
         raise WamApiError(
             f"Cannot reach Samsung WAM at {speaker_ip}:{port}: {error}"
         ) from error
-    return parse_response(body)
+    return parse_response(body, expected=method)
 
 
 def normalize_device_id(value: str) -> str:
@@ -341,6 +422,35 @@ def get_radio_info(
         title=_first_value(response, "title"),
         description=_first_value(response, "description"),
     )
+
+
+def require_local_playback_mode(
+    speaker_ip: str,
+    *,
+    port: int = DEFAULT_PORT,
+    timeout: float = 5.0,
+) -> str:
+    """Fail fast when the speaker cannot start locally offered playback.
+
+    In submode ``cp`` the speaker keeps serving a native content provider. It
+    still fetches an offered URL or DLNA object over HTTP and then stays silent,
+    which looks like a protocol bug but is a mode problem.
+
+    The speaker also returns to ``cp`` on its own after a failed attempt or while
+    idle, so this must be checked immediately before each attempt rather than
+    once per session. Nothing observed clears it from software:
+    ``SetPlaybackControl stop`` refuses, ``SetFunc wifi`` is accepted without
+    effect, ``SetUrlPlayback`` does nothing and a full standby leaves it as is.
+    """
+
+    submode = get_play_status(speaker_ip, port=port, timeout=timeout).submode
+    if submode == "cp":
+        raise WamModeError(
+            "Speaker is in content-provider mode (submode=cp). Locally offered "
+            "playback would be fetched and never started, and no command clears "
+            "this state - power-cycle the speaker and retry."
+        )
+    return submode or ""
 
 
 def get_playback_status(

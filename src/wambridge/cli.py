@@ -23,6 +23,7 @@ from .samsung import (
     pause_playback,
     play_url,
     probe,
+    require_local_playback_mode,
     resume_playback,
     set_mute,
     set_volume,
@@ -451,6 +452,10 @@ def run(args: argparse.Namespace) -> int:
     restore_volume: int | None = None
     startup_complete = False
     try:
+        # Checked here, not once per session: the speaker drifts back into
+        # content-provider mode on its own, and from there it fetches the
+        # stream and stays silent.
+        require_local_playback_mode(speaker_ip, port=speaker_port)
         server.prepare()
         current_volume = get_volume(speaker_ip, port=speaker_port)
         restore_volume = current_volume
