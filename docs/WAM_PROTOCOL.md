@@ -244,19 +244,19 @@ about 6.4x and stable throughput around 1.00x after roughly 25 seconds. Its appa
 `+23 s` reserve included discovery, URL handoff and helper startup, so it is only an upper
 bound, not a measured speaker cushion and not a target for `get_latency()`.
 
-That measurement does not prove the complete foobar output clock: a host can still decode
-far ahead if it reports pipe writes as already played. A physical foobar test on 2026-08-01
-exposed exactly that split. The M5 continued playing normally while foobar's seekbar ran
-ahead. No complete track had yet been timed end to end.
+A physical foobar run of `90d8193` proved two separate failures. Starting capacity release
+only on `StartPlaybackEvent` starved the M5 after exactly four seconds. Starting it on
+`audio_started` removed that starvation, but resetting the clock anchor to `now` whenever
+wall time caught submitted PCM let foobar decode at about 94x. The clock anchor must be set
+once at `audio_started` and remain cumulative, apart from pause adjustment. Played frames
+are `min(realtime target, submitted frames)`; the anchor must never follow pipe-write speed.
 
-PR #21 currently tests `StartPlaybackEvent` as the URL/PCM clock anchor. The listener is
-armed immediately before `SetUrlPlayback` and accepts a start event carrying either the
-stable client UUID or `user_identifier=public`. This gate is **provisional** until that
-exact build is verified on the physical M5. An earlier claim that working URL streams do
-not emit the event was retracted because method names were logged only during failed runs;
-the successful long run did not prove presence or absence. `audio_started` remains only
-proof that encoded bytes reached the HTTP response and must not be presented as audible
-playback confirmation.
+The same physical runs were audibly playing after `audio_started` but emitted no matching
+`StartPlaybackEvent` before the 45-second helper timeout. Therefore URL/PCM playback must
+not block or abort on that event. Keep the listener and correlate events when they appear,
+but use the bounded fixed-anchor clock for flow control. This does not redefine
+`audio_started` as proof of audible playback; it is the earliest measured transport anchor
+that does not deadlock this firmware path.
 
 Endless streams of unknown length are accepted by `SetUrlPlayback`:
 
@@ -278,16 +278,16 @@ design that assumes a finite local file.
 **Foundation — works for every source:**
 
 1. create or load one stable client UUID,
-2. open a persistent reader on TCP `55001`,
+2. open one persistent TCP `55001` connection for commands and events,
 3. send all commands with official mobile headers,
 4. serve the audio over local HTTP, chunked or close-delimited, never a faked
    `Content-Length`,
 5. point the speaker at it with `SetUrlPlayback`,
 6. let the speaker pull without FFmpeg `-re` or HTTP throttling; host outputs must retain
-   accepted PCM in their latency accounting until a real-time playback clock releases it,
-7. keep the current public-aware `StartPlaybackEvent` gate as an experiment until the
-   physical M5 test establishes whether it is a usable URL/PCM anchor; do not silently
-   replace it with `audio_started`,
+   accepted PCM in their latency accounting until a fixed cumulative real-time clock
+   releases it,
+7. start that bounded transport clock when encoded audio reaches the HTTP response; do not
+   hard-gate URL/PCM on `StartPlaybackEvent`,
 8. use unmatched events for diagnostics only, not as command-correlated failures.
 
 **Optional layer — finite local files only**, when seek, pause and duration are wanted:
