@@ -39,6 +39,14 @@ class FoobarSourceTests(TestCase):
         self.assertIn("startup_delay_frames_locked(now)", source)
         self.assertNotIn("--sample-format f32le --format flac --re", source)
 
+    def test_audio_start_releases_capacity_before_playback_confirmation(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn('line == "WAMBRIDGE AUDIO_STARTED"', source)
+        self.assertIn("if (audioStarted || playing)", source)
+        self.assertIn("if (playing) {", source)
+        self.assertNotIn("if (m_clockStarted) m_playing.store(true);", source)
+
     def test_pause_preserves_unelapsed_startup_delay(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
@@ -59,7 +67,6 @@ class FoobarSourceTests(TestCase):
 
         self.assertIn("m_drainRequested = true;", source)
         self.assertIn("m_drainRequested = false;", source)
-        self.assertIn("if (m_clockStarted) m_playing.store(true);", source)
         self.assertIn(
             "m_drainRequested && buffered_frames_locked() == 0",
             source,
@@ -89,5 +96,6 @@ class FoobarSourceTests(TestCase):
             source,
         )
         self.assertIn('line == "WAMBRIDGE READY"', source)
+        self.assertIn('line == "WAMBRIDGE AUDIO_STARTED"', source)
         self.assertIn('line.rfind("WAMBRIDGE PLAYING", 0)', source)
         self.assertIn('line.rfind("WAMBRIDGE ERROR ", 0)', source)
