@@ -148,7 +148,7 @@ class PcmAudioStreamServer(AudioStreamServer):
             *self.input_args,
             "-af",
             f"adelay={STARTUP_SILENCE_MS}:all=1",
-            *self.profile.ffmpeg_args,
+            *self.profile.args_for(self.sample_rate),
             "pipe:1",
         ]
         LOGGER.info(
