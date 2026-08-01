@@ -46,6 +46,7 @@ class FakePlaybackWatcher:
         self.armed = False
         self.stream_active = False
         self.waited = False
+        self.failure_checks = 0
         self.offered: list[str] = []
         self.volumes: list[int] = []
         self.__class__.instances.append(self)
@@ -70,6 +71,9 @@ class FakePlaybackWatcher:
 
     def wait_for_start(self, *, timeout: float) -> None:
         self.waited = True
+
+    def raise_if_failed(self) -> None:
+        self.failure_checks += 1
 
 
 class PcmCliTests(TestCase):
@@ -141,7 +145,8 @@ class PcmCliTests(TestCase):
         watcher = FakePlaybackWatcher.instances[0]
         self.assertTrue(watcher.armed)
         self.assertTrue(watcher.stream_active)
-        self.assertTrue(watcher.waited)
+        self.assertFalse(watcher.waited)
+        self.assertGreaterEqual(watcher.failure_checks, 2)
         self.assertEqual(
             watcher.offered,
             ["http://10.0.0.103:1234/stream/test.flac"],
@@ -212,7 +217,7 @@ class PcmCliTests(TestCase):
     )
     @patch("wambridge.pcm_cli.select_speaker", return_value=("10.0.0.118", 55001))
     @patch("wambridge.pcm_cli.PcmAudioStreamServer", FakePcmServer)
-    def test_does_not_emit_playing_without_start_playback_event(
+    def test_emits_playing_without_start_playback_event(
         self,
         _select_mock,
         _probe_mock,
@@ -222,20 +227,17 @@ class PcmCliTests(TestCase):
     ) -> None:
         class MissingEventWatcher(FakePlaybackWatcher):
             def wait_for_start(self, *, timeout: float) -> None:
-                raise StreamError("Speaker did not confirm StartPlaybackEvent")
+                raise AssertionError("URL playback must not wait for StartPlaybackEvent")
 
         protocol = StringIO()
         with patch("wambridge.pcm_cli.PlaybackWatcher", MissingEventWatcher):
-            with self.assertRaisesRegex(
-                StreamError,
-                "did not confirm StartPlaybackEvent",
-            ):
-                run(
-                    self._args("--volume", "4"),
-                    pcm_input=BytesIO(),
-                    protocol_output=protocol,
-                )
+            result = run(
+                self._args("--volume", "4"),
+                pcm_input=BytesIO(),
+                protocol_output=protocol,
+            )
 
+        self.assertEqual(result, 0)
         self.assertEqual(
             protocol.getvalue().splitlines(),
             [
@@ -243,6 +245,7 @@ class PcmCliTests(TestCase):
                 "WAMBRIDGE ENCODER_STARTED",
                 "WAMBRIDGE READY",
                 "WAMBRIDGE AUDIO_STARTED",
+                "WAMBRIDGE PLAYING volume=4",
             ],
         )
 
