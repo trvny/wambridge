@@ -114,6 +114,28 @@ class WamEventTests(TestCase):
         self.assertIn("mobileName: Wireless Audio", headers)
         self.assertIn("mobileVersion: 1.0", headers)
 
+    def test_builds_identity_bearing_playback_command(self) -> None:
+        request = build_mobile_request(
+            "10.0.0.118",
+            "b00524c5-87b8-4439-9bb6-010545a40948",
+            method="SetUrlPlayback",
+            arguments=[
+                ("url", "http://10.0.0.103:8765/live.flac", "cdata"),
+                ("buffersize", 0, "dec"),
+                ("seektime", 0, "dec"),
+                ("resume", 0, "dec"),
+            ],
+        ).decode()
+        target = request.split("\r\n", 1)[0].split(" ", 2)[1]
+        command = parse_qs(urlsplit(target).query)["cmd"][0]
+
+        self.assertIn("<name>SetUrlPlayback</name>", command)
+        self.assertIn(
+            "<![CDATA[http://10.0.0.103:8765/live.flac]]>",
+            command,
+        )
+        self.assertIn('name="buffersize" val="0"', command)
+
     def test_formats_compact_summary(self) -> None:
         line = format_event(
             WamEvent(

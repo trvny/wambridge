@@ -74,7 +74,9 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="foo_out_wam.cpp" />
+    <ClCompile Include="foo_out_wam.cpp">
+      <ForcedIncludeFiles>wam_write_probe.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="wam_menu.cpp" />
   </ItemGroup>
   <ItemGroup>
