@@ -44,6 +44,7 @@ class FakePlaybackWatcher:
 
     def __init__(self, *_args, **_kwargs) -> None:
         self.armed = False
+        self.stream_active = False
         self.waited = False
         self.offered: list[str] = []
         self.volumes: list[int] = []
@@ -57,6 +58,9 @@ class FakePlaybackWatcher:
 
     def arm(self) -> None:
         self.armed = True
+
+    def mark_stream_active(self) -> None:
+        self.stream_active = True
 
     def offer_stream(self, stream_url: str) -> None:
         self.offered.append(stream_url)
@@ -125,11 +129,18 @@ class PcmCliTests(TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(
             protocol.getvalue().splitlines(),
-            ["WAMBRIDGE READY", "WAMBRIDGE PLAYING volume=4"],
+            [
+                "WAMBRIDGE STREAM_REQUESTED",
+                "WAMBRIDGE ENCODER_STARTED",
+                "WAMBRIDGE READY",
+                "WAMBRIDGE AUDIO_STARTED",
+                "WAMBRIDGE PLAYING volume=4",
+            ],
         )
         self.assertEqual(len(FakePlaybackWatcher.instances), 1)
         watcher = FakePlaybackWatcher.instances[0]
         self.assertTrue(watcher.armed)
+        self.assertTrue(watcher.stream_active)
         self.assertTrue(watcher.waited)
         self.assertEqual(
             watcher.offered,
@@ -225,7 +236,15 @@ class PcmCliTests(TestCase):
                     protocol_output=protocol,
                 )
 
-        self.assertEqual(protocol.getvalue().splitlines(), ["WAMBRIDGE READY"])
+        self.assertEqual(
+            protocol.getvalue().splitlines(),
+            [
+                "WAMBRIDGE STREAM_REQUESTED",
+                "WAMBRIDGE ENCODER_STARTED",
+                "WAMBRIDGE READY",
+                "WAMBRIDGE AUDIO_STARTED",
+            ],
+        )
 
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
