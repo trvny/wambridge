@@ -36,6 +36,27 @@ traps that look like bugs in this code but are not.
 - Never send remote URLs to `SetUrlPlayback`: HTTPS errors out, Ogg is silent and HLS
   wedges the control port. Proxy through FFmpeg and the local HTTP server instead.
 
+## Measuring against the physical M5
+
+- **One encoder owns the PCM input.** Every FFmpeg started for a stream request inherits the
+  same stdin, so two of them split one stream. The speaker issues a second stream request
+  almost immediately while the first is still the live one, so serve the first and refuse the
+  rest. Retiring the older one instead kills the stream being served and starves its
+  replacement — that mistake was made and measured.
+- **Do not open a second connection to 55001 while `pcm_cli` runs.** A separate listener
+  (`wamtap sniff`, or a probe of your own) competes with it and the player fails with
+  `Cannot reach Samsung WAM: timed out`. Commands and events belong on one connection.
+- **Instruments that do not work here**: `(Get-Process x).ReadTransferCount` returns `null`,
+  and `Get-Counter "\Process(...)\IO ... Bytes/sec"` fails with `c0000bb8`. A script built on
+  either reports flat zeros that look like a stalled process. Use the beefweb API
+  (`127.0.0.1:8880/api/player`) for playback position, the process tree for FFmpeg leaks, and
+  `Get-NetTCPConnection` for abandoned speaker sockets.
+- **Timestamps inside a `.fb2k-component` are UTC; file times on disk are local (UTC+2).**
+  Comparing them without the shift makes a current build look two hours stale. To identify
+  what is installed, add two hours to the DLL time and match it against `gh run list`.
+- **foobar delivers `f32le`**, while the script path was only ever proven on `s16le`. The
+  `f32le` → FLAC path has not been verified on hardware; do not assume it behaves the same.
+
 ## Changing protocol code
 
 - Prove claims on the physical M5 first. Run a known-good path as a control so a network
