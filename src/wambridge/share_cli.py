@@ -28,6 +28,7 @@ from .samsung import (
     get_volume,
     play_share,
     register_share_source,
+    require_local_playback_mode,
     set_mute,
     set_volume,
 )
@@ -158,6 +159,7 @@ def start_share_playback(
 ) -> ShareServer:
     """Start playback and return the running server once the speaker confirms."""
 
+    require_local_playback_mode(speaker_ip, port=speaker_port)
     client_uuid = load_client_uuid()
     host_ip = local_ip_for(speaker_ip)
     server = ShareServer(media_path, port=share_port)
