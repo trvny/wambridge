@@ -238,14 +238,18 @@ average 1.18x
 ```
 
 The TCP window closes and HTTP throughput converges toward real time. Backpressure is the
-right clock for the speaker-facing transport and is more accurate than FFmpeg `-re`. The
-measurement did not prove the complete foobar output clock: a host can still decode far
-ahead if it reports pipe writes as already played.
+right clock for the speaker-facing transport and is more accurate than FFmpeg `-re`. A
+100-second control run through `ffmpeg | pcm_cli` measured an initial burst of about 6.4x,
+a downstream reserve of about 23 seconds, and then stable throughput around 1.00x. The
+reserve stopped growing, so transport pacing is healthy.
 
-A physical foobar test on 2026-08-01 exposed exactly that split. The M5 continued playing
-normally while foobar's seekbar ran ahead; a later audible speed change was reported, but
-no complete track had yet been timed end to end. Treat successful startup and
-`WAMBRIDGE PLAYING` as insufficient evidence of stable long-run timing.
+That measurement does not prove the complete foobar output clock: a host can still decode
+far ahead if it reports pipe writes as already played. A physical foobar test on 2026-08-01
+exposed exactly that split. The M5 continued playing normally while foobar's seekbar ran
+ahead. No complete track had yet been timed end to end.
+
+`WAMBRIDGE PLAYING` must be emitted only after the persistent TCP 55001 listener receives
+`StartPlaybackEvent`. Encoder output or an HTTP request alone cannot start the host clock.
 
 Endless streams of unknown length are accepted by `SetUrlPlayback`:
 
