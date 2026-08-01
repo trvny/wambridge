@@ -249,10 +249,11 @@ far ahead if it reports pipe writes as already played. A physical foobar test on
 exposed exactly that split. The M5 continued playing normally while foobar's seekbar ran
 ahead. No complete track had yet been timed end to end.
 
-`WAMBRIDGE PLAYING` must be emitted only after the persistent TCP 55001 listener receives
-a `StartPlaybackEvent` whose `user_identifier` matches the stable client UUID used by the
-playback command. Encoder output, an HTTP request or an event from another controller cannot
-start the host clock.
+`WAMBRIDGE PLAYING` must be emitted only after the persistent TCP 55001 listener is armed
+for the current command and receives `StartPlaybackEvent`. Measured firmware may broadcast
+that event with either the stable client UUID or `user_identifier=public`; events received
+before arming and events carrying another UUID are ignored. Encoder output or an HTTP
+request alone cannot start the host clock.
 
 Endless streams of unknown length are accepted by `SetUrlPlayback`:
 
@@ -281,9 +282,9 @@ design that assumes a finite local file.
 5. point the speaker at it with `SetUrlPlayback`,
 6. let the speaker pull without FFmpeg `-re` or HTTP throttling; host outputs must retain
    accepted PCM in their latency accounting until a real-time playback clock releases it,
-7. wait for the matching `StartPlaybackEvent`, and treat `MusicInfo` and `PlayStatus` as
-   unreliable,
-8. use matching `ErrorEvent` values for diagnostics.
+7. arm the listener for the current command and wait for its UUID or `public`
+   `StartPlaybackEvent`; treat `MusicInfo` and `PlayStatus` as unreliable,
+8. use events from that same attempt for diagnostics.
 
 **Optional layer — finite local files only**, when seek, pause and duration are wanted:
 
