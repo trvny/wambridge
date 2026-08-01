@@ -1,0 +1,143 @@
+[*] glosnosc ustawiona na 3/30, limiter na 5/30
+[*] nasluch 300s -- mozesz klikac play w apce
+
+22:17:49  CurrentFunc
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>CurrentFunc</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000002</user_identifier><response result="ok"><function>wifi</function><submode>dlna</submode><connection></connection><devicename><![CDATA[]]></devicename></response></UIC>
+
+22:18:23  SpkName
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>SpkName</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><spkname><![CDATA[[Samsung] M5]]></spkname></response></UIC>
+
+22:18:24  RequestDeviceInfo
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>RequestDeviceInfo</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"></response></UIC>
+
+22:18:24  MainInfo
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MainInfo</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><party>off</party><partymain></partymain><grouptype>N</grouptype><groupmainip>0.0.0.0</groupmainip><groupmainmacaddr>00:00:00:00:00:00</groupmainmacaddr><spkmacaddr>aa:bb:cc:00:00:01</spkmacaddr><spkmodelname>SPK-WAM550</spkmodelname><groupmode>none</groupmode><channeltype>front</channeltype><channelvolume>0</channelvolume><multichinfo>on</multichinfo><groupspknum>0</groupspknum><dfsstatus>dfsoff</dfsstatus><protocolver>2.3</protocolver><btmacaddr>aa:bb:cc:00:00:02</btmacaddr></response></UIC>
+
+22:18:24  CurrentFunc
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>CurrentFunc</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><function>wifi</function><submode>dlna</submode><connection></connection><devicename><![CDATA[]]></devicename></response></UIC>
+
+22:18:24  AvSourceAll
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>AvSourceAll</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><listcount>0</listcount><avsourcelist></avsourcelist></response></UIC>
+
+22:18:24  AcmMode
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>AcmMode</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><acmmode>aasync</acmmode><audiosourcemacaddr>00:00:00:00:00:00</audiosourcemacaddr><audiosourcename><![CDATA[]]></audiosourcename><audiosourcetype>none</audiosourcetype></response></UIC>
+
+22:18:25  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><volume>3</volume></response></UIC>
+
+22:18:25  MuteStatus
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MuteStatus</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><mute>off</mute></response></UIC>
+
+22:18:25  SleepTime
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>SleepTime</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><sleepoption>off</sleepoption><sleeptime>0</sleeptime></response></UIC>
+
+22:18:25  DmsList
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>DmsList</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><listtotalcount>2</listtotalcount><liststartindex>0</liststartindex><listcount>2</listcount><dmslist><dms device_id="0"><dmsid>uuid:00000000-0000-4000-8000-000000000003</dmsid><dmsname><![CDATA[Główny Dekoder]]></dmsname><devicetype>network</devicetype><thumbnail_PNG_LRG><![CDATA[]]></thumbnail_PNG_LRG><thumbnail_JPG_LRG><![CDATA[]]></thumbnail_JPG_LRG><thumbnail_PNG_SM><![CDATA[]]></thumbnail_PNG_SM><thumbnail_JPG_SM><![CDATA[]]></thumbnail_JPG_SM></dms><dms device_id="1"><dmsid>uuid:00000000-0000-4000-8000-000000000004</dmsid><dmsname><![CDATA[KEY_MULTIROOM_FUNCTION_NAME]]></dmsname><devicetype>network</devicetype><thumbnail_PNG_LRG><![CDATA[]]></thumbnail_PNG_LRG><thumbnail_JPG_LRG><![CDATA[]]></thumbnail_JPG_LRG><thumbnail_PNG_SM><![CDATA[]]></thumbnail_PNG_SM><thumbnail_JPG_SM><![CDATA[]]></thumbnail_JPG_SM></dms></dmslist></response></UIC>
+
+22:18:25  SpkIcon
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>SpkIcon</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><icon>0</icon></response></UIC>
+
+22:18:25  PlayStatus
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>PlayStatus</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><function>wifi</function><submode>dlna</submode></response></UIC>
+
+22:18:25  ApInfo
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>ApInfo</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><ssid><![CDATA[HOME-WIFI]]></ssid><mac>aa:bb:cc:00:00:01</mac><rssi>4</rssi><ch>1</ch><wifidirectssid><![CDATA[]]></wifidirectssid><wifidirectrssi></wifidirectrssi><wifidirectch></wifidirectch><connectiontype>wireless</connectiontype></response></UIC>
+
+22:18:25  DMSAddedEvent
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>DMSAddedEvent</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ok"></response></UIC>
+
+22:18:25  IpInfo
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>IpInfo</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ok"><listcount>1</listcount><iptablelist><iptable uuid="00000000-0000-4000-8000-000000000001"><ip>192.168.1.10:49200</ip></iptable></iptablelist></response></UIC>
+
+22:18:26  AllAlarmInfo
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>AllAlarmInfo</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><totalindexcount>0</totalindexcount><alarmList></alarmList></response></UIC>
+
+22:18:26  AudioUI
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>AudioUI</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><audioui>on</audioui></response></UIC>
+
+22:18:26  SoftwareVersion
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>SoftwareVersion</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><version>WAM550WWB-3117.1</version><displayversion>WAM550WWB-3117.1</displayversion></response></UIC>
+
+22:18:26  SubSoftwareVersion
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>SubSoftwareVersion</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><Subversion1>87R</Subversion1><Subversion2>WAM550WWT-0009</Subversion2><Subversion3>Not Available</Subversion3><Subversion4>Not Available</Subversion4><Subversion5>Not Available</Subversion5></response></UIC>
+
+22:18:26  AutoUpdate
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>AutoUpdate</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><autoupdate>on</autoupdate></response></UIC>
+
+22:18:26  SpeakerWifiRegion
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>SpeakerWifiRegion</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><wifi>E</wifi></response></UIC>
+
+22:18:26  SpeakerBuyer
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>SpeakerBuyer</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><buyer>ZF</buyer></response></UIC>
+
+22:18:27  LedStatus
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>LedStatus</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><led>on</led></response></UIC>
+
+22:18:27  MusicInfo
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MusicInfo</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ng"><errCode>No Music</errCode></response></UIC>
+
+22:18:27  PlayStatus
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>PlayStatus</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><function>wifi</function><submode>dlna</submode></response></UIC>
+
+22:18:34  GetMultiQueueListResult
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>GetMultiQueueListResult</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ng"><errCode>Index Error</errCode></response></UIC>
+
+22:19:25  MediaBufferStartEvent
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MediaBufferStartEvent</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ok"><playtime>0</playtime></response></UIC>
+
+22:19:25  MediaBufferEndEvent
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MediaBufferEndEvent</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ok"><playtime>0</playtime></response></UIC>
+
+22:19:25  MusicInfo
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MusicInfo</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><device_udn>00000000-0000-4000-8000-000000000001</device_udn><playertype>myphone</playertype><playbacktype>playlist</playbacktype><sourcename><![CDATA[phone]]></sourcename><parentid></parentid><parentid2></parentid2><playindex>0</playindex><objectid><![CDATA[21329DC1305BF41B8AD9FCD0A6736302.mp3]]></objectid><title><![CDATA[Starburster]]></title><artist><![CDATA[FONTAINES D.C.]]></artist><album><![CDATA[]]></album><thumbnail><![CDATA[64676756F27170F4812EAD90A243B1DC.jpg]]></thumbnail><timelength></timelength><playtime>0</playtime><seek>enable</seek><pause>enable</pause></response></UIC>
+
+22:19:25  AddSongsToMultiQueueResult
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>AddSongsToMultiQueueResult</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><totalcount>1</totalcount><startindex>0</startindex><count>1</count><seqcount>1</seqcount><curindex>0</curindex></response></UIC>
+
+22:19:25  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier></user_identifier><response result="ok"><volume>3</volume></response></UIC>
+
+22:19:25  StartPlaybackEvent
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>StartPlaybackEvent</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ok"><playtime>0</playtime></response></UIC>
+
+22:19:25  MuteStatus
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MuteStatus</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ok"><mute>off</mute></response></UIC>
+
+22:19:25  PlayStatus
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>PlayStatus</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><function>wifi</function><submode>dlna</submode><playstatus>play</playstatus></response></UIC>
+
+22:19:26  RepeatMode
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>RepeatMode</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><repeat>off</repeat></response></UIC>
+
+22:19:26  ShuffleMode
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>ShuffleMode</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><shuffle>off</shuffle></response></UIC>
+
+22:19:26  MusicPlayTime
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MusicPlayTime</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>public</user_identifier><response result="ok"><timelength>220</timelength><playtime>0</playtime></response></UIC>
+
+22:19:26  MultiQueueList
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>MultiQueueList</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><listtotalcount>1</listtotalcount><liststartindex>0</liststartindex><listcount>1</listcount><seqcount>1</seqcount><musiclist><music object_id="21329DC1305BF41B8AD9FCD0A6736302.mp3"><type></type><playindex>0</playindex><name><![CDATA[]]></name><title><![CDATA[Starburster]]></title><artist><![CDATA[FONTAINES D.C.]]></artist><album><![CDATA[]]></album><thumbnail><![CDATA[64676756F27170F4812EAD90A243B1DC.jpg]]></thumbnail><timelength></timelength><device_udn>00000000-0000-4000-8000-000000000001</device_udn></music></musiclist></response></UIC>
+
+22:21:34  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><volume>5</volume></response></UIC>
+
+22:21:34  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><volume>5</volume></response></UIC>
+
+22:21:34  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><volume>5</volume></response></UIC>
+
+22:21:35  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><volume>4</volume></response></UIC>
+
+22:21:37  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><volume>6</volume></response></UIC>
+
+    !! 6/30 powyzej limitu -> sciagam do 3
+22:21:37  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000002</user_identifier><response result="ok"><volume>3</volume></response></UIC>
+
+22:21:39  VolumeLevel
+    <?xml version="1.0" encoding="UTF-8"?><UIC><method>VolumeLevel</method><version>1.0</version><speakerip>192.168.1.50</speakerip><user_identifier>00000000-0000-4000-8000-000000000001</user_identifier><response result="ok"><volume>4</volume></response></UIC>
+
+[*] koniec nasluchu
