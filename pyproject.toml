@@ -16,6 +16,7 @@ dependencies = []
 wambridge = "wambridge.radio_cli:main"
 wambridge-events = "wambridge.event_cli:main"
 wambridge-pcm = "wambridge.pcm_cli:main"
+wambridge-share = "wambridge.share_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

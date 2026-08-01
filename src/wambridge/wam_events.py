@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import socket
+import threading
 from dataclasses import dataclass, field
 from time import monotonic
 from urllib.parse import urlsplit
@@ -196,8 +197,18 @@ def listen_events(
     port: int = DEFAULT_PORT,
     timeout: float = 5.0,
     duration: float = 0.0,
+    stop: threading.Event | None = None,
+    ready: threading.Event | None = None,
 ):
-    """Yield speaker responses and unsolicited events from a persistent socket."""
+    """Yield speaker responses and unsolicited events from a persistent socket.
+
+    ``stop`` lets a caller running this in a background thread end the loop and
+    release the socket without waiting for ``duration`` to elapse.
+
+    ``ready`` is set once the socket is connected and the probe has been sent.
+    A caller that sends commands before that point can miss the very events it
+    is waiting for.
+    """
     parser = WamHttpStreamParser()
     deadline = monotonic() + duration if duration > 0 else None
     with socket.create_connection((speaker_ip, port), timeout=timeout) as listener:
@@ -208,7 +219,11 @@ def listen_events(
             port=port,
             timeout=timeout,
         )
+        if ready is not None:
+            ready.set()
         while deadline is None or monotonic() < deadline:
+            if stop is not None and stop.is_set():
+                return
             try:
                 data = listener.recv(65536)
             except TimeoutError:

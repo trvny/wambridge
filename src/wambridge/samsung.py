@@ -572,3 +572,80 @@ def play_url(
         port=port,
         timeout=timeout,
     )
+
+
+def _require_raw_uuid(value: str, label: str) -> None:
+    """Reject the ``uuid:`` prefix.
+
+    Measured on a physical M5: a prefixed identifier makes the firmware ignore
+    the command completely, with no reply and no error. ``GetDmsList`` entries do
+    use ``uuid:`` in ``dmsid``, but that is a different field.
+    """
+
+    if not value:
+        raise ValueError(f"{label} cannot be empty")
+    if value.startswith("uuid:"):
+        raise ValueError(f"{label} must be a raw UUID, without the uuid: prefix")
+
+
+def register_share_source(
+    speaker_ip: str,
+    client_uuid: str,
+    server_address: str,
+    *,
+    port: int = DEFAULT_PORT,
+    timeout: float = 5.0,
+) -> WamResponse:
+    """Register this client and its media server address with the speaker."""
+
+    _require_raw_uuid(client_uuid, "Client UUID")
+    if ":" not in server_address:
+        raise ValueError("Server address must be host:port")
+    return request(
+        speaker_ip,
+        "SetIpInfo",
+        [("uuid", client_uuid, "str"), ("ip", server_address, "str")],
+        port=port,
+        timeout=timeout,
+    )
+
+
+def play_share(
+    speaker_ip: str,
+    *,
+    device_udn: str,
+    object_id: str,
+    source_name: str = "WAMBridge",
+    playtime: int = 0,
+    port: int = DEFAULT_PORT,
+    timeout: float = 5.0,
+) -> WamResponse:
+    """Start playback of one object offered by this client's media server.
+
+    ``device_udn`` must be the same raw UUID passed to
+    :func:`register_share_source`; the speaker resolves it against that
+    registration to find the server address.
+
+    ``playertype`` and ``source_name`` were measured to have no effect on this
+    path, so no fallback variants are attempted.
+    """
+
+    _require_raw_uuid(device_udn, "device_udn")
+    if not object_id:
+        raise ValueError("Object ID cannot be empty")
+    if playtime < 0:
+        raise ValueError("Playtime cannot be negative")
+    return request(
+        speaker_ip,
+        "SetSharePlaybackControl",
+        [
+            ("playbackcontrol", "play", "str"),
+            ("playertype", "allshare", "str"),
+            ("sourcename", source_name, "cdata"),
+            ("playtime", playtime, "dec"),
+            ("device_udn", device_udn, "str"),
+            ("objectid", object_id, "str"),
+        ],
+        port=port,
+        timeout=timeout,
+    )
