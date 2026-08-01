@@ -1,0 +1,149 @@
+name: Apply PR 21 review fixes
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'fix/foobar-output-clock'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/foobar-output-clock
+          fetch-depth: 0
+
+      - name: Apply focused fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              raw = target.read_bytes()
+              newline = b"\r\n" if b"\r\n" in raw else b"\n"
+              text = raw.replace(b"\r\n", b"\n").decode("utf-8")
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f"expected block missing in {path}")
+              text = text.replace(old, new, 1)
+              target.write_bytes(text.encode("utf-8").replace(b"\n", newline))
+
+          replace_once(
+              "foobar/foo_out_wam.cpp",
+              """        m_flushing = false;
+                  m_drainRequested = false;
+
+                  const audio_sample* input = chunk.get_data();
+          """.replace("              ", ""),
+              """        m_flushing = false;
+                  m_drainRequested = false;
+                  if (m_clockStarted && m_helperReady.load()) {
+                      m_playing.store(true);
+                  }
+
+                  const audio_sample* input = chunk.get_data();
+          """.replace("              ", ""),
+          )
+
+          replace_once(
+              "tests/test_pcm_cli.py",
+              """        self.stream_active = False
+                  self.waited = False
+          """.replace("              ", ""),
+              """        self.stream_active = False
+                  self.startup_complete = False
+                  self.waited = False
+          """.replace("              ", ""),
+          )
+          replace_once(
+              "tests/test_pcm_cli.py",
+              """    def mark_stream_active(self) -> None:
+                      self.stream_active = True
+
+                  def offer_stream(self, stream_url: str) -> None:
+          """.replace("              ", ""),
+              """    def mark_stream_active(self) -> None:
+                      self.stream_active = True
+
+                  def mark_startup_complete(self) -> None:
+                      self.startup_complete = True
+
+                  def offer_stream(self, stream_url: str) -> None:
+          """.replace("              ", ""),
+          )
+          replace_once(
+              "tests/test_pcm_cli.py",
+              """        self.assertTrue(watcher.stream_active)
+                  self.assertFalse(watcher.waited)
+          """.replace("              ", ""),
+              """        self.assertTrue(watcher.stream_active)
+                  self.assertTrue(watcher.startup_complete)
+                  self.assertFalse(watcher.waited)
+          """.replace("              ", ""),
+          )
+
+          replace_once(
+              "tests/test_pcm_error_event.py",
+              """        with self.assertRaisesRegex(
+                      StreamError,
+                      \"did not confirm StartPlaybackEvent\",
+                  ):
+                      watcher.wait_for_start(timeout=0.01)
+
+                  def test_start_event_keeps_shared_connection_available(self) -> None:
+          """.replace("              ", ""),
+              """        with self.assertRaisesRegex(
+                      StreamError,
+                      \"did not confirm StartPlaybackEvent\",
+                  ):
+                      watcher.wait_for_start(timeout=0.01)
+
+                  def test_listener_failure_after_startup_is_diagnostic(self) -> None:
+                      watcher = PlaybackWatcher(\"10.0.0.118\", CLIENT_UUID, port=55001)
+                      watcher.mark_startup_complete()
+
+                      with (
+                          patch(
+                              \"wambridge.pcm_cli.WamEventConnection\",
+                          ) as connection_class,
+                          self.assertLogs(\"wambridge\", level=\"WARNING\") as logs,
+                      ):
+                          connection = connection_class.return_value.__enter__.return_value
+                          connection.events.side_effect = ValueError(\"malformed response\")
+                          watcher._run()
+
+                      watcher.raise_if_failed()
+                      self.assertIn(
+                          \"continuing active PCM stream\",
+                          \"\\n\".join(logs.output),
+                      )
+
+                  def test_start_event_keeps_shared_connection_available(self) -> None:
+          """.replace("              ", ""),
+          )
+          PY
+
+          rm .github/workflows/apply-pr21-review-fixes.yml
+
+      - name: Test
+        shell: bash
+        run: |
+          python -m pip install -e .
+          python -m unittest discover -s tests -q
+
+      - name: Commit
+        shell: bash
+        run: |
+          git config user.name "trvny"
+          git config user.email "120686325+trvny@users.noreply.github.com"
+          git add foobar/foo_out_wam.cpp tests/test_pcm_cli.py tests/test_pcm_error_event.py .github/workflows/apply-pr21-review-fixes.yml
+          git commit -m "Address final output review findings"
+          git push origin HEAD:fix/foobar-output-clock
