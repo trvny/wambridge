@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-07-31.
+Last reviewed: 2026-08-01.
 
 This file is the continuity note for playback work. Read it before opening another branch or reviving an older experiment.
 
@@ -48,20 +48,19 @@ refused both a normal merge and a base change, and the merge had to go through
 
 Branch: `fix/pace-foobar-pcm` (deleted; recoverable from the closed pull request).
 
-Closed on 2026-08-01 after direct measurement showed the approach solves a problem that
-does not exist in a pull-based design.
+Closed on 2026-08-01 after measurement correctly showed that FFmpeg `-re` and HTTP
+throttling are unnecessary, but the conclusion was stated too broadly.
 
-Pushing WAV over HTTP as fast as the socket accepts it converges to real time on its own —
-4.43x, 2.70x, 2.13x, 1.84x, averaging 1.18x — because the speaker's TCP window closes.
-Backpressure is a more accurate clock than FFmpeg `-re` or a timer in C++, and it costs
-nothing. Adding a third pacing layer made the original three-clock conflict worse.
+The speaker's TCP window paces the speaker-facing HTTP stream. It does not pace foobar's
+idea of playback when `foo_out_wam` removes frames from its queue as soon as the helper
+pipe accepts them. A physical test later that day showed the M5 still playing normally
+while foobar's seekbar ran ahead. No full track had been timed before the earlier approach
+was declared solved.
 
-The correct fix is architectural: stop pushing. Serve the audio over HTTP and let the
-speaker pull. See "Transport and pacing" in the protocol notes.
-
-Not re-measured: whether the original garbled or accelerated audio also had a separate
-cause in encoder timestamps. If that symptom returns under a pull design, look there
-first rather than reintroducing pacing.
+The replacement fix belongs in the output adapter: keep pipe-written PCM in the reported
+latency, bound the total queued and in-flight audio, and release capacity from a cumulative
+real-time clock. Keep FFmpeg without `-re`; do not confuse output accounting with a second
+speaker-facing pacing layer.
 
 ### PR #7: finite local MP3 through Samsung DMS
 
@@ -126,7 +125,8 @@ Advantages:
 - simple HTTP source,
 - works with `SetUrlPlayback`,
 - useful for radio and truly live streams,
-- the speaker paces itself through TCP backpressure, so no pacing layer is needed,
+- the speaker paces the HTTP transport through TCP backpressure, so FFmpeg `-re` and
+  socket throttling are unnecessary,
 - one transport serves every source, which keeps the design reusable outside foobar.
 
 Limitations:
@@ -134,8 +134,9 @@ Limitations:
 - no reliable resume,
 - no native finite duration or seek — use the share path when those are wanted.
 
-The earlier note that "encoding and transport pacing can diverge" was a consequence of a
-push design and does not apply once the speaker pulls.
+The speaker pulling does not automatically synchronize a host application's timeline.
+`foo_out_wam` must still account for PCM already written to the helper but not yet heard;
+otherwise foobar decodes and advances its seekbar ahead of the M5.
 
 ### Finite MP3 through a local DMS
 
@@ -161,20 +162,15 @@ compatibility.
 
 ## Next implementation order
 
-1. Fix raw M5 volume handling to `0..30` or add model-aware translation.
-2. Add stable `mobileUUID`, `mobileName` and `mobileVersion` request headers.
-3. Preserve raw error codes, including `errCode` spelling.
-4. Remove the pacing layers from the PCM path: drop FFmpeg `-re` on `pipe:0` and let the
-   speaker's backpressure set the rate.
-5. Serve the output over local HTTP as chunked or close-delimited, never a faked
-   `Content-Length`, and drive it with `SetUrlPlayback`. This is the foundation and it
-   covers radio, files and future host applications alike.
-6. Rework and shrink PR #7 as the optional finite-file layer: raw `device_udn`,
+1. Synchronize `foo_out_wam` with real time: include pipe-written PCM in latency, bound the
+   total backlog and close helper stdin cleanly at end of input.
+2. Verify at least one complete 3–5 minute track against wall-clock duration, then a second
+   track, stop and seek. Startup alone is not acceptance.
+3. Fix raw M5 volume handling to `0..30` or add model-aware translation.
+4. Rework and shrink PR #7 as the optional finite-file layer: raw `device_udn`,
    `/DLNA/<objectid>`, one attempt, no fallback ladder.
-7. Treat `StartPlaybackEvent` as the only success signal; never trust `MusicInfo` or
-   `PlayStatus`.
-8. Verify normal-speed playback, pause, resume, seek, stop and state restoration on the physical M5.
-9. Only then integrate the finite-file layer into the foobar component.
+5. Integrate the finite-file layer into the foobar component only after the streaming
+   output passes the full-track test.
 
 ## Rules for continuing work
 
@@ -183,7 +179,8 @@ compatibility.
 - Do not merge PR #7 without the relevant physical M5 test.
 - Do not reopen AVTransport work without new device evidence.
 - Do not reuse port `3921` or a MediaServer UDN as captured official values.
-- Do not reintroduce a manual pacing layer. Backpressure already does it; see PR #4.
+- Do not reintroduce FFmpeg `-re` or throttle the speaker-facing HTTP stream. Do account
+  for accepted-but-not-heard PCM inside host output adapters.
 - Do not fake `Content-Length`. It behaves worse than sending no length at all.
 - Base new branches on `main`, not on another pull request branch.
 - Keep test volume at raw step `3` or lower until volume translation is fixed.

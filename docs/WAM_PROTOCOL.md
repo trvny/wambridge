@@ -222,7 +222,10 @@ Measured through the share path, verdict taken from `StartPlaybackEvent`:
 
 ## Transport and pacing
 
-The speaker pulls. This removes the need for any manual pacing layer.
+The speaker pulls from the local HTTP server. This removes the need to throttle FFmpeg or
+the HTTP socket, but it does **not** let a host output forget PCM after writing it to a pipe.
+The host still has to count accepted-but-not-yet-heard frames as latency and keep that
+backlog bounded.
 
 Pushing WAV over HTTP as fast as the socket accepts it:
 
@@ -234,13 +237,15 @@ Pushing WAV over HTTP as fast as the socket accepts it:
 average 1.18x
 ```
 
-The TCP window closes and throughput converges to real time. Backpressure is the clock, and
-it is more accurate than FFmpeg `-re` or a timer in C++. Multiple pacing layers are a
-symptom of a **push** design; with a **pull** source the problem does not arise.
+The TCP window closes and HTTP throughput converges toward real time. Backpressure is the
+right clock for the speaker-facing transport and is more accurate than FFmpeg `-re`. The
+measurement did not prove the complete foobar output clock: a host can still decode far
+ahead if it reports pipe writes as already played.
 
-This explains the direction, not every past symptom. Garbled or accelerated audio in the
-PCM path may still have had a separate cause in encoder timestamps; that was not
-re-measured.
+A physical foobar test on 2026-08-01 exposed exactly that split. The M5 continued playing
+normally while foobar's seekbar ran ahead; a later audible speed change was reported, but
+no complete track had yet been timed end to end. Treat successful startup and
+`WAMBRIDGE PLAYING` as insufficient evidence of stable long-run timing.
 
 Endless streams of unknown length are accepted by `SetUrlPlayback`:
 
@@ -267,7 +272,8 @@ design that assumes a finite local file.
 4. serve the audio over local HTTP, chunked or close-delimited, never a faked
    `Content-Length`,
 5. point the speaker at it with `SetUrlPlayback`,
-6. let the speaker pull; add no pacing layer,
+6. let the speaker pull without FFmpeg `-re` or HTTP throttling; host outputs must retain
+   accepted PCM in their latency accounting until a real-time playback clock releases it,
 7. wait for `StartPlaybackEvent`, and treat `MusicInfo` and `PlayStatus` as unreliable,
 8. use `ErrorEvent` for diagnostics.
 
