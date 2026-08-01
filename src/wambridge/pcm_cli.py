@@ -17,7 +17,7 @@ from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import WamApiError, get_volume, probe, set_volume
 from .stream import OUTPUT_PROFILES, StreamError
-from .wam_events import WamEvent, listen_events, send_mobile_command
+from .wam_events import WamEvent, WamEventConnection, WamEventError
 
 LOGGER = logging.getLogger("wambridge")
 DEFAULT_MAX_START_VOLUME = 10
@@ -201,7 +201,7 @@ def _wait_for_stream_event(
 
 
 class PlaybackWatcher:
-    """Wait for the speaker start event that belongs to this playback attempt."""
+    """Send playback and wait for its speaker events on one TCP connection."""
 
     def __init__(self, speaker_ip: str, client_uuid: str, *, port: int) -> None:
         self._speaker_ip = speaker_ip
@@ -213,6 +213,8 @@ class PlaybackWatcher:
         self._stop = threading.Event()
         self._error = ""
         self._thread: threading.Thread | None = None
+        self._connection: WamEventConnection | None = None
+        self._connection_lock = threading.Lock()
 
     def __enter__(self) -> PlaybackWatcher:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -221,6 +223,8 @@ class PlaybackWatcher:
             self._stop.set()
             self._thread.join()
             raise StreamError("Event listener did not become ready")
+        if self._error:
+            raise StreamError(self._error)
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -229,8 +233,28 @@ class PlaybackWatcher:
             self._thread.join()
 
     def arm(self) -> None:
-        """Accept start events only after this attempt is sending its command."""
+        """Accept playback events only after this attempt sends its command."""
         self._armed.set()
+
+    def offer_stream(self, stream_url: str) -> None:
+        """Send SetUrlPlayback through the connection that receives its events."""
+        self._send_command(
+            method="SetUrlPlayback",
+            arguments=[
+                ("url", stream_url, "cdata"),
+                ("buffersize", 0, "dec"),
+                ("seektime", 0, "dec"),
+                ("resume", 0, "dec"),
+            ],
+        )
+
+    def set_volume(self, level: int) -> None:
+        """Set startup volume without opening a competing control socket."""
+        self._send_command(
+            method="SetVolume",
+            arguments=[("volume", level, "dec")],
+            power_on=True,
+        )
 
     def wait_for_start(self, *, timeout: float) -> None:
         deadline = monotonic() + timeout
@@ -242,6 +266,29 @@ class PlaybackWatcher:
             if self._error:
                 raise StreamError(self._error)
         raise StreamError(f"Speaker did not confirm {_SUCCESS_EVENT}")
+
+    def _send_command(
+        self,
+        *,
+        method: str,
+        arguments: list[tuple[str, str | int, str]] | None = None,
+        power_on: bool = False,
+    ) -> None:
+        with self._connection_lock:
+            connection = self._connection
+        if connection is None:
+            raise StreamError("WAM control connection is not ready")
+        try:
+            connection.send(
+                method=method,
+                arguments=arguments,
+                power_on=power_on,
+            )
+        except (OSError, WamEventError) as error:
+            raise WamApiError(
+                f"Cannot reach Samsung WAM at "
+                f"{self._speaker_ip}:{self._port}: {error}"
+            ) from error
 
     def _belongs_to_attempt(self, event: WamEvent) -> bool:
         if (
@@ -255,50 +302,32 @@ class PlaybackWatcher:
 
     def _run(self) -> None:
         try:
-            for event in listen_events(
+            with WamEventConnection(
                 self._speaker_ip,
                 self._client_uuid,
                 port=self._port,
-                stop=self._stop,
-                ready=self._ready,
-            ):
-                if self._belongs_to_attempt(event):
-                    self._started.set()
-                    return
-                if event.method == _FAILURE_EVENT and self._armed.is_set():
-                    code = event.error_code or event.values.get("errCode") or (
-                        event.values.get("errcode", "")
-                    )
-                    self._error = f"Speaker reported {_FAILURE_EVENT} {code}".strip()
-                    return
+            ) as connection:
+                with self._connection_lock:
+                    self._connection = connection
+                self._ready.set()
+                for event in connection.events(stop=self._stop):
+                    if self._belongs_to_attempt(event):
+                        self._started.set()
+                        return
+                    if event.method == _FAILURE_EVENT and self._armed.is_set():
+                        code = event.error_code or event.values.get("errCode") or (
+                            event.values.get("errcode", "")
+                        )
+                        self._error = (
+                            f"Speaker reported {_FAILURE_EVENT} {code}"
+                        ).strip()
+                        return
         except Exception as error:  # noqa: BLE001 - surface listener failure
             self._error = f"Event listener failed: {error}"
-
-
-def _offer_stream(
-    speaker_ip: str,
-    stream_url: str,
-    speaker_port: int,
-    client_uuid: str,
-) -> None:
-    try:
-        send_mobile_command(
-            speaker_ip,
-            client_uuid,
-            method="SetUrlPlayback",
-            arguments=[
-                ("url", stream_url, "cdata"),
-                ("buffersize", 0, "dec"),
-                ("seektime", 0, "dec"),
-                ("resume", 0, "dec"),
-            ],
-            port=speaker_port,
-            timeout=10.0,
-        )
-    except OSError as error:
-        raise WamApiError(
-            f"Cannot reach Samsung WAM at {speaker_ip}:{speaker_port}: {error}"
-        ) from error
+            self._ready.set()
+        finally:
+            with self._connection_lock:
+                self._connection = None
 
 
 def run(
@@ -362,12 +391,7 @@ def run(
         ) as watcher:
             LOGGER.info("Offering %s to %s", stream_url, speaker_ip)
             watcher.arm()
-            _offer_stream(
-                speaker_ip,
-                stream_url,
-                speaker_port,
-                client_uuid,
-            )
+            watcher.offer_stream(stream_url)
             _raise_if_pcm_input_closed(input_stream)
 
             _wait_for_stream_request(
@@ -382,7 +406,7 @@ def run(
                 timeout=args.startup_timeout,
             )
             volume_changed = True
-            set_volume(speaker_ip, start_volume, port=speaker_port)
+            watcher.set_volume(start_volume)
             _raise_if_pcm_input_closed(input_stream)
             print("WAMBRIDGE READY", file=output_stream, flush=True)
 
@@ -391,7 +415,7 @@ def run(
                 "audio_started",
                 timeout=args.startup_timeout,
             )
-            set_volume(speaker_ip, start_volume, port=speaker_port)
+            watcher.set_volume(start_volume)
             watcher.wait_for_start(timeout=args.startup_timeout)
             startup_complete = True
             print(
