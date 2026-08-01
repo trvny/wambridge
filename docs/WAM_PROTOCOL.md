@@ -1,33 +1,32 @@
 # Samsung WAM protocol notes
 
-This document records facts measured on a physical Samsung Shape M5 and keeps them separate from assumptions still awaiting request-side capture.
+Measured facts for a physical Samsung Shape M5. Keep path-specific observations separate:
+what is true for share/DLNA is not automatically true for `SetUrlPlayback` PCM streams.
 
 ## Test device
 
 - model: `SPK-WAM550`
 - firmware: `WAM550WWB-3117.1`
 - protocol version: `2.3`
-- LAN API: TCP `55001`
+- LAN control API: TCP `55001`
+- raw volume range: `0..30`
 
-Primary evidence is preserved in the [physical M5 review](https://github.com/trvny/wambridge/pull/7#issuecomment-5147009977), [desktop application string analysis](https://github.com/trvny/wambridge/pull/7#issuecomment-5147063914) and [captured playback session](https://github.com/trvny/wambridge/pull/7#issuecomment-5147120908).
+Primary evidence is preserved in PR #7, PR #21 and `tools/wam-probes/`.
 
-## Confirmed behavior
+## Current path summary
 
-### Control connection and events
+| Path | What confirms or anchors it | Current state |
+| --- | --- | --- |
+| URL/PCM through `SetUrlPlayback` | `AUDIO_STARTED` anchors bounded host flow; correlated events remain diagnostics | Audible short runs work; full-track timing validation is pending |
+| Share/DLNA through `SetSharePlaybackControl` | `StartPlaybackEvent` | Audible finite-file playback is proven; integration is not active |
+| Generic UPnP AVTransport | none exists on this M5 | Rejected |
 
-The speaker accepts HTTP-like commands over TCP `55001`. A connection left open receives responses and unsolicited state changes caused by other clients.
+`MusicInfo` and `PlayStatus` are not reliable success signals. They have reported `play`
+with no audio and mixed fields from older sessions.
 
-A passive connection observed `VolumeLevel` responses for commands sent through another socket. This means the control layer should use:
+## TCP 55001 and client identity
 
-1. one persistent reader connection,
-2. short-lived writer connections for commands,
-3. a stream parser that handles several HTTP responses without relying on EOF.
-
-A single `urlopen()` per command cannot reliably observe delayed events or methods that return more than one response.
-
-### Client identity headers
-
-Official clients send:
+Official clients send a stable identity:
 
 ```text
 mobileUUID: <stable client UUID>
@@ -35,277 +34,189 @@ mobileName: Wireless Audio
 mobileVersion: 1.0
 ```
 
-Responses contain `user_identifier`. The same client UUID is also used by local playback registration and metadata.
+Responses contain `user_identifier`. Captures show three useful buckets: the client UUID,
+a foreign UUID and the literal `public` for unattributed broadcasts.
 
-The UUID must remain stable for one client profile. Generating unrelated identities for commands, DMS registration and playback breaks the relationship expected by firmware.
+For active PCM playback, one persistent connection must both send commands and read events.
+Opening a second listener or probe while `pcm_cli` owns the control channel can make the M5
+stop answering the player. The standalone `wambridge-events` tool is diagnostic and should
+not be run beside an active PCM session.
 
-### Volume scale
+A command timeout is not proof of failure. The firmware may answer late or emit an unrelated
+event. Match what can be matched; keep unmatched events as diagnostics. A concrete
+`NETWORK_TIMEOUT_ERROR` after the speaker requested the active HTTP stream is meaningful
+because it indicates starvation of that stream.
 
-The tested M5 firmware uses raw API steps `0..30`.
+## URL/PCM playback
 
-Measured behavior:
-
-```text
-SetVolume 31  -> volume 30
-SetVolume 45  -> volume 30
-SetVolume 100 -> volume 30
-```
-
-The firmware silently clamps values above 30 and still returns success. `GetFeature` timed out on this firmware, so the number of steps cannot be discovered through that method.
-
-Until model-aware translation is implemented, treat values as raw M5 steps:
-
-- `3` is approximately 10 percent,
-- `6` is approximately 20 percent,
-- `30` is maximum.
-
-### No AVTransport renderer
-
-The tested M5 does not expose a standard UPnP MediaRenderer or AVTransport service.
-
-Observed open TCP ports were `7676`, `8080` and `55001`. Port `9197` was closed. Enumeration of the UPnP endpoints on `7676` found no `MediaRenderer`, `AVTransport`, `ContentDirectory` or `MediaServer` service.
-
-Do not restart the `foo_out_upnp` or generic AVTransport path for this model unless different firmware provides new evidence.
-
-### Official local playback identity
-
-A captured session from the Samsung Multiroom desktop application reported:
-
-```xml
-<device_udn>b00524c5-87b8-4439-9bb6-010545a40948</device_udn>
-<playertype>myphone</playertype>
-<playbacktype>playlist</playbacktype>
-<sourcename>phone</sourcename>
-<playindex>0</playindex>
-<objectid>21329DC1305BF41B8AD9FCD0A6736302.mp3</objectid>
-```
-
-The same UUID appeared as:
-
-- `mobileUUID`,
-- `user_identifier`,
-- `SetIpInfo` UUID,
-- `MusicInfo.device_udn`.
-
-Therefore `device_udn` is the raw client UUID in this playback flow. It is not the UPnP UDN of the MediaServer and has no `uuid:` prefix.
-
-### DMS address and object IDs
-
-The speaker reported the registered DMS address as:
+The universal path is:
 
 ```text
-10.0.0.103:49200
+foobar PCM -> helper stdin -> FFmpeg -> local HTTP -> SetUrlPlayback -> M5
 ```
 
-The official desktop DMS uses port `49200`.
+The speaker pulls from the local HTTP server. Do not send a remote URL directly:
 
-The played object ID was a flat hash with extension:
+- HTTPS has failed,
+- Ogg has been fetched silently,
+- HLS has wedged the control port.
+
+Proxy all sources through the local server.
+
+### Submode
+
+`SetUrlPlayback` normally switches the tested M5 from `dlna` to `cp`. A measured run stayed
+in `cp` for about 100 seconds while throughput held around 1.00x and audio was confirmed by
+ear. `cp` is not a URL-path fault and must not trigger a power-cycle instruction.
+
+### One encoder per PCM input
+
+Every FFmpeg launched for a stream request inherits the same stdin. The M5 may open a second
+HTTP request while the first is still live.
+
+- Running both encoders splits one PCM stream and produces holes, jumps and leaked processes.
+- Retiring the first encoder kills the stream actually being consumed.
+- The correct behavior is to keep the first active encoder and refuse later requests.
+
+This removed the repeated `NETWORK_TIMEOUT_ERROR` pattern caused by starving the speaker.
+
+### Protocol markers
+
+The helper exposes this progression to the component:
 
 ```text
-21329DC1305BF41B8AD9FCD0A6736302.mp3
+WAMBRIDGE STREAM_REQUESTED
+WAMBRIDGE ENCODER_STARTED
+WAMBRIDGE READY
+WAMBRIDGE AUDIO_STARTED
+WAMBRIDGE PLAYING volume=<raw-step>
 ```
 
-The artwork used the same pattern with `.jpg`. The captured playback metadata had empty `parentid` values. This differs from the experimental numeric `0` and `1` hierarchy used by PR #7.
+`AUDIO_STARTED` means FFmpeg produced bytes and the HTTP response started carrying encoded
+audio. It does not prove that the speaker is audible. `PLAYING` on the URL/PCM path means the
+helper has a live stream and its bounded host clock may progress; it is not a renamed
+`StartPlaybackEvent`.
 
-### Queue playback and state transitions
+Repeated physical runs were audibly playing after `AUDIO_STARTED` but did not emit a
+matching `StartPlaybackEvent` before the former 45-second timeout. Therefore URL/PCM must
+not block or abort on that event. Keep the listener active, log a correlated event when it
+appears and still surface real asynchronous failures.
 
-The session emitted:
+## Speaker transport versus host output clock
 
-```text
-DMSAddedEvent
-IpInfo
-MediaBufferStartEvent
-MediaBufferEndEvent
-MusicInfo
-AddSongsToMultiQueueResult
-MultiQueueList
-StartPlaybackEvent
-MusicPlayTime
-```
+These are separate clocks.
 
-Important meanings:
+### Speaker-facing transport
 
-- `DMSAddedEvent` confirms that the speaker registered the DMS.
-- `StartPlaybackEvent` confirms that playback actually started.
-- `MusicPlayTime` exposes the current position and total length.
-- captured `MusicInfo` reported `seek=enable` and `pause=enable`.
+The M5 closes its TCP receive window as its buffer fills. HTTP throughput converges toward
+real time without FFmpeg `-re` or manual socket throttling. A control run showed an initial
+burst, then stable throughput near 1.00x after roughly 25 seconds.
 
-HTTP contact with the DMS is useful diagnostics, but it is not the final success condition.
+The often-quoted `+21..23 s` value was measured from process start and includes discovery,
+URL handoff and helper startup. It is only an upper bound, not a measured speaker buffer and
+not a latency target.
 
-### DMS implementation clues
+### Foobar-facing accounting
 
-The Samsung desktop package contains native `DMS.dll`. Its observed server identifies with old `pupnp/libupnp` behavior. The current Python DMS already matches several useful DLNA details, including finite content length, range support and MP3 protocol information.
+Writing PCM to the helper pipe does not mean it has been heard. The output adapter must
+retain all of these in latency and capacity accounting:
 
-The official DMS appeared to restrict requests to the speaker address. That is not required for initial compatibility, but it explains why manual browser requests may receive different status codes than the speaker.
+- PCM still in the C++ queue,
+- the current pipe write,
+- PCM submitted to the helper but not released by the host playback clock.
 
-## Confirmed wrong assumptions in PR #7
+Two physical failures identified the required algorithm:
 
-The following values were useful experiments but are not faithful to the captured official session:
+1. Waiting for `StartPlaybackEvent` before releasing capacity filled the minimum four-second
+   output capacity and froze foobar after exactly four seconds, while the M5 path could
+   otherwise play.
+2. Starting at `AUDIO_STARTED` but resetting the clock anchor to `now` whenever wall time
+   caught submitted PCM made the anchor follow pipe-write speed. Foobar advanced at about
+   94x and immediately opened later tracks.
 
-| Experimental assumption | Captured behavior |
-| --- | --- |
-| DMS port `3921` | DMS port `49200` |
-| `device_udn` is the MediaServer UDN | `device_udn` is the client UUID |
-| `uuid:<server UUID>` | raw client UUID |
-| numeric object ID `1` | flat `<hash>.mp3` |
-| success inferred from DMS HTTP contact | success reported by `DMSAddedEvent` and `StartPlaybackEvent` |
-| object served from the server root | speaker requests `/DLNA/<objectid>` |
+The correction is one cumulative monotonic anchor at `AUDIO_STARTED`, shifted only by pause.
+Compute a real-time target from that fixed anchor and set played frames to
+`min(target, submitted)`. Never move the anchor because submitted PCM temporarily ran out.
 
-Two earlier entries in this table were themselves wrong and have been removed after direct
-measurement (see below):
+No complete 3-5 minute foobar track has yet passed this corrected algorithm on hardware.
+That physical run remains the release gate.
 
-- `playertype` and `sourcename` were listed as needing `myphone` / `phone`. Measured: they
-  make **no difference** to this path. `myphone` and `allshare` behave identically.
-- the single-file share command was listed as not being the final path because the captured
-  session used a multi-queue. Measured: `SetSharePlaybackControl` **works** on this firmware.
-  The official application simply chooses the queue path instead.
+## Share/DLNA finite-file playback
 
-The browse experiment remains valuable because the physical M5 fetched `description.xml`, service descriptions and executed `ContentDirectory.Browse`. It proved that the network path and basic Python MediaServer were reachable.
+`SetSharePlaybackControl` reaches audible playback when both of these are correct:
 
-## Request-side facts still missing
+1. `device_udn` is the raw registered client UUID, without a `uuid:` prefix.
+2. The object is served at `/DLNA/<objectid>`.
 
-The passive listener observes speaker responses, not the exact requests sent by the desktop application. The following remain inferred from binary format strings and response names:
+Measured values and behavior:
 
-- whether `SetDms` is required before queue construction,
-- the exact argument list and order for `AddSongsToMultiQueue`,
-- which `SetMultiPlaybackControl` variant starts the queue,
-- whether the firmware requires `playbackcontol` or `playbackcontrol` for each variant,
-- the complete startup timing between registration, queue insertion and play.
+- official DMS port: `49200`,
+- object IDs: flat `<hash>.<extension>`,
+- successful sequence: `MediaBufferStartEvent` -> `MediaBufferEndEvent` ->
+  `StartPlaybackEvent`,
+- `MusicPlayTime` exposes position and total length,
+- `playertype` and `sourcename` did not change the result,
+- a single-file share command works; the official app's multi-queue is not mandatory.
 
-Desktop binary strings show separate command families for `mypc`, `myphone` and `allshare`. Library browsing may use `mypc` while active playback reports `myphone`. Do not collapse these names into one global constant.
+The old assumptions `3921`, MediaServer UDN as `device_udn`, numeric object `1`, root-path
+serving and HTTP contact as success are all invalid.
 
-## Share playback: measured working configuration
+### Formats measured through share playback
 
-`SetSharePlaybackControl` reaches audible playback on the physical M5. Verified with a
-control experiment that separates network faults from protocol faults, and confirmed by
-ear. Two independent bugs were stacked; fixing only one produces no observable change.
-
-| Variant | Speaker replied | HTTP fetches | Result |
-| --- | --- | --- | --- |
-| control: `SetUrlPlayback` | yes | 1 | proves the network path is open |
-| `device_udn` = raw UUID | yes | 5 retries | `ErrorEvent errCode=URL_OPEN_FAIL` |
-| `device_udn` = `uuid:` + UUID | **no reply at all** | 0 | silently ignored |
-| raw UUID **and** `/DLNA/` path | yes | 1 | `StartPlaybackEvent`, audio |
-
-1. **`device_udn` must be the raw registered UUID.** The `uuid:` prefix makes the firmware
-   ignore the command entirely — no reply, no error, no fetch. This is the "no contact"
-   symptom. The field resolves against the `SetIpInfo` registration, so it must match the
-   `uuid` sent there, which `set_ip_info_apk` already requires to be raw.
-2. **The object must be served at `/DLNA/<objectid>`.** Serving from the root returns 404,
-   the speaker retries five times and reports `URL_OPEN_FAIL`.
-
-`GetDmsList` entries do carry a `uuid:` prefix in `dmsid`. That is a different field and is
-the likely origin of the wrong assumption.
-
-Successful playback emits `MediaBufferStartEvent` → `MediaBufferEndEvent` →
-`StartPlaybackEvent`. `MusicInfo` and `PlayStatus` are **not** trustworthy: after a probe
-they returned `playstatus=play` with nothing playing, and mixed fields from the current
-command with `device_udn` and `objectid` left over from an earlier session.
-
-## Formats
-
-Measured through the share path, verdict taken from `StartPlaybackEvent`:
-
-| Format | Result | HTTP requests |
+| Format | Result | Requests |
 | --- | --- | --- |
 | MP3 44.1/16 | plays | 1 |
 | WAV 44.1/16 PCM | plays | 1 |
 | FLAC 44.1/16 | plays | 1 |
 | FLAC 96/24 | plays | 1 |
-| AAC in MP4 (`.m4a`) | plays | 3 |
-| Opus 48k | `ErrorEvent` after 5 retries | 5 |
+| AAC in MP4 (`.m4a`) | plays | 3 with Range |
+| Opus 48k | fails after retries | 5 |
 
-- FLAC needs no transcoding, including high resolution.
-- `Range` support is mandatory for MP4: the speaker issues three requests (`0-`,
-  `<end>-`, `44-`) while locating the `moov` atom.
-- The player identifies as `Lavf52.104.0`, so format support follows libavformat.
+MP4 requires Range support. FLAC does not require transcoding, including the measured
+96/24 file.
 
-## Transport and pacing
+## Streams and lengths
 
-The speaker pulls from the local HTTP server. This removes the need to throttle FFmpeg or
-the HTTP socket, but it does **not** let a host output forget PCM after writing it to a pipe.
-The host still has to count accepted-but-not-yet-heard frames as latency and keep that
-backlog bounded.
+`SetUrlPlayback` accepts endless streams with no known duration:
 
-Pushing WAV over HTTP as fast as the socket accepts it:
-
-```text
-+4s   4.43x realtime   <- initial buffer fill
-+8s   2.70x
-+12s  2.13x
-+16s  1.84x
-+average 1.18x
-```
-
-The TCP window closes and HTTP throughput converges toward real time. Backpressure is the
-right clock for the speaker-facing transport and is more accurate than FFmpeg `-re`.
-A 100-second unanchored control run through `ffmpeg | pcm_cli` showed an initial burst of
-about 6.4x and stable throughput around 1.00x after roughly 25 seconds. Its apparent
-`+23 s` reserve included discovery, URL handoff and helper startup, so it is only an upper
-bound, not a measured speaker cushion and not a target for `get_latency()`.
-
-A physical foobar run of `90d8193` proved two separate failures. Starting capacity release
-only on `StartPlaybackEvent` starved the M5 after exactly four seconds. Starting it on
-`audio_started` removed that starvation, but resetting the clock anchor to `now` whenever
-wall time caught submitted PCM let foobar decode at about 94x. The clock anchor must be set
-once at `audio_started` and remain cumulative, apart from pause adjustment. Played frames
-are `min(realtime target, submitted frames)`; the anchor must never follow pipe-write speed.
-
-The same physical runs were audibly playing after `audio_started` but emitted no matching
-`StartPlaybackEvent` before the 45-second helper timeout. Therefore URL/PCM playback must
-not block or abort on that event. Keep the listener and correlate events when they appear,
-but use the bounded fixed-anchor clock for flow control. This does not redefine
-`audio_started` as proof of audible playback; it is the earliest measured transport anchor
-that does not deadlock this firmware path.
-
-Endless streams of unknown length are accepted by `SetUrlPlayback`:
-
-| Response shape | Result |
+| HTTP response | Result |
 | --- | --- |
-| `Transfer-Encoding: chunked` | streams cleanly, one connection |
-| no `Content-Length`, `Connection: close` | streams cleanly, one connection |
-| MP3 with no length, radio style | streams cleanly, one connection |
-| oversized fake `Content-Length` | **worst** — four connections, three aborted |
+| chunked | clean, one connection |
+| no `Content-Length`, connection close | clean, one connection |
+| radio-style MP3 | clean, one connection |
+| oversized fake `Content-Length` | worst case: retries and aborted connections |
 
-Do not fake `Content-Length`. Chunked or close-delimited is cleaner.
+Never fake a length. Use chunked or close-delimited output.
 
-## Target architecture
+## Volume
 
-The product goal is a foobar2000 output plugin that carries whatever foobar plays, including
-internet radio, and stays reusable for other host applications later. That rules out any
-design that assumes a finite local file.
+The tested firmware uses raw steps `0..30`. Values above 30 are silently clamped to maximum
+while still returning success. Until model-aware conversion exists:
 
-**Foundation — works for every source:**
+- `3` is approximately 10 percent,
+- `6` is approximately 20 percent,
+- `30` is maximum.
 
-1. create or load one stable client UUID,
-2. open one persistent TCP `55001` connection for commands and events,
-3. send all commands with official mobile headers,
-4. serve the audio over local HTTP, chunked or close-delimited, never a faked
-   `Content-Length`,
-5. point the speaker at it with `SetUrlPlayback`,
-6. let the speaker pull without FFmpeg `-re` or HTTP throttling; host outputs must retain
-   accepted PCM in their latency accounting until a fixed cumulative real-time clock
-   releases it,
-7. start that bounded transport clock when encoded audio reaches the HTTP response; do not
-   hard-gate URL/PCM on `StartPlaybackEvent`,
-8. use unmatched events for diagnostics only, not as command-correlated failures.
+Start hardware tests at step `3` or lower.
 
-**Optional layer — finite local files only**, when seek, pause and duration are wanted:
+## No AVTransport renderer
 
-1. serve the object at `/DLNA/<objectid>` on port `49200`,
-2. register the client UUID through `SetIpInfo`,
-3. send `SetSharePlaybackControl` with `device_udn` set to that same raw UUID,
-4. wait for `MediaBufferStartEvent` → `StartPlaybackEvent`.
+The tested M5 exposes no standard UPnP MediaRenderer or AVTransport service. Ports `7676`,
+`8080` and `55001` were open; `9197` was closed. Do not restart generic `foo_out_upnp` work
+without evidence from different firmware.
 
-A single attempt is enough once both values are correct. The three-attempt strategy in
-PR #7 exists only because the working form was unknown, and should be removed rather than
-kept as a fallback.
+## Still unknown
 
-The response parser must preserve raw error fields including both `errcode` and `errCode` spellings.
+- Exact official multi-queue request bodies and timing.
+- Whether `cp` blocks the share/DLNA path.
+- A reliable URL/PCM speaker event that always corresponds to audible start.
+- Full-track drift, pause/resume and transition behavior of the fixed-anchor foobar build.
 
-## Safety
+## Safety and acceptance
 
-- Keep TCP `55001` and local DMS ports inside the trusted LAN.
-- Start physical tests at volume step `3` or lower.
-- Do not interpret an `ok` command response as proof that audio started.
-- Keep PR #7 unmerged until normal-speed playback, pause, seek and cleanup are verified on the physical M5.
+- Keep control and HTTP/DMS ports inside the trusted LAN.
+- Do not treat an `ok` response as audible playback.
+- Do not run competing control probes during PCM playback.
+- A transport candidate is accepted only after a complete 3-5 minute track at wall-clock
+  speed, stable seekbar, second track, pause/resume, stop/change and clean helper/FFmpeg
+  shutdown on the physical M5.
