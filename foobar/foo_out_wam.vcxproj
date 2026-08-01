@@ -75,6 +75,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="foo_out_wam.cpp" />
+    <ClCompile Include="wam_menu.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="$(FoobarSdkRoot)\pfc\pfc.vcxproj">
