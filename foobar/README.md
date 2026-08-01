@@ -1,30 +1,34 @@
 ![foobar2000](https://img.shields.io/badge/foobar2000-000?logo=foobar2000&logoColor=fff&style=for-the-badge) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?logo=cplusplus&logoColor=fff&style=for-the-badge)
-# Foobar2000 output ![foobar2000](https://icons.duckduckgo.com/ip3/foobar2000.org.ico)
+# Foobar2000 output
 
-`foo_out_wam` exposes `Samsung M5 (Wi-Fi)` as a foobar2000 2.x x64 output.
-It sends foobar's decoded PCM to the bundled `wambridge-pcm.exe`, which encodes
-FLAC and offers it to the speaker through the local HTTP bridge.
+`foo_out_wam` exposes `Samsung M5 (Wi-Fi)` as a foobar2000 2.x x64 output. It sends
+foobar's decoded `f32le` PCM to the bundled helper, encodes FLAC and offers the stream to
+the M5 through local HTTP and `SetUrlPlayback`.
 
-This output remains experimental. A physical M5 starts playback, but longer
-tracks have become accelerated or garbled after several seconds. PR #2 isolates
-helper handles, while stacked PR #4 experiments with PCM pacing. Neither should
-be merged before a fresh physical test.
-
-Finite local-file playback through Samsung's DMS and queue protocol is being
-researched separately in PR #7. See
-[`../docs/DEVELOPMENT_STATUS.md`](../docs/DEVELOPMENT_STATUS.md) and
-[`../docs/WAM_PROTOCOL.md`](../docs/WAM_PROTOCOL.md) before continuing output
-work.
+The component produces audible output on the physical M5 but remains experimental. The
+fixed-anchor PR #21 candidate still requires a complete normal-speed track and transition
+check before merge.
 
 ## Requirements
 
 - foobar2000 2.x x64
-- FFmpeg available in `PATH`
-- a saved speaker profile, for example `M5`
+- a saved WAM device profile, normally `M5`
+- speaker and PC in the same LAN
 
-The component uses the foobar2000 SDK dated `2025-03-07` and implements the
-stable `output_v6` API. Network and process work runs outside foobar's playback
-thread.
+FFmpeg is bundled inside the component helper artifact; a source checkout and Python virtual
+environment are not required after installation.
+
+## Install a development build
+
+Download `foo_out_wam-x64` from a successful Build workflow, extract it and open
+`foo_out_wam.fb2k-component` with foobar2000. Then select:
+
+```text
+Preferences -> Playback -> Output -> Samsung M5 (Wi-Fi)
+```
+
+Prefer an artifact whose name or accompanying workflow identifies the tested commit SHA.
+ZIP member timestamps are UTC; installed Windows timestamps on the test machine are UTC+2.
 
 ## Configure
 
@@ -36,80 +40,89 @@ device=M5
 volume=3
 ```
 
-The tested Shape M5 firmware uses raw API volume steps `0..30`; `3` is roughly
-10 percent. Values above 30 are silently clamped to maximum. Model-aware
-percentage conversion is not implemented yet.
+The M5 uses raw volume steps `0..30`; `3` is roughly 10 percent. Values above 30 are
+silently clamped to maximum. Model-aware percentage conversion is not implemented.
 
-The component ships its own `wambridge-pcm.exe`; a source checkout and Python
-virtual environment are not needed after installation. `device` defaults to
-`M5`, and `volume` may be omitted to preserve the speaker's current level under
-the helper's safety ceiling. An explicit `helper` path remains available for
-development builds.
-
-The equivalent environment overrides are `WAMBRIDGE_PCM`, `WAMBRIDGE_DEVICE`
-and `WAMBRIDGE_VOLUME`.
-
-## Install a development build
-
-Open the latest successful
-[`Build`](https://github.com/trvny/wambridge/actions/workflows/build.yml)
-workflow run and download the `foo_out_wam-x64` artifact. Extract it, open
-`foo_out_wam.fb2k-component` with foobar2000 and then select:
+Environment overrides:
 
 ```text
-Preferences → Playback → Output → Samsung M5 (Wi-Fi)
+WAMBRIDGE_PCM
+WAMBRIDGE_CONTROL
+WAMBRIDGE_DEVICE
+WAMBRIDGE_VOLUME
 ```
 
-The current component sends FLAC to the M5. Foobar's volume slider applies
-software gain to PCM; the physical speaker level remains managed by WAM Bridge.
+## WAM controls
 
-## Current behavior
+The installed component adds:
 
-- PCM is queued in memory and consumed by FFmpeg.
-- Foobar volume and mute are applied when queued PCM is sent to the helper.
-- Pausing keeps the active FLAC session alive with silence and retains queued
-  audio for resume.
-- Seeking and stopping restart the helper and FFmpeg so pre-flush PCM cannot
-  leak into the next position.
-- Cancelling startup closes the PCM pipe and lets the helper restore volume.
-- Only helper protocol pipes should be inherited by the child process after
-  PR #2.
-- A PCM format change starts a fresh WAM session.
-- Closing foobar stops the temporary local stream.
-- A helper crash invalidates the output and is reported in the foobar console.
+```text
+Playback -> WAM Bridge -> Emergency stop
+Playback -> WAM Bridge -> Standby
+Playback -> WAM Bridge -> Volume up
+Playback -> WAM Bridge -> Volume down
+Playback -> WAM Bridge -> Volume to safe level
+```
 
-## Known timing problem
+Commands run through a serialized bundled control helper and report completion or errors in
+the foobar console.
 
-`pcm_stream.py` currently passes FFmpeg `-re` for a `pipe:0` source. Foobar
-already supplies PCM according to its playback clock, and PR #4 adds another
-pacing layer in C++. Multiple clocks may create drift or underruns.
+## Current output behavior
 
-Before adding another queue or sleep, test a single timing authority and verify
-that a track longer than three minutes remains at normal speed.
+- One helper session owns one PCM stream.
+- The first speaker HTTP request owns FFmpeg; duplicate requests are refused.
+- PCM queued locally, in the pipe write and submitted to the helper is included in output
+  capacity and latency on PR #21.
+- Pause keeps the stream alive with paced silence and shifts the host clock anchor.
+- Seek, stop and format change restart the helper so stale PCM cannot enter the next stream.
+- Helper logs and protocol errors are mirrored to the foobar console.
+- A helper crash invalidates the output instead of silently respawning forever.
+
+## Timing findings
+
+The speaker-facing HTTP stream needs no FFmpeg `-re`: TCP backpressure converges toward
+real time.
+
+Foobar's position is separate. Two measured failures were:
+
+- a hard `StartPlaybackEvent` gate filled the four-second capacity and froze the seekbar,
+- resetting the real-time anchor to each pipe-write catch-up let foobar advance at about
+  94x and open later tracks immediately.
+
+The current candidate starts one cumulative clock at `WAMBRIDGE AUDIO_STARTED`, shifts it
+only for pause and caps played frames by submitted frames. URL/PCM does not abort because a
+matching `StartPlaybackEvent` is absent; the event listener remains active for diagnostics.
+
+`AUDIO_STARTED` is a transport anchor, not proof of audible sound. Hardware acceptance is
+still required.
+
+## Expected helper markers
+
+```text
+WAMBRIDGE STREAM_REQUESTED
+WAMBRIDGE ENCODER_STARTED
+WAMBRIDGE READY
+WAMBRIDGE AUDIO_STARTED
+WAMBRIDGE PLAYING volume=3
+```
 
 ## Physical M5 checklist
 
-Before merging an output candidate, verify:
+Before merging an output candidate:
 
-1. Start at raw speaker volume step `3` or lower.
-2. A track longer than three minutes stays in real time.
-3. Stop and seek work during startup and normal playback.
-4. Pause and resume do not replay stale buffered audio.
-5. Foobar volume and mute behave normally.
-6. Cancelling startup restores the previous speaker volume.
-7. Closing foobar leaves no orphan helper process.
+1. Start at raw volume step `3` or lower.
+2. Play one complete 3-5 minute track at wall-clock speed.
+3. Keep the seekbar aligned with audible playback.
+4. Play a second same-format track without instant skip or stale audio.
+5. Test early and normal pause/resume.
+6. Test stop, seek and track change.
+7. Confirm no extra FFmpeg/helper processes or abandoned speaker sockets remain.
+8. Confirm errors are visible in the foobar console.
 
 ## Manual helper test
 
-<!-- markdownlint-disable MD013 -->
 ```powershell
 cmd /d /c "ffmpeg -hide_banner -loglevel error -i C:\Music\test.opus -f f32le -acodec pcm_f32le -ar 48000 -ac 2 - | wambridge-pcm --device M5 --sample-rate 48000 --channels 2 --sample-format f32le --format flac --volume 3"
 ```
-<!-- markdownlint-enable MD013 -->
 
-Expected protocol markers:
-
-```text
-WAMBRIDGE READY
-WAMBRIDGE PLAYING volume=3
-```
+Do not run a separate `wambridge-events` or `wamtap` listener during this test.

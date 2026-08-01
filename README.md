@@ -9,9 +9,10 @@
 Windows-first bridge for streaming audio over Wi-Fi to Samsung Wireless Audio
 Multiroom speakers, including Shape M5 (`WAM550`/`WAM551`).
 
-The current stable path serves a short-lived tokenized stream in the LAN and
-starts it through Samsung's local `SetUrlPlayback` API. Finite local-file
-playback through Samsung's DMS and queue protocol is under active research.
+The stable CLI path serves a tokenized local stream and starts it through
+Samsung's `SetUrlPlayback` API. The foobar output is experimental while its
+fixed-anchor clock is validated on a physical M5. Finite share/DLNA playback is
+protocol-proven but not integrated.
 
 ## Status
 
@@ -19,12 +20,15 @@ This repository is the source of truth after migration from `trvny/trvny`.
 
 - CLI discovery, saved devices, playback controls, custom radio stations and
   native TuneIn presets are implemented.
-- GitHub Actions builds a bundled helper and foobar2000 2.x x64 component.
-- The foobar output remains experimental. Long PCM sessions have shown timing
-  instability on a physical M5 and must not be treated as release-ready.
-- PR #2 covers helper handle isolation, PR #4 covers PCM pacing and PR #7
-  researches finite local MP3 playback through a Samsung-compatible DMS.
-- None of PR #2, #4 or #7 should be merged without its physical M5 test.
+- GitHub Actions builds bundled helpers and the foobar2000 2.x x64 component.
+- `Playback → WAM Bridge` provides emergency stop, standby and raw physical
+  volume actions.
+- The physical M5 produces audible output from foobar's `f32le → FLAC` path.
+- PR #21 fixes host latency and capacity accounting. It remains unmerged until
+  a complete 3–5 minute track, stable seekbar, transitions and cleanup pass on
+  hardware.
+- Helper isolation PR #2 is merged. Manual pacing PR #4 and the large share
+  experiment PR #7 are closed; their measured conclusions remain documented.
 
 Current architecture, failed approaches and continuation notes are in
 [`docs/DEVELOPMENT_STATUS.md`](docs/DEVELOPMENT_STATUS.md). Measured protocol
