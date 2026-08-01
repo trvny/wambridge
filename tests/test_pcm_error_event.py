@@ -87,6 +87,7 @@ class PlaybackWatcherErrorTests(TestCase):
             method="StartPlaybackEvent",
             result="ok",
             user_identifier=CLIENT_UUID,
+            error_code=None,
         )
 
         with patch(
