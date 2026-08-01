@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import threading
 from pathlib import Path
 from time import monotonic
 from typing import BinaryIO, TextIO
@@ -16,11 +17,14 @@ from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import WamApiError, get_volume, probe, set_volume
 from .stream import OUTPUT_PROFILES, StreamError
-from .wam_events import send_mobile_command
+from .wam_events import WamEvent, listen_events, send_mobile_command
 
 LOGGER = logging.getLogger("wambridge")
 DEFAULT_MAX_START_VOLUME = 10
 _BROKEN_PIPE_ERRORS = {109, 233}
+_SUCCESS_EVENT = "StartPlaybackEvent"
+_FAILURE_EVENT = "ErrorEvent"
+_PUBLIC_IDENTIFIER = "public"
 
 
 def sample_rate(value: str) -> int:
@@ -196,6 +200,84 @@ def _wait_for_stream_event(
     raise StreamError(f"Timed out waiting for {event_name}")
 
 
+class PlaybackWatcher:
+    """Wait for the speaker event that belongs to the active playback attempt."""
+
+    def __init__(self, speaker_ip: str, client_uuid: str, *, port: int) -> None:
+        self._speaker_ip = speaker_ip
+        self._client_uuid = client_uuid.casefold()
+        self._port = port
+        self._armed = threading.Event()
+        self._started = threading.Event()
+        self._failed = threading.Event()
+        self._ready = threading.Event()
+        self._stop = threading.Event()
+        self._error = ""
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> PlaybackWatcher:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        if not self._ready.wait(timeout=10.0):
+            self._stop.set()
+            self._thread.join()
+            raise StreamError("Event listener did not become ready")
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+
+    def arm(self) -> None:
+        """Accept events only after this attempt is about to send its command."""
+        self._armed.set()
+
+    def wait_for_start(self, *, timeout: float) -> None:
+        deadline = monotonic() + timeout
+        while monotonic() < deadline:
+            if self._started.wait(
+                timeout=min(0.1, max(0.0, deadline - monotonic()))
+            ):
+                return
+            if self._failed.is_set():
+                raise StreamError(
+                    self._error or "Speaker playback event listener failed"
+                )
+        raise StreamError(f"Speaker did not confirm {_SUCCESS_EVENT}")
+
+    def _belongs_to_attempt(self, event: WamEvent) -> bool:
+        if not self._armed.is_set() or not event.user_identifier:
+            return False
+        identifier = event.user_identifier.casefold()
+        return identifier in {self._client_uuid, _PUBLIC_IDENTIFIER}
+
+    def _run(self) -> None:
+        try:
+            for event in listen_events(
+                self._speaker_ip,
+                self._client_uuid,
+                port=self._port,
+                stop=self._stop,
+                ready=self._ready,
+            ):
+                if not self._belongs_to_attempt(event):
+                    continue
+                if event.method == _SUCCESS_EVENT:
+                    self._started.set()
+                    return
+                if event.method == _FAILURE_EVENT:
+                    code = event.error_code or event.values.get("errCode") or (
+                        event.values.get("errcode", "")
+                    )
+                    self._error = f"Speaker reported {_FAILURE_EVENT} {code}".strip()
+                    self._failed.set()
+                    return
+        except Exception as error:  # noqa: BLE001 - surface listener failure
+            self._error = f"Event listener failed: {error}"
+            self._failed.set()
+
+
 def _offer_stream(
     speaker_ip: str,
     stream_url: str,
@@ -276,46 +358,53 @@ def run(
 
         server.start()
         stream_url = server.url(host_ip)
-        LOGGER.info("Offering %s to %s", stream_url, speaker_ip)
-        _offer_stream(
+        with PlaybackWatcher(
             speaker_ip,
-            stream_url,
-            speaker_port,
             client_uuid,
-        )
-        _raise_if_pcm_input_closed(input_stream)
+            port=speaker_port,
+        ) as watcher:
+            LOGGER.info("Offering %s to %s", stream_url, speaker_ip)
+            watcher.arm()
+            _offer_stream(
+                speaker_ip,
+                stream_url,
+                speaker_port,
+                client_uuid,
+            )
+            _raise_if_pcm_input_closed(input_stream)
 
-        _wait_for_stream_request(
-            server,
-            input_stream,
-            timeout=args.startup_timeout,
-        )
-        server.release_audio()
-        _wait_for_stream_event(
-            server,
-            "encoder_started",
-            timeout=args.startup_timeout,
-        )
-        volume_changed = True
-        set_volume(speaker_ip, start_volume, port=speaker_port)
-        _raise_if_pcm_input_closed(input_stream)
-        print("WAMBRIDGE READY", file=output_stream, flush=True)
+            _wait_for_stream_request(
+                server,
+                input_stream,
+                timeout=args.startup_timeout,
+            )
+            server.release_audio()
+            _wait_for_stream_event(
+                server,
+                "encoder_started",
+                timeout=args.startup_timeout,
+            )
+            volume_changed = True
+            set_volume(speaker_ip, start_volume, port=speaker_port)
+            _raise_if_pcm_input_closed(input_stream)
+            print("WAMBRIDGE READY", file=output_stream, flush=True)
 
-        _wait_for_stream_event(
-            server,
-            "audio_started",
-            timeout=args.startup_timeout,
-        )
-        set_volume(speaker_ip, start_volume, port=speaker_port)
-        startup_complete = True
-        print(
-            f"WAMBRIDGE PLAYING volume={start_volume}",
-            file=output_stream,
-            flush=True,
-        )
+            _wait_for_stream_event(
+                server,
+                "audio_started",
+                timeout=args.startup_timeout,
+            )
+            set_volume(speaker_ip, start_volume, port=speaker_port)
+            watcher.wait_for_start(timeout=args.startup_timeout)
+            startup_complete = True
+            print(
+                f"WAMBRIDGE PLAYING volume={start_volume}",
+                file=output_stream,
+                flush=True,
+            )
 
-        while not server.request_finished.wait(timeout=1):
-            pass
+            while not server.request_finished.wait(timeout=1):
+                pass
         if server.error:
             raise StreamError(server.error)
         return 0
