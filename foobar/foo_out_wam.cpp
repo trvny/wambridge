@@ -257,6 +257,8 @@ public:
         const size_t takenFrames = std::min<size_t>(freeFrames, chunk.get_sample_count());
         if (takenFrames == 0) return 0;
         m_flushing = false;
+        m_drainRequested = false;
+        if (m_clockStarted) m_playing.store(true);
 
         const audio_sample* input = chunk.get_data();
         const size_t values = takenFrames * channels;
@@ -327,7 +329,8 @@ public:
     void force_play() override {
         {
             std::lock_guard lock(m_mutex);
-            m_endOfInput = true;
+            m_drainRequested = true;
+            finish_playback_clock_if_drained_locked();
         }
         m_cv.notify_all();
     }
@@ -383,8 +386,7 @@ private:
         m_clockAnchor = {};
         m_pauseStarted = {};
         m_clockStarted = false;
-        m_endOfInput = false;
-        m_inputClosed = false;
+        m_drainRequested = false;
         m_childExited = false;
     }
 
@@ -433,7 +435,8 @@ private:
     }
 
     void finish_playback_clock_if_drained_locked() {
-        if (m_endOfInput && m_inputClosed && buffered_frames_locked() == 0) {
+        if (m_drainRequested && buffered_frames_locked() == 0) {
+            m_drainRequested = false;
             m_playing.store(false);
         }
     }
@@ -711,6 +714,9 @@ private:
                 auto line = pending.substr(0, newline);
                 pending.erase(0, newline + 1);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (!line.empty()) {
+                    console::printf("%s: %s", kComponentName, line.c_str());
+                }
                 if (line == "WAMBRIDGE READY") {
                     set_protocol_state_if_current(generation, true, false);
                 } else if (line.rfind("WAMBRIDGE PLAYING", 0) == 0) {
@@ -723,9 +729,7 @@ private:
         bool expected = false;
         {
             std::lock_guard lock(m_mutex);
-            expected = m_shutdown || m_restart ||
-                (m_inputClosed && m_childReachedPlaying.load()) ||
-                m_childStopping.load();
+            expected = m_shutdown || m_restart || m_childStopping.load();
         }
         if (!expected) {
             set_failure_if_current(
@@ -758,8 +762,6 @@ private:
                             m_restart || m_flushing ||
                             (m_sampleRate != 0 && m_channels != 0 && (
                                 !m_queue.empty() || m_childExited ||
-                                (m_endOfInput && m_playing.load() &&
-                                    !m_inputClosed) ||
                                 (m_paused.load() && m_helperReady.load())
                             ))
                         ));
@@ -783,22 +785,11 @@ private:
             }
             const auto childState = child_state();
             if (childState == ChildState::exited) {
-                bool expected = false;
-                {
-                    std::lock_guard lock(m_mutex);
-                    expected = m_inputClosed && m_childExited &&
-                        m_childReachedPlaying.load() &&
-                        generation == m_generation;
-                }
-                if (expected) {
-                    reap_child();
-                } else {
-                    set_failure_if_current(
-                        "wambridge-pcm exited unexpectedly",
-                        generation
-                    );
-                    stop_child();
-                }
+                set_failure_if_current(
+                    "wambridge-pcm exited unexpectedly",
+                    generation
+                );
+                stop_child();
                 continue;
             }
             if (flushing && childState == ChildState::none) {
@@ -814,18 +805,11 @@ private:
                     std::lock_guard lock(m_mutex);
                     hasAudio = !m_queue.empty();
                 }
-                if (!hasAudio) {
-                    std::lock_guard lock(m_mutex);
-                    if (m_endOfInput && generation == m_generation) {
-                        m_inputClosed = true;
-                    }
-                    continue;
-                }
+                if (!hasAudio) continue;
                 if (!start_child(sampleRate, channels, generation)) continue;
             }
 
             bool sendSilence = false;
-            bool closeInput = false;
             bool stopAfterFlush = false;
             size_t batchFrames = 0;
             {
@@ -843,9 +827,7 @@ private:
                             ) ||
                             (m_helperReady.load() && (
                                 m_flushing || m_paused.load() ||
-                                !m_queue.empty() ||
-                                (m_endOfInput && m_playing.load() &&
-                                    !m_inputClosed)
+                                !m_queue.empty()
                             ));
                     }
                 );
@@ -866,10 +848,6 @@ private:
                     batchFrames = 0;
                 } else if (!m_helperReady.load()) {
                     continue;
-                } else if (m_endOfInput && m_playing.load() &&
-                    !sendSilence && m_queue.empty() &&
-                    m_writeInProgressFrames == 0 && !m_inputClosed) {
-                    closeInput = true;
                 } else if (!sendSilence && m_queue.empty()) {
                     continue;
                 } else {
@@ -895,11 +873,6 @@ private:
                         m_writeInProgressFrames = batchFrames;
                     }
                 }
-            }
-
-            if (closeInput) {
-                close_child_input(generation);
-                continue;
             }
 
             if (stopAfterFlush) {
@@ -990,37 +963,6 @@ private:
         }
     }
 
-    void close_child_input(uint64_t generation) {
-        {
-            std::lock_guard lock(m_mutex);
-            if (generation != m_generation) return;
-            m_inputClosed = true;
-        }
-        {
-            std::lock_guard lock(m_childMutex);
-            close_handle(m_childStdin);
-        }
-        m_cv.notify_all();
-    }
-
-    void reap_child() {
-        if (m_protocolThread.joinable()) m_protocolThread.join();
-        m_helperReady.store(false);
-        {
-            std::lock_guard lock(m_childMutex);
-            close_handle(m_childStdin);
-            close_handle(m_childStdout);
-            close_handle(m_childThread);
-            close_handle(m_childProcess);
-        }
-        m_childReachedPlaying.store(false);
-        {
-            std::lock_guard lock(m_mutex);
-            m_childExited = false;
-        }
-        m_cv.notify_all();
-    }
-
     ChildState child_state() const {
         std::lock_guard lock(m_childMutex);
         if (m_childProcess == nullptr) return ChildState::none;
@@ -1091,8 +1033,7 @@ private:
     std::chrono::steady_clock::time_point m_clockAnchor{};
     std::chrono::steady_clock::time_point m_pauseStarted{};
     bool m_clockStarted = false;
-    bool m_endOfInput = false;
-    bool m_inputClosed = false;
+    bool m_drainRequested = false;
     bool m_childExited = false;
     uint64_t m_generation = 0;
     bool m_shutdown = false;
@@ -1122,7 +1063,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.5",
+    "0.1.6",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 
