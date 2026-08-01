@@ -258,7 +258,6 @@ public:
         if (takenFrames == 0) return 0;
         m_flushing = false;
         m_drainRequested = false;
-        if (m_clockStarted) m_playing.store(true);
 
         const audio_sample* input = chunk.get_data();
         const size_t values = takenFrames * channels;
@@ -490,6 +489,7 @@ private:
     void set_protocol_state_if_current(
         uint64_t generation,
         bool ready,
+        bool audioStarted,
         bool playing
     ) {
         bool accepted = false;
@@ -500,10 +500,12 @@ private:
                 !m_childStopping.load() &&
                 (!m_flushing || playing)) {
                 if (ready) m_helperReady.store(true);
-                if (playing) {
+                if (audioStarted || playing) {
                     start_playback_clock_locked(
                         std::chrono::steady_clock::now()
                     );
+                }
+                if (playing) {
                     m_playing.store(true);
                     m_childReachedPlaying.store(true);
                 }
@@ -728,9 +730,26 @@ private:
                     console::printf("%s: %s", kComponentName, line.c_str());
                 }
                 if (line == "WAMBRIDGE READY") {
-                    set_protocol_state_if_current(generation, true, false);
+                    set_protocol_state_if_current(
+                        generation,
+                        true,
+                        false,
+                        false
+                    );
+                } else if (line == "WAMBRIDGE AUDIO_STARTED") {
+                    set_protocol_state_if_current(
+                        generation,
+                        false,
+                        true,
+                        false
+                    );
                 } else if (line.rfind("WAMBRIDGE PLAYING", 0) == 0) {
-                    set_protocol_state_if_current(generation, false, true);
+                    set_protocol_state_if_current(
+                        generation,
+                        false,
+                        false,
+                        true
+                    );
                 } else if (line.rfind("WAMBRIDGE ERROR ", 0) == 0) {
                     set_failure_if_current(line.substr(16), generation);
                 }
@@ -1073,7 +1092,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.6",
+    "0.1.7",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 
