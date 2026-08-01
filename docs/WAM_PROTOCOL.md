@@ -249,11 +249,14 @@ far ahead if it reports pipe writes as already played. A physical foobar test on
 exposed exactly that split. The M5 continued playing normally while foobar's seekbar ran
 ahead. No complete track had yet been timed end to end.
 
-`WAMBRIDGE PLAYING` must be emitted only after the persistent TCP 55001 listener is armed
-for the current command and receives `StartPlaybackEvent`. Measured firmware may broadcast
-that event with either the stable client UUID or `user_identifier=public`; events received
-before arming and events carrying another UUID are ignored. Encoder output or an HTTP
-request alone cannot start the host clock.
+PR #21 currently tests `StartPlaybackEvent` as the URL/PCM clock anchor. The listener is
+armed immediately before `SetUrlPlayback` and accepts a start event carrying either the
+stable client UUID or `user_identifier=public`. This gate is **provisional** until that
+exact build is verified on the physical M5. An earlier claim that working URL streams do
+not emit the event was retracted because method names were logged only during failed runs;
+the successful long run did not prove presence or absence. `audio_started` remains only
+proof that encoded bytes reached the HTTP response and must not be presented as audible
+playback confirmation.
 
 Endless streams of unknown length are accepted by `SetUrlPlayback`:
 
@@ -282,9 +285,10 @@ design that assumes a finite local file.
 5. point the speaker at it with `SetUrlPlayback`,
 6. let the speaker pull without FFmpeg `-re` or HTTP throttling; host outputs must retain
    accepted PCM in their latency accounting until a real-time playback clock releases it,
-7. arm the listener for the current command and wait for its UUID or `public`
-   `StartPlaybackEvent`; treat `MusicInfo` and `PlayStatus` as unreliable,
-8. use events from that same attempt for diagnostics.
+7. keep the current public-aware `StartPlaybackEvent` gate as an experiment until the
+   physical M5 test establishes whether it is a usable URL/PCM anchor; do not silently
+   replace it with `audio_started`,
+8. use unmatched events for diagnostics only, not as command-correlated failures.
 
 **Optional layer — finite local files only**, when seek, pause and duration are wanted:
 
