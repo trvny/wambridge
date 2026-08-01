@@ -73,6 +73,11 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_drainRequested = true;", source)
         self.assertIn("m_drainRequested = false;", source)
         self.assertIn(
+            "if (m_clockStarted && m_helperReady.load()) {",
+            source,
+        )
+        self.assertIn("m_playing.store(true);", source)
+        self.assertIn(
             "m_drainRequested && buffered_frames_locked() == 0",
             source,
         )
