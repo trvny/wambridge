@@ -229,19 +229,20 @@ backlog bounded.
 
 Pushing WAV over HTTP as fast as the socket accepts it:
 
-```
+```text
 +4s   4.43x realtime   <- initial buffer fill
 +8s   2.70x
 +12s  2.13x
 +16s  1.84x
-average 1.18x
++average 1.18x
 ```
 
 The TCP window closes and HTTP throughput converges toward real time. Backpressure is the
-right clock for the speaker-facing transport and is more accurate than FFmpeg `-re`. A
-100-second control run through `ffmpeg | pcm_cli` measured an initial burst of about 6.4x,
-a downstream reserve of about 23 seconds, and then stable throughput around 1.00x. The
-reserve stopped growing, so transport pacing is healthy.
+right clock for the speaker-facing transport and is more accurate than FFmpeg `-re`.
+A 100-second unanchored control run through `ffmpeg | pcm_cli` showed an initial burst of
+about 6.4x and stable throughput around 1.00x after roughly 25 seconds. Its apparent
+`+23 s` reserve included discovery, URL handoff and helper startup, so it is only an upper
+bound, not a measured speaker cushion and not a target for `get_latency()`.
 
 That measurement does not prove the complete foobar output clock: a host can still decode
 far ahead if it reports pipe writes as already played. A physical foobar test on 2026-08-01
@@ -249,7 +250,9 @@ exposed exactly that split. The M5 continued playing normally while foobar's see
 ahead. No complete track had yet been timed end to end.
 
 `WAMBRIDGE PLAYING` must be emitted only after the persistent TCP 55001 listener receives
-`StartPlaybackEvent`. Encoder output or an HTTP request alone cannot start the host clock.
+a `StartPlaybackEvent` whose `user_identifier` matches the stable client UUID used by the
+playback command. Encoder output, an HTTP request or an event from another controller cannot
+start the host clock.
 
 Endless streams of unknown length are accepted by `SetUrlPlayback`:
 
@@ -278,8 +281,9 @@ design that assumes a finite local file.
 5. point the speaker at it with `SetUrlPlayback`,
 6. let the speaker pull without FFmpeg `-re` or HTTP throttling; host outputs must retain
    accepted PCM in their latency accounting until a real-time playback clock releases it,
-7. wait for `StartPlaybackEvent`, and treat `MusicInfo` and `PlayStatus` as unreliable,
-8. use `ErrorEvent` for diagnostics.
+7. wait for the matching `StartPlaybackEvent`, and treat `MusicInfo` and `PlayStatus` as
+   unreliable,
+8. use matching `ErrorEvent` values for diagnostics.
 
 **Optional layer — finite local files only**, when seek, pause and duration are wanted:
 
