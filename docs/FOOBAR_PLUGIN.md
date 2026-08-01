@@ -1,103 +1,95 @@
-# foobar2000 component design
+# foobar2000 component status and design
 
-Design sketch for the control surface of `foo_out_wam`. Written before implementation so the
-work can be picked up by anyone, including a different assistant. Nothing here is built yet;
-the transport layers it depends on are all merged and verified on a physical M5.
+Current implementation and remaining control-surface work for `foo_out_wam`.
 
-## What already exists
+## Implemented
 
-- `foo_out_wam.cpp` implements `output_v6` and feeds decoded PCM to `wambridge-pcm.exe`.
-- Configuration is read from `%LOCALAPPDATA%\WAMBridge\foobar.ini`. There is no UI at all.
-- `wambridge-share`, `wambridge-events`, `wambridge-pcm` and the radio bridge are working
-  command-line entry points.
+- `output_v6` component for foobar2000 2.x x64.
+- Bundled `wambridge-pcm.exe` and `wambridge-control.exe`; no checkout or virtual
+  environment is required after installation.
+- PCM pipeline: foobar `f32le` -> FFmpeg FLAC -> local HTTP -> Samsung M5.
+- `%LOCALAPPDATA%\WAMBridge\foobar.ini` configuration with environment overrides.
+- `Playback -> WAM Bridge` submenu containing:
+  - Emergency stop,
+  - Standby,
+  - Volume up,
+  - Volume down,
+  - Volume to safe level.
+- Serialized control-helper queue with output reported in the foobar console.
+- Restart and cleanup paths for format change, seek, stop and helper failure.
 
-## What this adds
+## Not implemented
 
-A control surface inside foobar, in two stages. Stage one is menu commands plus a
-preferences page, because it works in any layout and needs no drawing code. Stage two is a
-dockable panel built on the same logic layer, so it becomes a rendering job rather than a
-rewrite.
+- Native preferences page.
+- Discovery and connection test UI.
+- TuneIn/radio submenu.
+- Dockable panel.
+- Integrated finite share/DLNA playback for native duration and seek.
 
-## Menu commands
+## Configuration
 
-Registered under **Playback**, through `mainmenu_commands` with
-`mainmenu_groups::playback`.
+The component currently reads:
 
-| Command | Behaviour |
-| --- | --- |
-| Emergency stop | Stop playback, unmute, restore the saved volume. Must survive timeouts. |
-| Standby | Stop, mute, let the speaker sleep. |
-| Volume up / down | One raw step, `0..30`. |
-| Volume to safe level | Jump to the configured startup volume. |
-| Play TuneIn preset ▸ | Submenu built from the speaker's stored presets. |
+```ini
+[wambridge]
+device=M5
+volume=3
+```
 
-Two rules the transport work made non-negotiable:
+Optional keys and overrides:
 
-- **A timeout is not a failure.** The firmware answers late and often with an unrelated
-  event. Emergency stop must retry rather than report failure on the first timeout, and it
-  must never leave the speaker muted because a reply did not arrive.
-- **Set the "touched" flag before the mutation, never after.** A command whose reply is lost
-  may still have been applied. `SpeakerState` in `share_cli.py` is the reference.
+- `helper` or `WAMBRIDGE_PCM` for a development PCM helper,
+- `WAMBRIDGE_CONTROL` for a development control helper,
+- `WAMBRIDGE_DEVICE`,
+- `WAMBRIDGE_VOLUME`.
 
-Emergency stop exists because the device really does wedge: a bad stream can leave TCP
-`55001` unresponsive for tens of seconds, and submode `cp` swallows local playback until the
-speaker is power-cycled. The command should say so plainly when it detects that state
-instead of silently failing.
+The M5 uses raw volume steps `0..30`; the UI must not pretend these are percentages until a
+model-aware conversion exists.
 
-## Preferences page
+## Transport design
 
-`preferences_page_v3` under Playback, replacing `foobar.ini`:
+The speaker pulls the encoded stream. TCP backpressure is the speaker-facing pacing
+mechanism; do not add FFmpeg `-re` or socket throttling.
 
-- speaker alias or IP, with a discovery button reusing `discovery.py`
-- startup volume and a maximum startup volume, both raw `0..30`
-- output format, defaulting to FLAC
-- path to the Python bridge, if not bundled
-- a "test connection" button reporting model, firmware and current submode
+Foobar still needs its own bounded accounting. PR #21 keeps queued, writing and submitted
+PCM in latency and releases capacity from one cumulative real-time clock anchored at
+`AUDIO_STARTED`. The anchor may shift for pause only; it must not follow pipe-write speed.
 
-Keep reading the old `foobar.ini` for one release so existing setups do not break.
+The URL/PCM path does not hard-gate on `StartPlaybackEvent`. Physical M5 runs produced
+audible output without a matching event before the old timeout. The listener stays alive to
+log correlated starts and surface real failures.
 
-## Status and events
+Only one control connection and one FFmpeg may own a session. A second TCP listener can
+compete with playback; a second FFmpeg splits the shared stdin.
 
-The component should hold one persistent reader on TCP `55001` for the whole session,
-reusing `wam_events.py`. It provides:
+## Menu behavior
 
-- `StartPlaybackEvent` as the only trustworthy confirmation that audio started,
-- `ErrorEvent` with a real error code for the status line,
-- `user_identifier` on every event, which distinguishes our own commands from someone
-  else's.
+Emergency stop and standby stop foobar before invoking the control helper. Commands are
+serialized so button presses cannot launch overlapping control processes. Physical volume
+commands operate in raw M5 steps.
 
-That last point drives a behavioural rule worth keeping: **when a human changes volume from
-the Samsung app or the speaker's buttons, yield rather than fight**. During protocol capture
-a volume limiter and a person ended up in a visible tug of war, and the fix is to compare
-`user_identifier` against our own client UUID. Three buckets, not two: our own UUID, a
-foreign UUID, and the literal `public` used for unattributed broadcasts.
+Do not restore the old `cp` warning. `cp` is normal for `SetUrlPlayback`; it is not evidence
+that emergency stop should request a speaker power cycle.
 
-## Radio
+## Preferences page, next
 
-Two paths, and the choice matters to the user:
+Add `preferences_page_v3` under Playback and keep INI compatibility for at least one
+release. It should expose:
 
-- **Native TuneIn presets** play autonomously and keep going when the PC is switched off.
-  Driving them from here is unverified: `SetPlayPreset` switches submode to `cp` and answers
-  long after the timeout, but no application available on this machine can confirm audio.
-- **Proxy through FFmpeg and the local HTTP server** works for every station regardless of
-  protocol and is confirmed by ear, but needs the PC running.
+- speaker alias/IP and discovery,
+- startup and maximum startup volume (`0..30` raw until conversion exists),
+- output format,
+- bundled/development helper selection,
+- a test button showing model, firmware and connection result.
 
-Offer both, label the difference honestly, and never hand a remote URL straight to
-`SetUrlPlayback`. HTTPS fails, Ogg is silent, and HLS wedges the control port.
+## Later UI
 
-## Dockable panel, later
+Radio/TuneIn controls and a dockable panel should reuse the same dispatcher and settings.
+Native TuneIn can continue without the PC; proxied stations require the PC and local HTTP
+bridge. Label that difference clearly.
 
-A `ui_element` over the same logic: volume slider, station list, status line, emergency
-button. No new protocol work should be needed by then.
+## Merge gate
 
-## Order of work
-
-1. Extract the speaker control calls the component needs into one small layer, so menu,
-   preferences and the later panel share it.
-2. Menu commands, starting with emergency stop and standby.
-3. Preferences page, still reading the legacy ini.
-4. Persistent event reader wired to a status line.
-5. Radio submenu.
-6. Dockable panel.
-
-Steps 1 to 4 need no speaker to develop against; only the last two do.
+No output transport candidate is release-ready until the physical M5 completes a 3-5 minute
+track at wall-clock speed with stable seekbar, a second track, pause/resume, stop/change and
+clean helper/FFmpeg shutdown.
