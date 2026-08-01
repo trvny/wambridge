@@ -318,13 +318,14 @@ class PlaybackWatcher:
                 for event in connection.events(stop=self._stop):
                     if self._belongs_to_attempt(event):
                         self._started.set()
-                        return
+                        continue
                     if event.method == _FAILURE_EVENT and self._armed.is_set():
                         code = event.error_code or event.values.get("errCode") or (
                             event.values.get("errcode", "")
                         )
                         if (
                             self._stream_active.is_set()
+                            and not self._started.is_set()
                             and code == "NETWORK_TIMEOUT_ERROR"
                         ):
                             self._error = (
