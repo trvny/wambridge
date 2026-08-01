@@ -64,9 +64,16 @@ speaker-facing pacing layer.
 
 A 100-second unanchored `ffmpeg | pcm_cli` control run showed an initial burst and stable
 throughput near 1.00x after roughly 25 seconds. Its apparent `+23 s` reserve included
-startup, so it is only an upper bound and must not become a latency target. The helper must
-gate `WAMBRIDGE PLAYING` and the output clock on a matching `StartPlaybackEvent`, and EOF
-before that confirmation must remain a visible startup failure.
+startup, so it is only an upper bound and must not become a latency target.
+
+PR #21 currently experiments with gating `WAMBRIDGE PLAYING` on an armed
+`StartPlaybackEvent` carrying either the client UUID or `user_identifier=public`. The exact
+public-aware build has not yet been verified on the physical M5. An earlier statement that
+working `SetUrlPlayback` streams do not emit the event was retracted because successful
+runs did not record event method names. `audio_started` still means only that encoded bytes
+entered the HTTP response. Unmatched `ErrorEvent` values are diagnostics, not attributable
+startup failures. `force_play()` must remain a transient drain request and must not close
+helper stdin permanently.
 
 ### PR #7: finite local MP3 through Samsung DMS
 
@@ -168,8 +175,8 @@ compatibility.
 
 ## Next implementation order
 
-1. Synchronize `foo_out_wam` with real time: include pipe-written PCM in latency, bound the
-   total backlog and close helper stdin cleanly at end of input.
+1. Verify PR #21 on the physical M5: public-aware start event, stable seekbar and audio,
+   transient `force_play()` drain, one FFmpeg at a time, and visible helper diagnostics.
 2. Verify at least one complete 3–5 minute track against wall-clock duration, then a second
    track, stop and seek. Startup alone is not acceptance.
 3. Fix raw M5 volume handling to `0..30` or add model-aware translation.
