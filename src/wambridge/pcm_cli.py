@@ -269,12 +269,8 @@ class PlaybackWatcher:
                     code = event.error_code or event.values.get("errCode") or (
                         event.values.get("errcode", "")
                     )
-                    LOGGER.warning(
-                        "Ignoring uncorrelated %s %s while waiting for %s",
-                        _FAILURE_EVENT,
-                        code,
-                        _SUCCESS_EVENT,
-                    )
+                    self._error = f"Speaker reported {_FAILURE_EVENT} {code}".strip()
+                    return
         except Exception as error:  # noqa: BLE001 - surface listener failure
             self._error = f"Event listener failed: {error}"
 
