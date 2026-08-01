@@ -14,6 +14,7 @@ dependencies = []
 
 [project.scripts]
 wambridge = "wambridge.radio_cli:main"
+wambridge-events = "wambridge.event_cli:main"
 wambridge-pcm = "wambridge.pcm_cli:main"
 
 [tool.setuptools.packages.find]

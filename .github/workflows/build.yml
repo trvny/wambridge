@@ -8,6 +8,7 @@ on:
       - "pyproject.toml"
       - "src/**"
       - "tests/**"
+      - "tools/**"
   push:
     branches:
       - main
@@ -17,6 +18,7 @@ on:
       - "pyproject.toml"
       - "src/**"
       - "tests/**"
+      - "tools/**"
   workflow_dispatch:
 
 permissions:
@@ -37,13 +39,14 @@ jobs:
       - name: Check Python
         run: |
           python -m pip install "ruff>=0.12,<1"
-          python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py
-          python -m compileall -q src tests foobar/wambridge_pcm_entry.py
+          python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
+          python -m compileall -q src tests foobar/wambridge_pcm_entry.py tools
 
       - name: Test Python package
         run: |
           python -m pip install -e .
           python -m unittest discover -s tests -v
+          wambridge-events --help | Out-Null
 
       - name: Build standalone helper
         shell: pwsh
@@ -59,6 +62,23 @@ jobs:
             --specpath build/pyinstaller `
             foobar/wambridge_pcm_entry.py
           & dist/helper/wambridge-pcm/wambridge-pcm.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Build standalone event listener
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name wambridge-events `
+            --distpath dist/events `
+            --workpath build/pyinstaller-events `
+            --specpath build/pyinstaller-events `
+            tools/wambridge_events_entry.py
+          & dist/events/wambridge-events.exe --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -129,6 +149,7 @@ jobs:
         with:
           name: foo_out_wam-x64
           path: |
+            dist/events/wambridge-events.exe
             dist/foo_out_wam.dll
             dist/foo_out_wam.fb2k-component
             dist/wambridge-source.zip
