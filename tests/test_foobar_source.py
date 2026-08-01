@@ -39,6 +39,18 @@ class FoobarSourceTests(TestCase):
         self.assertIn("startup_delay_frames_locked(now)", source)
         self.assertNotIn("--sample-format f32le --format flac --re", source)
 
+    def test_pause_preserves_unelapsed_startup_delay(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("m_pauseStarted = now;", source)
+        self.assertIn("m_clockAnchor += now - m_pauseStarted;", source)
+        self.assertIn("if (m_paused.load()) m_pauseStarted = now;", source)
+        self.assertNotIn(
+            "m_clockAnchor = now;\n"
+            "                m_clockAnchorFrames = m_playedFrames;",
+            source,
+        )
+
     def test_end_of_input_closes_the_helper_pipe_cleanly(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
