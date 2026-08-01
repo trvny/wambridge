@@ -35,7 +35,39 @@ class FakePcmServer:
         self.closed = True
 
 
+class FakePlaybackWatcher:
+    instances: list["FakePlaybackWatcher"] = []
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        self.waited = False
+        self.__class__.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def wait_for_start(self, *, timeout: float) -> None:
+        self.waited = True
+
+
 class PcmCliTests(TestCase):
+    def setUp(self) -> None:
+        FakePlaybackWatcher.instances.clear()
+        patcher = patch(
+            "wambridge.pcm_cli.PlaybackWatcher",
+            FakePlaybackWatcher,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        uuid_patcher = patch(
+            "wambridge.pcm_cli.load_client_uuid",
+            return_value="00000000-0000-4000-8000-000000000001",
+        )
+        uuid_patcher.start()
+        self.addCleanup(uuid_patcher.stop)
+
     def _args(self, *extra: str):
         return build_parser().parse_args(
             [
@@ -84,6 +116,8 @@ class PcmCliTests(TestCase):
             protocol.getvalue().splitlines(),
             ["WAMBRIDGE READY", "WAMBRIDGE PLAYING volume=4"],
         )
+        self.assertEqual(len(FakePlaybackWatcher.instances), 1)
+        self.assertTrue(FakePlaybackWatcher.instances[0].waited)
         self.assertEqual(
             volume_mock.call_args_list,
             [
@@ -140,6 +174,43 @@ class PcmCliTests(TestCase):
             protocol.getvalue().splitlines(),
             ["WAMBRIDGE READY", "WAMBRIDGE PLAYING volume=4"],
         )
+
+    @patch("wambridge.pcm_cli.play_url")
+    @patch("wambridge.pcm_cli.set_volume")
+    @patch("wambridge.pcm_cli.get_volume", return_value=4)
+    @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
+    @patch(
+        "wambridge.pcm_cli.probe",
+        return_value=SimpleNamespace(method="SpkName"),
+    )
+    @patch("wambridge.pcm_cli.select_speaker", return_value=("10.0.0.118", 55001))
+    @patch("wambridge.pcm_cli.PcmAudioStreamServer", FakePcmServer)
+    def test_does_not_emit_playing_without_start_playback_event(
+        self,
+        _select_mock,
+        _probe_mock,
+        _local_ip_mock,
+        _get_volume_mock,
+        _volume_mock,
+        _play_url_mock,
+    ) -> None:
+        class MissingEventWatcher(FakePlaybackWatcher):
+            def wait_for_start(self, *, timeout: float) -> None:
+                raise StreamError("Speaker did not confirm StartPlaybackEvent")
+
+        protocol = StringIO()
+        with patch("wambridge.pcm_cli.PlaybackWatcher", MissingEventWatcher):
+            with self.assertRaisesRegex(
+                StreamError,
+                "did not confirm StartPlaybackEvent",
+            ):
+                run(
+                    self._args("--volume", "4"),
+                    pcm_input=BytesIO(),
+                    protocol_output=protocol,
+                )
+
+        self.assertEqual(protocol.getvalue().splitlines(), ["WAMBRIDGE READY"])
 
     @patch("wambridge.pcm_cli.play_url")
     @patch("wambridge.pcm_cli.set_volume")
