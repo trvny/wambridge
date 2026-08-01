@@ -44,6 +44,28 @@ class FoobarSourceTests(TestCase):
 
         self.assertIn("m_endOfInput = true;", source)
         self.assertIn("close_child_input(generation);", source)
-        self.assertIn("expected = m_shutdown || m_restart || m_inputClosed", source)
+        self.assertIn("expected = m_shutdown || m_restart ||", source)
         self.assertIn("finish_playback_clock_if_drained_locked();", source)
         self.assertIn("m_endOfInput && m_inputClosed", source)
+
+    def test_closed_stdin_does_not_hide_startup_failure(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertNotIn("!m_inputClosed &&\n                m_failure.empty()", source)
+        self.assertIn(
+            "(m_inputClosed && m_childReachedPlaying.load())",
+            source,
+        )
+        self.assertIn(
+            "m_inputClosed && m_childExited &&\n"
+            "                        m_childReachedPlaying.load()",
+            source,
+        )
+
+    def test_finite_input_stays_open_until_playback_is_confirmed(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "m_endOfInput && m_playing.load() &&",
+            source,
+        )
