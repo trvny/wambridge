@@ -41,6 +41,7 @@ class FakePcmServer:
 
 class FakePlaybackWatcher:
     instances: list["FakePlaybackWatcher"] = []
+    forced_rejection: str | None = None
 
     def __init__(self, *_args, **_kwargs) -> None:
         self.armed = False
@@ -79,10 +80,16 @@ class FakePlaybackWatcher:
     def raise_if_failed(self) -> None:
         self.failure_checks += 1
 
+    def wait_for_response(self, method: str, *, timeout: float) -> str | None:
+        if method == "SetVolume":
+            return self.forced_rejection
+        return None
+
 
 class PcmCliTests(TestCase):
     def setUp(self) -> None:
         FakePlaybackWatcher.instances.clear()
+        FakePlaybackWatcher.forced_rejection = None
         patcher = patch(
             "wambridge.pcm_cli.PlaybackWatcher",
             FakePlaybackWatcher,
@@ -158,6 +165,46 @@ class PcmCliTests(TestCase):
         )
         self.assertEqual(watcher.volumes, [4, 4])
         volume_mock.assert_called_once_with("10.0.0.118", 0, port=55001)
+
+    @patch("wambridge.pcm_cli.set_volume")
+    @patch("wambridge.pcm_cli.get_volume", return_value=37)
+    @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
+    @patch(
+        "wambridge.pcm_cli.probe",
+        return_value=SimpleNamespace(method="SpkName"),
+    )
+    @patch("wambridge.pcm_cli.select_speaker", return_value=("10.0.0.118", 55001))
+    @patch("wambridge.pcm_cli.PcmAudioStreamServer", FakePcmServer)
+    def test_rejected_unmute_fails_instead_of_reporting_playing(
+        self,
+        _select_mock,
+        _probe_mock,
+        _local_ip_mock,
+        _get_volume_mock,
+        volume_mock,
+    ) -> None:
+        # Startup mutes the speaker. If the speaker rejects the command that
+        # undoes the mute, PLAYING would describe silence.
+        FakePlaybackWatcher.forced_rejection = "Speaker rejected SetVolume (error 3)"
+        protocol = StringIO()
+
+        with self.assertRaisesRegex(StreamError, "would stay muted"):
+            run(
+                self._args("--volume", "4"),
+                pcm_input=BytesIO(),
+                protocol_output=protocol,
+            )
+
+        self.assertNotIn("PLAYING", protocol.getvalue())
+        watcher = FakePlaybackWatcher.instances[0]
+        self.assertFalse(watcher.startup_complete)
+        self.assertEqual(
+            volume_mock.call_args_list,
+            [
+                call("10.0.0.118", 0, port=55001),
+                call("10.0.0.118", 37, port=55001, timeout=1.0),
+            ],
+        )
 
     def test_watcher_correlates_only_start_events_after_arming(self) -> None:
         watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID.upper(), port=55001)

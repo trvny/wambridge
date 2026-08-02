@@ -15,7 +15,7 @@ from .discovery import local_ip_for
 from .identity import load_client_uuid
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
-from .samsung import WamApiError, get_volume, probe, set_volume
+from .samsung import WamApiError, get_volume, methods_agree, probe, set_volume
 from .stream import OUTPUT_PROFILES, StreamError
 from .wam_events import WamEvent, WamEventConnection, WamEventError
 
@@ -25,6 +25,9 @@ _BROKEN_PIPE_ERRORS = {109, 233}
 _SUCCESS_EVENT = "StartPlaybackEvent"
 _FAILURE_EVENT = "ErrorEvent"
 _PUBLIC_IDENTIFIER = "public"
+_PLAYBACK_COMMAND = "SetUrlPlayback"
+_VOLUME_COMMAND = "SetVolume"
+_VOLUME_ACK_TIMEOUT = 1.0
 
 
 def sample_rate(value: str) -> int:
@@ -164,6 +167,7 @@ def _wait_for_stream_request(
     pcm_input: BinaryIO,
     *,
     timeout: float,
+    watcher: PlaybackWatcher | None = None,
 ) -> None:
     deadline = monotonic() + timeout
     while monotonic() < deadline:
@@ -172,6 +176,8 @@ def _wait_for_stream_request(
         ):
             return
         _raise_if_pcm_input_closed(pcm_input)
+        if watcher is not None:
+            watcher.raise_if_failed()
         if server.request_finished.is_set():
             raise StreamError(
                 server.error
@@ -217,6 +223,9 @@ class PlaybackWatcher:
         self._thread: threading.Thread | None = None
         self._connection: WamEventConnection | None = None
         self._connection_lock = threading.Lock()
+        self._pending: list[str] = []
+        self._results: dict[str, str] = {}
+        self._response_lock = threading.Lock()
 
     def __enter__(self) -> PlaybackWatcher:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -281,6 +290,21 @@ class PlaybackWatcher:
         if self._error:
             raise StreamError(self._error)
 
+    def wait_for_response(self, method: str, *, timeout: float) -> str | None:
+        """Return the rejection message for the last ``method``, if any.
+
+        A silent speaker is not a failure (AGENTS.md): an unanswered command
+        times out to ``None`` exactly like an accepted one. Only a response
+        matched to this command and carrying a non-``ok`` result reports back.
+        """
+        deadline = monotonic() + timeout
+        while True:
+            with self._response_lock:
+                if method in self._results:
+                    return self._results[method] or None
+            if monotonic() >= deadline or self._stop.wait(timeout=0.05):
+                return None
+
     def _send_command(
         self,
         *,
@@ -292,6 +316,9 @@ class PlaybackWatcher:
             connection = self._connection
         if connection is None:
             raise StreamError("WAM control connection is not ready")
+        with self._response_lock:
+            self._results.pop(method, None)
+            self._pending.append(method)
         try:
             connection.send(
                 method=method,
@@ -303,6 +330,40 @@ class PlaybackWatcher:
                 f"Cannot reach Samsung WAM at "
                 f"{self._speaker_ip}:{self._port}: {error}"
             ) from error
+
+    def _match_pending(self, event: WamEvent) -> str | None:
+        """Return the command this response answers, if it answers one.
+
+        Samsung replies with whatever it is broadcasting, so a body only counts
+        as an answer when it carries a result and its method agrees with a
+        command still waiting for one. Everything else stays a diagnostic.
+        """
+        if not event.method or event.result is None:
+            return None
+        with self._response_lock:
+            for index, command in enumerate(self._pending):
+                if methods_agree(command, event.method):
+                    del self._pending[index]
+                    return command
+        return None
+
+    def _record_response(self, command: str, event: WamEvent) -> None:
+        if (event.result or "").casefold() == "ok":
+            with self._response_lock:
+                self._results[command] = ""
+            return
+
+        code = event.error_code or event.values.get("errCode") or (
+            event.values.get("errcode", "")
+        )
+        suffix = f" (error {code})" if code else ""
+        message = f"Speaker rejected {command}{suffix}"
+        with self._response_lock:
+            self._results[command] = message
+        if command == _PLAYBACK_COMMAND:
+            self._error = message
+            return
+        LOGGER.warning("%s; startup checks decide whether that is fatal", message)
 
     def _belongs_to_attempt(self, event: WamEvent) -> bool:
         if (
@@ -331,6 +392,10 @@ class PlaybackWatcher:
                             "Speaker emitted %s for URL playback",
                             _SUCCESS_EVENT,
                         )
+                        continue
+                    command = self._match_pending(event)
+                    if command is not None:
+                        self._record_response(command, event)
                         continue
                     if event.method == _FAILURE_EVENT and self._armed.is_set():
                         code = event.error_code or event.values.get("errCode") or (
@@ -431,6 +496,7 @@ def run(
                 server,
                 input_stream,
                 timeout=args.startup_timeout,
+                watcher=watcher,
             )
             watcher.mark_stream_active()
             print("WAMBRIDGE STREAM_REQUESTED", file=output_stream, flush=True)
@@ -454,6 +520,15 @@ def run(
             print("WAMBRIDGE AUDIO_STARTED", file=output_stream, flush=True)
             watcher.set_volume(start_volume)
             watcher.raise_if_failed()
+            rejection = watcher.wait_for_response(
+                _VOLUME_COMMAND,
+                timeout=_VOLUME_ACK_TIMEOUT,
+            )
+            if rejection is not None:
+                # The speaker was muted on purpose before playback started.
+                # A rejected restore leaves it audibly silent, so reporting
+                # PLAYING here would hide the failure and skip the restore.
+                raise StreamError(f"{rejection}; the speaker would stay muted")
             startup_complete = True
             watcher.mark_startup_complete()
             print(

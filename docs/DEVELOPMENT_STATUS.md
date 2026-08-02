@@ -91,6 +91,9 @@ Status: foundation, with foobar clock work still experimental.
 - Uses one control connection and one encoder.
 - Relies on speaker TCP backpressure for HTTP pacing.
 - Requires separate bounded host accounting for accepted-but-not-heard PCM.
+- Matches shared-socket responses to the command that was sent. A matched `ng` fails startup
+  for `SetUrlPlayback` and for the `SetVolume` that undoes the startup mute; an unanswered
+  command still counts as success, and unmatched bodies stay diagnostics.
 
 ### Finite share/DLNA transport
 

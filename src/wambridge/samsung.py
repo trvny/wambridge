@@ -142,7 +142,7 @@ def _normalise_method(name: str) -> str:
     return "".join(character for character in stripped if character.isalnum()).lower()
 
 
-def _methods_agree(command: str, response_method: str) -> bool:
+def methods_agree(command: str, response_method: str) -> bool:
     """Report whether a reply belongs to the command that was sent."""
 
     if command == response_method:
@@ -195,7 +195,7 @@ def parse_response(body: str, *, expected: str | None = None) -> WamResponse:
 
     matched = True
     if expected is not None and response_method is not None:
-        matched = _methods_agree(expected, response_method)
+        matched = methods_agree(expected, response_method)
 
     if matched and result != "ok":
         error_code = (
