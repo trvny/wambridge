@@ -23,6 +23,38 @@ class FoobarSourceTests(TestCase):
             source,
         )
 
+    def test_clock_counters_are_logged_once_per_second(self) -> None:
+        # A physical run showed foobar advancing at a median 11x while every
+        # clock term stayed unmeasured. These counters are how the runaway
+        # gets attributed to a term instead of a guess.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("void log_counters_locked(", source)
+        self.assertIn("log_counters_locked(now);", source)
+        self.assertIn("kCounterInterval", source)
+        self.assertIn("m_counterLines >= kMaxCounterLines", source)
+        for field in (
+            "target=%ums",
+            "submitted=%ums",
+            "played=%ums",
+            "queued=%ums",
+            "write=%ums",
+            "buffered=%ums",
+            "free=%ums",
+            "capacity=%ums",
+        ):
+            self.assertIn(field, source)
+
+    def test_console_format_avoids_length_modifiers(self) -> None:
+        # console::printf is pfc's formatter: %lu and %llu print literally.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        for line in source.splitlines():
+            if line.lstrip().startswith("//"):
+                continue  # the rule itself is written down in comments
+            self.assertNotIn("%lu", line)
+            self.assertNotIn("%llu", line)
+
     def test_pipe_written_pcm_remains_in_reported_latency(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 

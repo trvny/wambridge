@@ -26,6 +26,11 @@ constexpr char kOutputName[] = "WAM Bridge";
 constexpr char kDeviceName[] = "Samsung M5 (Wi-Fi)";
 constexpr double kStartupLatencySeconds = 1.5;
 constexpr size_t kWriteBatchFrames = 4096;
+// One counter line per second, long enough to cover a whole track. The clock
+// terms are the only way to tell which one runs away; a physical run measured
+// foobar advancing at a median 11x with no term ever observed.
+constexpr unsigned kMaxCounterLines = 240;
+constexpr std::chrono::milliseconds kCounterInterval{1000};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
 constexpr DWORD kActiveShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
@@ -280,8 +285,10 @@ public:
     size_t update_v2() override {
         std::lock_guard lock(m_mutex);
         throw_if_failed_locked();
-        refresh_playback_clock_locked(std::chrono::steady_clock::now());
+        const auto now = std::chrono::steady_clock::now();
+        refresh_playback_clock_locked(now);
         finish_playback_clock_if_drained_locked();
+        log_counters_locked(now);
         if (m_paused.load()) return 0;
         if (m_sampleRate == 0 || m_channels == 0) return SIZE_MAX;
         return free_frames_locked();
@@ -385,6 +392,7 @@ private:
         m_submittedFrames = 0;
         m_playedFrames = 0;
         m_clockAnchorFrames = 0;
+        m_clockTargetFrames = 0;
         m_clockAnchor = {};
         m_pauseStarted = {};
         m_clockStarted = false;
@@ -417,7 +425,49 @@ private:
             elapsed.count() * static_cast<double>(m_sampleRate)
         );
         const uint64_t target = m_clockAnchorFrames + elapsedFrames;
+        m_clockTargetFrames = target;
         m_playedFrames = std::min(target, m_submittedFrames);
+    }
+
+    unsigned frames_to_ms_locked(uint64_t frames) const {
+        if (m_sampleRate == 0) return 0;
+        return static_cast<unsigned>(frames * 1000ull / m_sampleRate);
+    }
+
+    void log_counters_locked(std::chrono::steady_clock::time_point now) {
+        if (m_sampleRate == 0 || !m_clockStarted) return;
+        if (m_counterLines >= kMaxCounterLines) return;
+        if (m_lastCounterLog != std::chrono::steady_clock::time_point{} &&
+            now - m_lastCounterLog < kCounterInterval) {
+            return;
+        }
+        m_lastCounterLog = now;
+        ++m_counterLines;
+
+        std::string flags;
+        if (m_playing.load()) flags += 'P';
+        if (m_paused.load()) flags += 'p';
+        if (m_flushing) flags += 'f';
+        if (m_drainRequested) flags += 'd';
+        if (m_helperReady.load()) flags += 'R';
+        if (flags.empty()) flags = "-";
+
+        // Only %u and %s: console::printf is pfc's formatter and prints the
+        // length modifiers in %lu and %llu literally.
+        console::printf(
+            "%s: CLOCK target=%ums submitted=%ums played=%ums queued=%ums "
+            "write=%ums buffered=%ums free=%ums capacity=%ums flags=%s",
+            kComponentName,
+            frames_to_ms_locked(m_clockTargetFrames),
+            frames_to_ms_locked(m_submittedFrames),
+            frames_to_ms_locked(m_playedFrames),
+            frames_to_ms_locked(queued_frames_locked()),
+            frames_to_ms_locked(m_writeInProgressFrames),
+            frames_to_ms_locked(buffered_frames_locked()),
+            frames_to_ms_locked(free_frames_locked()),
+            frames_to_ms_locked(m_capacityFrames),
+            flags.c_str()
+        );
     }
 
     uint64_t startup_delay_frames_locked(
@@ -1056,6 +1106,9 @@ private:
     uint64_t m_submittedFrames = 0;
     uint64_t m_playedFrames = 0;
     uint64_t m_clockAnchorFrames = 0;
+    uint64_t m_clockTargetFrames = 0;
+    unsigned m_counterLines = 0;
+    std::chrono::steady_clock::time_point m_lastCounterLog{};
     std::chrono::steady_clock::time_point m_clockAnchor{};
     std::chrono::steady_clock::time_point m_pauseStarted{};
     bool m_clockStarted = false;
