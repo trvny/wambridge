@@ -67,6 +67,17 @@ class FoobarSourceTests(TestCase):
         self.assertIn("chunk.get_data() + offset * channels", source)
         self.assertIn("std::min<size_t>(freeFrames, total - offset)", source)
 
+    def test_offered_counter_survives_a_format_change(self) -> None:
+        # The counter is reset with the clock. Counting the offer before the
+        # reset lost it: on the 44.1 -> 48 kHz radio switch offered trailed
+        # submitted by a whole chunk for the rest of the stream.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("if (offset == 0) m_offeredFrames += total;", source)
+        # Counting must sit after the early return, or a retry counts twice.
+        accept = source.index("if (offset == 0) m_offeredFrames += total;")
+        self.assertLess(source.index("if (takenFrames == 0) return 0;"), accept)
+
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
         source = SOURCE.read_text(encoding="utf-8")

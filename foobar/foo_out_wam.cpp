@@ -241,7 +241,6 @@ public:
         uint64_t generation = 0;
         {
             std::lock_guard lock(m_mutex);
-            m_offeredFrames += frames;
             generation = m_generation;
         }
 
@@ -257,10 +256,6 @@ public:
     }
 
     size_t process_samples_v2(const audio_chunk& chunk) override {
-        {
-            std::lock_guard lock(m_mutex);
-            m_offeredFrames += chunk.get_sample_count();
-        }
         return submit_chunk(chunk, 0);
     }
 
@@ -306,6 +301,11 @@ public:
         const size_t freeFrames = free_frames_locked();
         const size_t takenFrames = std::min<size_t>(freeFrames, total - offset);
         if (takenFrames == 0) return 0;
+        // Count the offer once the first slice of it is in, so a retry cannot
+        // count it twice and a format change cannot reset the counter after
+        // it was already added. A radio switch to 48 kHz left offered a whole
+        // chunk behind submitted until this moved here.
+        if (offset == 0) m_offeredFrames += total;
         m_flushing = false;
         m_drainRequested = false;
         if (m_clockStarted && m_helperReady.load()) {
