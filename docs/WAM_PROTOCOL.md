@@ -140,8 +140,17 @@ Two consequences for anything built on this path:
   written for pause — is heard 13 s later. Controls that must feel immediate belong on the
   `55001` path, which answers in about a second.
 
-Whether that prebuffer is a byte count or a duration is still unmeasured. A run at 320 kbps
-against FLAC's 700-900 answers it: bytes shrink with the bitrate, seconds do not.
+The prebuffer is not a duration. Measured 2026-08-02 by running the same test at MP3 320 kbps
+against FLAC's 700-900: the delay grew from about 13.4 s to about 16.9 s.
+
+A buffer holding a fixed number of bytes holds proportionally **more** seconds of a smaller
+stream, so a lower bitrate lengthens the delay rather than shortening it. The direction
+matches; the size does not. A pure byte count would predict roughly two and a half times,
+and the measurement shows about one and a third, so something else is bounded as well.
+
+The useful conclusion is negative and firm: **lowering the bitrate makes the delay worse and
+is not a lever.** Raising it might trim two or three seconds off thirteen, which does not buy
+responsiveness. Controls that must feel immediate belong on the `55001` path regardless.
 
 ### Foobar-facing accounting
 
@@ -259,7 +268,8 @@ without evidence from different firmware.
 - Exact official multi-queue request bodies and timing.
 - Whether `cp` blocks the share/DLNA path.
 - A reliable URL/PCM speaker event that always corresponds to audible start.
-- Whether the speaker's ~7-8 s prebuffer counts bytes or seconds.
+- What bounds the speaker's prebuffer. It is not a duration, and it is not a plain byte
+  count either; a lower bitrate lengthened the delay by less than the bitrate ratio.
 - Whether pause carries the same ~13 s delay. It writes silence into the same pipe, so it
   probably does, but that has not been measured.
 
