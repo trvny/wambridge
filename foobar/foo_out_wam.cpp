@@ -146,6 +146,7 @@ struct Settings {
     std::wstring helper;
     std::wstring device;
     std::optional<int> volume;
+    bool diagnostics = false;
 };
 
 Settings load_settings() {
@@ -171,7 +172,17 @@ Settings load_settings() {
             volume = static_cast<int>(parsed);
         }
     }
-    return {std::move(helper), std::move(device), volume};
+    // Off unless asked for: the clock counters are a diagnostic, and a normal
+    // session should not push 240 lines into the user's console.
+    auto rawDiagnostics = environment_value(L"WAMBRIDGE_DIAGNOSTICS");
+    if (rawDiagnostics.empty()) {
+        rawDiagnostics = ini_value(L"diagnostics", L"", path);
+    }
+    const bool diagnostics =
+        rawDiagnostics == L"1" || rawDiagnostics == L"true" ||
+        rawDiagnostics == L"yes" || rawDiagnostics == L"on";
+
+    return {std::move(helper), std::move(device), volume, diagnostics};
 }
 
 void close_handle(HANDLE& handle) {
@@ -481,6 +492,7 @@ private:
     }
 
     void log_counters_locked(std::chrono::steady_clock::time_point now) {
+        if (!m_settings.diagnostics) return;
         if (m_sampleRate == 0 || !m_clockStarted) return;
         if (m_counterLines >= kMaxCounterLines) return;
         if (m_lastCounterLog != std::chrono::steady_clock::time_point{} &&

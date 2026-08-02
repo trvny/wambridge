@@ -78,6 +78,15 @@ class FoobarSourceTests(TestCase):
         accept = source.index("if (offset == 0) m_offeredFrames += total;")
         self.assertLess(source.index("if (takenFrames == 0) return 0;"), accept)
 
+    def test_clock_counters_are_off_unless_asked_for(self) -> None:
+        # Diagnostics, not a feature: a normal session must not get 240 lines.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("bool diagnostics = false;", source)
+        self.assertIn('environment_value(L"WAMBRIDGE_DIAGNOSTICS")', source)
+        self.assertIn('ini_value(L"diagnostics", L"", path)', source)
+        self.assertIn("if (!m_settings.diagnostics) return;", source)
+
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
         source = SOURCE.read_text(encoding="utf-8")
