@@ -13,6 +13,18 @@ volume=4
 # at 320 kbps measured worse than flac, 16.9 s against 13.4 s.
 #format=flac
 
+# Route foobar's volume slider to the speaker's own volume instead of the host
+# gain. Off by default. The host gain is heard about 13 s late because it is
+# applied where PCM leaves the queue; the 55001 control path answers in about a
+# second. Turning this on also stops the host gain being applied, so the slider
+# controls one thing, not two.
+#hardware_volume=1
+
+# Raw M5 step the top of the slider maps to, 1..30. The speaker's own maximum
+# is 30 and it is very loud, and a fresh foobar sits at 0 dB, so the ceiling is
+# deliberately low. Raise it once you know how loud your room wants it.
+#volume_max=10
+
 # Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
 # 240 lines. Turn it on before reporting anything about pacing.
 #diagnostics=1
