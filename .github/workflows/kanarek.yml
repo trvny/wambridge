@@ -1,0 +1,67 @@
+---
+name: kanarek
+
+on: # yamllint disable-line rule:truthy
+  # zizmor: ignore[dangerous-triggers] only same-repository PRs call the trusted reusable workflow
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - converted_to_draft
+      - auto_merge_enabled
+      - auto_merge_disabled
+      - closed
+  pull_request_review:
+    types:
+      - submitted
+      - dismissed
+  # zizmor: ignore[dangerous-triggers] only PR runs from this repository are accepted
+  workflow_run:
+    workflows:
+      - Build
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  companion:
+    if: >-
+      ${{
+        vars.KANAREK_ENABLED == 'true' &&
+        (github.event_name != 'pull_request_target' ||
+         github.event.pull_request.head.repo.full_name == github.repository) &&
+        (github.event_name != 'pull_request_review' ||
+         github.event.pull_request.head.repo.full_name == github.repository) &&
+        (github.event_name != 'workflow_run' ||
+         (github.event.workflow_run.event == 'pull_request' &&
+          github.event.workflow_run.head_repository.full_name == github.repository))
+      }}
+    concurrency:
+      group: >-
+        kanarek-${{ github.repository }}-${{
+          github.event.pull_request.number ||
+          github.event.workflow_run.pull_requests[0].number ||
+          github.event.workflow_run.head_sha ||
+          github.run_id
+        }}
+      cancel-in-progress: true
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: write
+      statuses: read
+    uses: trvny/.github/.github/workflows/kanarek-companion.yml@main
+    with:
+      watched_workflows: Build
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
