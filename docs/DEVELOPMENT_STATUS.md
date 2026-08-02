@@ -101,14 +101,22 @@ part is downstream of anything the host counts:
 Consequences, none of them optional to know:
 
 - Lowering the host buffer floor buys 2-3 s of thirteen. It is not the fix for anything.
-- The volume slider applies a gain where PCM leaves the queue, and `queued` is 0-61 ms.
-  Everything else is already past that point, so the slider cannot be responsive by
-  construction. Route it to the speaker's own volume, which answers in about 1.3 s.
+- The volume slider applied a gain where PCM leaves the queue, and `queued` is 0-61 ms.
+  Everything else is already past that point, so the slider could not be responsive by
+  construction. Routed to the speaker's own volume behind `hardware_volume=1`, which
+  answers in about a second.
 - Pause writes silence into the same pipe, so it very likely has the same delay. Not
-  measured yet.
-- Whether the speaker prebuffers bytes or seconds is unknown. If bytes, a lower bitrate
-  shortens everything proportionally, and the `mp3` profile at 320 kbps against FLAC's
-  700-900 kbps is a cheap way to find out.
+  measured yet. Every other transport control has the same shape: stop, seek and skip all
+  act on PCM that the speaker will not reach for about thirteen seconds.
+- The bitrate question is answered and the answer is no. MP3 at 320 kbps measured **worse**
+  than FLAC, 16.9 s against 13.4 s: a byte-bounded buffer holds more seconds of a thinner
+  stream. Do not re-run this.
+
+**The delay cannot be made to feel responsive, and that is the planning constraint.** Some
+7-8 s of it sits inside the speaker where no host accounting reaches. The reachable terms
+are the 1.5 s `adelay` and part of the 4 s host floor, so the best imaginable outcome is
+roughly nine seconds instead of thirteen. Shrinking the audio path is not the strategy;
+pairing each control with a `55001` command is, exactly as the volume slider now does.
 
 ## Closed investigations retained as evidence
 
