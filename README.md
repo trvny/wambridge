@@ -16,17 +16,16 @@ protocol-proven but not integrated.
 
 ## Status
 
-This repository is the source of truth after migration from `trvny/trvny`.
-
 - CLI discovery, saved devices, playback controls, custom radio stations and
   native TuneIn presets are implemented.
 - GitHub Actions builds bundled helpers and the foobar2000 2.x x64 component.
 - `Playback → WAM Bridge` provides emergency stop, standby and raw physical
   volume actions.
 - The physical M5 produces audible output from foobar's `f32le → FLAC` path.
-- PR #21 fixes host latency and capacity accounting. It remains unmerged until
-  a complete 3–5 minute track, stable seekbar, transitions and cleanup pass on
-  hardware.
+- PR #21 is merged and fixes host latency, backlog capacity and fixed-anchor
+  clock pacing.
+- Long-track hardware validation continues for seekbar, transitions, cleanup
+  and the remaining speaker-side delay.
 - Helper isolation PR #2 is merged. Manual pacing PR #4 and the large share
   experiment PR #7 are closed; their measured conclusions remain documented.
 

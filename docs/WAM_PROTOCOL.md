@@ -17,7 +17,7 @@ Primary evidence is preserved in PR #7, PR #21 and `tools/wam-probes/`.
 
 | Path | What confirms or anchors it | Current state |
 | --- | --- | --- |
-| URL/PCM through `SetUrlPlayback` | `AUDIO_STARTED` anchors bounded host flow; correlated events remain diagnostics | Audible short runs work; full-track timing validation is pending |
+| URL/PCM through `SetUrlPlayback` | `AUDIO_STARTED` anchors bounded host flow | Validated on hardware 2026-08-02: full checklist at a median 1.00x |
 | Share/DLNA through `SetSharePlaybackControl` | `StartPlaybackEvent` | Audible finite-file playback is proven; integration is not active |
 | Generic UPnP AVTransport | none exists on this M5 | Rejected |
 
@@ -113,8 +113,44 @@ real time without FFmpeg `-re` or manual socket throttling. A control run showed
 burst, then stable throughput near 1.00x after roughly 25 seconds.
 
 The often-quoted `+21..23 s` value was measured from process start and includes discovery,
-URL handoff and helper startup. It is only an upper bound, not a measured speaker buffer and
-not a latency target.
+URL handoff and helper startup. It is an upper bound on startup, not the steady-state delay.
+
+### Measured audio delay: about 13 seconds
+
+Measured 2026-08-02, mid-stream, with playback already settled. The foobar volume slider was
+moved at a recorded playback position and the listener read the seekbar when the change was
+heard. Two events in one run: sent at 12.14 s and heard at 26 s, sent at 37.16 s and heard at
+50 s. **About 13.4 s**, spread one second, of which reaction time is roughly half a second.
+
+Attribution:
+
+| term | share |
+| --- | --- |
+| host buffer counted by `get_latency()` | ~3.9 s |
+| `adelay=1500` startup silence in the helper | 1.5 s |
+| FFmpeg and the local HTTP socket | under a second |
+| **the speaker's own prebuffer** | **~7-8 s** |
+
+Two consequences for anything built on this path:
+
+- The M5 holds several seconds of audio that no host accounting can see. `get_latency()`
+  reports about 4 s and is therefore some nine seconds optimistic. Do not treat it as the
+  distance between a sample and the ear.
+- Anything applied host-side to PCM already on its way — a software volume gain, silence
+  written for pause — is heard 13 s later. Controls that must feel immediate belong on the
+  `55001` path, which answers in about a second.
+
+The prebuffer is not a duration. Measured 2026-08-02 by running the same test at MP3 320 kbps
+against FLAC's 700-900: the delay grew from about 13.4 s to about 16.9 s.
+
+A buffer holding a fixed number of bytes holds proportionally **more** seconds of a smaller
+stream, so a lower bitrate lengthens the delay rather than shortening it. The direction
+matches; the size does not. A pure byte count would predict roughly two and a half times,
+and the measurement shows about one and a third, so something else is bounded as well.
+
+The useful conclusion is negative and firm: **lowering the bitrate makes the delay worse and
+is not a lever.** Raising it might trim two or three seconds off thirteen, which does not buy
+responsiveness. Controls that must feel immediate belong on the `55001` path regardless.
 
 ### Foobar-facing accounting
 
@@ -125,7 +161,12 @@ retain all of these in latency and capacity accounting:
 - the current pipe write,
 - PCM submitted to the helper but not released by the host playback clock.
 
-Two physical failures identified the required algorithm:
+The adapter must also accept **every** frame the host offers it. `process_samples` returns
+void, so a partial write cannot be reported and the caller counts the whole chunk as played.
+Taking `min(free, chunk)` and dropping the rest is invisible from the protocol side and
+looks exactly like a runaway clock. Block until there is room instead.
+
+Three physical failures identified the required algorithm:
 
 1. Waiting for `StartPlaybackEvent` before releasing capacity filled the minimum four-second
    output capacity and froze foobar after exactly four seconds, while the M5 path could
@@ -134,12 +175,23 @@ Two physical failures identified the required algorithm:
    caught submitted PCM made the anchor follow pipe-write speed. Foobar advanced at about
    94x and immediately opened later tracks.
 
+3. Dropping the part of a chunk that did not fit made foobar run a 220 s track out in 22 s
+   at a median 11x, while `submitted` advanced at 1.04x, `buffered` sat at 3.8-4.0 s of a
+   4.0 s capacity and `free` hovered near 100 ms. Every clock term was correct. About nine
+   tenths of each chunk was being discarded and counted as played.
+
 The correction is one cumulative monotonic anchor at `AUDIO_STARTED`, shifted only by pause.
 Compute a real-time target from that fixed anchor and set played frames to
 `min(target, submitted)`. Never move the anchor because submitted PCM temporarily ran out.
+And never decline part of a chunk.
 
-No complete 3-5 minute foobar track has yet passed this corrected algorithm on hardware.
-That physical run remains the release gate.
+Failure 3 is worth remembering as a method, not just a bug: the first two were found by
+reading the clock code, and the third was invisible that way. It took printing every term
+once a second to see that the terms were fine and the audio was not.
+
+A complete track passed this algorithm on hardware on 2026-08-02, together with seek,
+pause/resume, a natural track transition, radio HLS across a 44.1 to 48 kHz switch, stop and
+clean process shutdown.
 
 ## Share/DLNA finite-file playback
 
@@ -199,6 +251,43 @@ while still returning success. Until model-aware conversion exists:
 
 Start hardware tests at step `3` or lower.
 
+`SetVolume` on the shared control connection changes the speaker within about a second,
+measured while a stream was playing. A host-side gain applied to PCM on its way out reaches
+the ear about 13 s later. Volume that should feel immediate belongs on this path, and a
+matched `result="ng"` for `SetVolume` must be surfaced: startup mutes the speaker on purpose,
+so a rejected unmute leaves it silent while every other signal says it is playing.
+
+## Standby and the front LED
+
+Measured 2026-08-02. The front LED is the only indicator of the speaker's power state, and
+nothing on the control port reports it: `GetPowerStatus`, `GetLedStatus` and `GetStandbyMode`
+do not exist on this firmware and all three time out. A human has to look at the speaker.
+
+LED off is network standby, not power off. With the LED dark the M5 still answers `GetFunc`,
+`GetVolume` and `GetApInfo` on `55001`. Wi-Fi and the control port stay up; the amplifier and
+the display go down.
+
+`SetSleepTimer` reaches that state on demand:
+
+- `sleeptime` is in **seconds**, not minutes. `60` counted down to `0` in one minute.
+- On firing, the timer clears itself back to `sleepoption=off`, `sleeptime=0` and the speaker
+  stays in standby. A fired timer leaves no trace, so `GetSleepTimer` cannot distinguish
+  "asleep because a timer fired" from "asleep for any other reason".
+- There is no configurable idle power-down. `GetPowerSaving` and `GetAutoPowerDown` do not
+  exist either. The sleep timer is the only power lever this firmware exposes.
+
+The component's standby menu item is therefore misnamed. It sends a stop and a mute, which
+leaves the speaker lit and fully powered. Only the sleep timer produces the state a user
+recognises as the speaker having gone to sleep.
+
+Something about a hard-killed session keeps the speaker awake. After a run whose helper and
+FFmpeg were killed by hand instead of stopped over the protocol, the M5 was still lit some
+hours later. `submode` was `cp`, but `cp` is not the cause: the sleep timer put the speaker
+into standby while it stayed in `cp`, and the speaker returns to `cp` on its own while idle.
+A `SetPlaybackControl stop` on the CPM API was accepted and reported `playstatus=stop`
+without clearing `cp`. The likelier explanation is a half-open HTTP pull the speaker never
+gave up on, since it cannot tell a dead local server from a slow one.
+
 ## No AVTransport renderer
 
 The tested M5 exposes no standard UPnP MediaRenderer or AVTransport service. Ports `7676`,
@@ -210,7 +299,15 @@ without evidence from different firmware.
 - Exact official multi-queue request bodies and timing.
 - Whether `cp` blocks the share/DLNA path.
 - A reliable URL/PCM speaker event that always corresponds to audible start.
-- Full-track drift, pause/resume and transition behavior of the fixed-anchor foobar build.
+- What bounds the speaker's prebuffer. It is not a duration, and it is not a plain byte
+  count either; a lower bitrate lengthened the delay by less than the bitrate ratio.
+- Whether pause carries the same ~13 s delay. It writes silence into the same pipe, so it
+  probably does, but that has not been measured.
+- Whether the M5 returns to standby by itself after a clean stop, and if so whether it arms
+  a sleep timer to do it. One sample taken hours after a hard-killed session read
+  `sleepoption=off` with the LED still on, which argues against self-arming but does not
+  settle it: a fired timer reads the same as one that never existed, so only a countdown
+  observed while the speaker is idle and still lit would prove the mechanism.
 
 ## Safety and acceptance
 

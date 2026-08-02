@@ -101,13 +101,23 @@ class FoobarSourceTests(TestCase):
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
-        source = SOURCE.read_text(encoding="utf-8")
-
-        for line in source.splitlines():
-            if line.lstrip().startswith("//"):
-                continue  # the rule itself is written down in comments
-            self.assertNotIn("%lu", line)
-            self.assertNotIn("%llu", line)
+        # Every foobar source is checked, not just the output adapter: the
+        # first fix reached foo_out_wam.cpp only, and wam_menu.cpp kept
+        # swallowing the Windows error code in all four of its failure paths.
+        for path in sorted(SOURCE.parent.glob("*.cpp")) + sorted(
+            SOURCE.parent.glob("*.h")
+        ):
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if line.lstrip().startswith("//"):
+                    continue  # the rule itself is written down in comments
+                for modifier in ("%lu", "%llu"):
+                    self.assertNotIn(
+                        modifier,
+                        line,
+                        f"{path.name}:{number} uses {modifier}",
+                    )
 
     def test_pipe_written_pcm_remains_in_reported_latency(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")

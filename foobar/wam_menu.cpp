@@ -361,19 +361,21 @@ private:
             return;
         }
 
+        // Only %u and %s: console::printf is pfc's formatter and prints the
+        // length modifiers in %lu and %llu literally, dropping the value.
         if (compact.empty()) {
             console::printf(
-                "%s: %s failed with exit code %lu",
+                "%s: %s failed with exit code %u",
                 kComponentName,
                 label.c_str(),
-                static_cast<unsigned long>(exitCode)
+                static_cast<unsigned>(exitCode)
             );
         } else {
             console::printf(
-                "%s: %s failed with exit code %lu: %s",
+                "%s: %s failed with exit code %u: %s",
                 kComponentName,
                 label.c_str(),
-                static_cast<unsigned long>(exitCode),
+                static_cast<unsigned>(exitCode),
                 compact.c_str()
             );
         }
@@ -401,9 +403,9 @@ private:
             close_handle(outputRead);
             close_handle(outputWrite);
             console::printf(
-                "%s: could not create control-helper pipes (Windows error %lu)",
+                "%s: could not create control-helper pipes (Windows error %u)",
                 kComponentName,
-                static_cast<unsigned long>(GetLastError())
+                static_cast<unsigned>(GetLastError())
             );
             return;
         }
@@ -496,9 +498,9 @@ private:
         if (!started) {
             close_handle(outputRead);
             console::printf(
-                "%s: could not start wambridge-control.exe (Windows error %lu)",
+                "%s: could not start wambridge-control.exe (Windows error %u)",
                 kComponentName,
-                static_cast<unsigned long>(GetLastError())
+                static_cast<unsigned>(GetLastError())
             );
             return;
         }
