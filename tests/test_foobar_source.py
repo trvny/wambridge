@@ -87,6 +87,18 @@ class FoobarSourceTests(TestCase):
         self.assertIn('ini_value(L"diagnostics", L"", path)', source)
         self.assertIn("if (!m_settings.diagnostics) return;", source)
 
+    def test_stream_format_is_configurable_but_validated(self) -> None:
+        # The value lands on the helper's command line, so an unknown one would
+        # be a rejected argument and take the stream down.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn('environment_value(L"WAMBRIDGE_FORMAT")', source)
+        self.assertIn('ini_value(L"format", L"", path)', source)
+        self.assertIn("if (!known) format = kDefaultStreamFormat;", source)
+        self.assertIn('constexpr const wchar_t* kDefaultStreamFormat = L"flac";', source)
+        self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
+        self.assertNotIn("--format flac --startup-timeout", source)
+
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
         # Every foobar source is checked, not just the output adapter: the
