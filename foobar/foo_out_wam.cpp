@@ -31,6 +31,7 @@ constexpr size_t kWriteBatchFrames = 4096;
 // foobar advancing at a median 11x with no term ever observed.
 constexpr unsigned kMaxCounterLines = 240;
 constexpr std::chrono::milliseconds kCounterInterval{1000};
+constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
 constexpr DWORD kActiveShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
@@ -228,11 +229,55 @@ public:
     }
 
     void process_samples(const audio_chunk& chunk) override {
-        (void)process_samples_v2(chunk);
+        // This entry point returns void, so a partial write cannot be
+        // reported and the caller counts the whole chunk as delivered.
+        // Taking only what fits therefore dropped the rest: measured on a
+        // physical M5 as foobar advancing at ~11x while the pipe stayed at
+        // 1.0x and free space hovered around 100 ms. Block until the chunk
+        // is in, and only give up when the stream is going away anyway.
+        const size_t frames = chunk.get_sample_count();
+        if (frames == 0 || chunk.get_channels() == 0) return;
+
+        uint64_t generation = 0;
+        {
+            std::lock_guard lock(m_mutex);
+            m_offeredFrames += frames;
+            generation = m_generation;
+        }
+
+        size_t offset = 0;
+        while (offset < frames) {
+            const size_t taken = submit_chunk(chunk, offset);
+            if (taken > 0) {
+                offset += taken;
+                continue;
+            }
+            if (!wait_for_room(generation)) return;
+        }
     }
 
     size_t process_samples_v2(const audio_chunk& chunk) override {
-        if (chunk.get_sample_count() == 0 || chunk.get_channels() == 0) return 0;
+        {
+            std::lock_guard lock(m_mutex);
+            m_offeredFrames += chunk.get_sample_count();
+        }
+        return submit_chunk(chunk, 0);
+    }
+
+    // Returns false once waiting is pointless: the stream is being torn down,
+    // replaced or shut down, and dropping the remainder is then correct.
+    bool wait_for_room(uint64_t generation) {
+        std::unique_lock lock(m_mutex);
+        throw_if_failed_locked();
+        if (m_shutdown || m_flushing || generation != m_generation) return false;
+        m_cv.wait_for(lock, kAcceptWaitSlice);
+        throw_if_failed_locked();
+        return !(m_shutdown || m_flushing || generation != m_generation);
+    }
+
+    size_t submit_chunk(const audio_chunk& chunk, size_t offset) {
+        const size_t total = chunk.get_sample_count();
+        if (total == 0 || chunk.get_channels() == 0 || offset >= total) return 0;
 
         std::unique_lock lock(m_mutex);
         throw_if_failed_locked();
@@ -259,7 +304,7 @@ public:
 
         refresh_playback_clock_locked(std::chrono::steady_clock::now());
         const size_t freeFrames = free_frames_locked();
-        const size_t takenFrames = std::min<size_t>(freeFrames, chunk.get_sample_count());
+        const size_t takenFrames = std::min<size_t>(freeFrames, total - offset);
         if (takenFrames == 0) return 0;
         m_flushing = false;
         m_drainRequested = false;
@@ -267,7 +312,7 @@ public:
             m_playing.store(true);
         }
 
-        const audio_sample* input = chunk.get_data();
+        const audio_sample* input = chunk.get_data() + offset * channels;
         const size_t values = takenFrames * channels;
         for (size_t index = 0; index < values; ++index) {
             m_queue.push_back(static_cast<float>(input[index]));
@@ -393,6 +438,7 @@ private:
         m_playedFrames = 0;
         m_clockAnchorFrames = 0;
         m_clockTargetFrames = 0;
+        m_offeredFrames = 0;
         m_clockAnchor = {};
         m_pauseStarted = {};
         m_clockStarted = false;
@@ -455,10 +501,12 @@ private:
         // Only %u and %s: console::printf is pfc's formatter and prints the
         // length modifiers in %lu and %llu literally.
         console::printf(
-            "%s: CLOCK target=%ums submitted=%ums played=%ums queued=%ums "
-            "write=%ums buffered=%ums free=%ums capacity=%ums flags=%s",
+            "%s: CLOCK target=%ums offered=%ums submitted=%ums played=%ums "
+            "queued=%ums write=%ums buffered=%ums free=%ums capacity=%ums "
+            "flags=%s",
             kComponentName,
             frames_to_ms_locked(m_clockTargetFrames),
+            frames_to_ms_locked(m_offeredFrames),
             frames_to_ms_locked(m_submittedFrames),
             frames_to_ms_locked(m_playedFrames),
             frames_to_ms_locked(queued_frames_locked()),
@@ -1107,6 +1155,7 @@ private:
     uint64_t m_playedFrames = 0;
     uint64_t m_clockAnchorFrames = 0;
     uint64_t m_clockTargetFrames = 0;
+    uint64_t m_offeredFrames = 0;
     unsigned m_counterLines = 0;
     std::chrono::steady_clock::time_point m_lastCounterLog{};
     std::chrono::steady_clock::time_point m_clockAnchor{};

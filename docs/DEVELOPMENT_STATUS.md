@@ -91,6 +91,11 @@ Status: foundation, with foobar clock work still experimental.
 - Uses one control connection and one encoder.
 - Relies on speaker TCP backpressure for HTTP pacing.
 - Requires separate bounded host accounting for accepted-but-not-heard PCM.
+- Accepts every offered frame in `process_samples`, blocking until it fits. That entry point
+  returns void, so a partial write is invisible and the caller counts the dropped remainder as
+  played. Measured on the M5 (2026-08-02): foobar advanced 220 s of track in 22 s at a median
+  11x while `submitted` grew at 1.04x, `buffered` sat at 3.8-4.0 s of a 4.0 s capacity and
+  `free` hovered near 100 ms. The transport was never fast; the surplus was discarded.
 - Matches shared-socket responses to the command that was sent. A matched `ng` fails startup
   for `SetUrlPlayback` and for the `SetVolume` that undoes the startup mute; an unanswered
   command still counts as success, and unmatched bodies stay diagnostics.

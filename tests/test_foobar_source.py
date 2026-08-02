@@ -35,6 +35,7 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_counterLines >= kMaxCounterLines", source)
         for field in (
             "target=%ums",
+            "offered=%ums",
             "submitted=%ums",
             "played=%ums",
             "queued=%ums",
@@ -44,6 +45,27 @@ class FoobarSourceTests(TestCase):
             "capacity=%ums",
         ):
             self.assertIn(field, source)
+
+    def test_void_process_samples_never_drops_the_remainder(self) -> None:
+        # process_samples returns void, so a partial write is invisible to the
+        # caller and the dropped remainder still counts as played. Measured on
+        # a physical M5: foobar advanced 220 s of track in 22 s while the pipe
+        # ran at 1.0x and free space stayed near 100 ms.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertNotIn("(void)process_samples_v2(chunk);", source)
+        self.assertIn("while (offset < frames)", source)
+        self.assertIn("const size_t taken = submit_chunk(chunk, offset);", source)
+        self.assertIn("if (!wait_for_room(generation)) return;", source)
+        self.assertIn("bool wait_for_room(uint64_t generation)", source)
+        # Waiting must end when the stream is torn down, or stop would hang.
+        self.assertIn(
+            "if (m_shutdown || m_flushing || generation != m_generation) return false;",
+            source,
+        )
+        # The remainder has to be read from where the accepted part ended.
+        self.assertIn("chunk.get_data() + offset * channels", source)
+        self.assertIn("std::min<size_t>(freeFrames, total - offset)", source)
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
