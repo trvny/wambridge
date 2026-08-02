@@ -16,8 +16,6 @@ protocol-proven but not integrated.
 
 ## Status
 
-This repository is the source of truth after migration from `trvny/trvny`.
-
 - CLI discovery, saved devices, playback controls, custom radio stations and
   native TuneIn presets are implemented.
 - GitHub Actions builds bundled helpers and the foobar2000 2.x x64 component.
