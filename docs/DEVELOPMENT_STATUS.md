@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-01.
+Last reviewed: 2026-08-02.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -24,15 +24,40 @@ The stable universal transport is local HTTP started through `SetUrlPlayback`. T
 paces the HTTP side through TCP backpressure. Finite share/DLNA playback is proven as a
 separate optional path but is not integrated into the foobar output.
 
-## Active pull request
+## Merged: the foobar output clock (PR #21, `9b12d44`)
 
-### PR #21: synchronize the foobar output clock
+Merged 2026-08-02 after the full physical M5 checklist passed.
 
-Branch: `fix/foobar-output-clock`
+### What actually caused the runaway start
 
-Latest documented candidate: `0db3742`, green in Build #227.
+Not the clock. `process_samples` returns void, so a partial write cannot be reported and
+the caller counts the whole chunk as delivered. The output took `min(free, chunk)` and
+dropped the rest, so foobar advanced over audio that was never sent.
 
-The branch:
+The per-second `CLOCK` line settled it in one run: `target` and `played` advanced at
+exactly 1000 ms per second, `submitted` at about 1035 ms, `buffered` sat between 3.8 and
+4.0 s of a 4.0 s capacity and `free` hovered near 100 ms — while foobar ran a 220 s track
+out in 22 s. Every clock term was behaving. About nine tenths of each chunk was going in
+the bin.
+
+**Rule that follows: the void `process_samples` must accept every frame it is offered,
+blocking until there is room.** Only give up when the stream is shutting down, flushing or
+has been replaced. `process_samples_v2` keeps reporting partial writes; that is what its
+return value is for.
+
+After the fix, measured over a complete track: median 1.00x, 100% of samples between 0.9x
+and 1.1x, natural transition into the next track, no leaked encoder.
+
+Every hypothesis that preceded this — clock anchoring, refresh ordering, capacity —
+described terms that measurement showed to be correct. None of them was the fault.
+
+### What else the branch carries
+
+- matched shared-socket responses: a rejected `SetUrlPlayback` fails the attempt and a
+  rejected unmute fails startup, so `WAMBRIDGE PLAYING` cannot be printed over a speaker
+  that was muted for startup and never unmuted,
+- a `CLOCK` counter line behind `diagnostics=1`,
+- a write probe that prints its numbers again,
 
 - counts queued, in-progress and submitted PCM in latency and capacity,
 - starts one cumulative host clock at `WAMBRIDGE AUDIO_STARTED`,
@@ -53,9 +78,37 @@ Physical measurements behind the design:
 - the audibly playing URL path did not emit a matching start event before the old timeout,
 - `NETWORK_TIMEOUT_ERROR` disappeared after stream starvation was fixed.
 
-Do not merge yet. The current build still needs one complete 3-5 minute track against wall
-clock, stable seekbar, second track, pause/resume, stop/change and process cleanup on the
-physical M5.
+## Measured: about thirteen seconds of audio delay
+
+Measured 2026-08-02 on the physical M5, mid-stream, with playback already settled. The
+foobar volume slider was moved through beefweb while the playback position at the moment
+of the change was recorded; the listener read the position off the seekbar when the change
+was heard. Two events in one run: 12.14 s heard at 26 s, and 37.16 s heard at 50 s.
+
+**End-to-end delay is about 13.4 s**, spread one second. Reaction time inflates it by
+roughly half a second.
+
+`get_latency()` reports about 4 s. It under-reports by some nine seconds, and the missing
+part is downstream of anything the host counts:
+
+| term | share | ours to change |
+|---|---|---|
+| host `buffered` | ~3.9 s | floored at 4.0 s by `clamp(bufferLength, 2.0, 30.0)` plus 2.0 |
+| `adelay=1500` startup silence | 1.5 s | yes |
+| FFmpeg and the HTTP socket | under a second | barely |
+| the speaker itself | ~7-8 s | no |
+
+Consequences, none of them optional to know:
+
+- Lowering the host buffer floor buys 2-3 s of thirteen. It is not the fix for anything.
+- The volume slider applies a gain where PCM leaves the queue, and `queued` is 0-61 ms.
+  Everything else is already past that point, so the slider cannot be responsive by
+  construction. Route it to the speaker's own volume, which answers in about 1.3 s.
+- Pause writes silence into the same pipe, so it very likely has the same delay. Not
+  measured yet.
+- Whether the speaker prebuffers bytes or seconds is unknown. If bytes, a lower bitrate
+  shortens everything proportionally, and the `mp3` profile at 320 kbps against FLAC's
+  700-900 kbps is a cheap way to find out.
 
 ## Closed investigations retained as evidence
 
@@ -84,7 +137,7 @@ attempt, not resurrect the old fallback ladder.
 
 ### Universal URL/PCM transport
 
-Status: foundation, with foobar clock work still experimental.
+Status: validated on the physical M5. Pacing is correct; responsiveness is not.
 
 - Works for files, radio and endless sources.
 - Uses local HTTP without fake `Content-Length`.
@@ -113,8 +166,11 @@ Status: rejected for the tested `SPK-WAM550`. The service is not exposed.
 
 ## Next order
 
-1. Finish the physical acceptance run for PR #21.
-2. Fix raw M5 volume handling to `0..30` or add model-aware percentage conversion.
+1. Make the speaker-facing format configurable, then measure whether the speaker prebuffers
+   bytes or seconds. It decides whether the 13 s delay has a knob at all.
+2. Route the foobar volume slider to the speaker's own volume instead of the host gain,
+   with send throttling for slider drags. This subsumes fixing raw M5 volume to `0..30`.
+3. Measure pause the same way the volume delay was measured.
 3. Reduce and reimplement the finite share path from its measured working form.
 4. Add a proper foobar preferences page while retaining legacy INI compatibility.
 5. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
