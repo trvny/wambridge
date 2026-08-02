@@ -148,21 +148,27 @@ def build_mobile_request(
     client_uuid: str,
     *,
     method: str = "GetFunc",
+    arguments: list[tuple[str, str | int, str]] | None = None,
     port: int = DEFAULT_PORT,
     api_type: str = "UIC",
+    power_on: bool = False,
+    keep_alive: bool = False,
 ) -> bytes:
     """Build the raw request shape used by Samsung Multiroom clients."""
     parsed = urlsplit(
         build_api_url(
             speaker_ip,
             method,
+            arguments,
             port=port,
             api_type=api_type,
+            power_on=power_on,
         )
     )
     target = parsed.path
     if parsed.query:
         target = f"{target}?{parsed.query}"
+    connection = "keep-alive" if keep_alive else "close"
     return "\r\n".join(
         (
             f"GET {target} HTTP/1.1",
@@ -170,11 +176,116 @@ def build_mobile_request(
             f"mobileUUID: {client_uuid}",
             "mobileName: Wireless Audio",
             "mobileVersion: 1.0",
-            "Connection: close",
+            f"Connection: {connection}",
             "",
             "",
         )
     ).encode("utf-8")
+
+
+class WamEventConnection:
+    """One persistent control connection used for commands and events."""
+
+    def __init__(
+        self,
+        speaker_ip: str,
+        client_uuid: str,
+        *,
+        port: int = DEFAULT_PORT,
+        timeout: float = 5.0,
+    ) -> None:
+        self._speaker_ip = speaker_ip
+        self._client_uuid = client_uuid
+        self._port = port
+        self._timeout = timeout
+        self._socket: socket.socket | None = None
+        self._parser = WamHttpStreamParser()
+        self._send_lock = threading.Lock()
+
+    def __enter__(self) -> WamEventConnection:
+        self._socket = socket.create_connection(
+            (self._speaker_ip, self._port),
+            timeout=self._timeout,
+        )
+        self._socket.settimeout(1.0)
+        self.send(method="GetFunc")
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+
+    def send(
+        self,
+        *,
+        method: str,
+        arguments: list[tuple[str, str | int, str]] | None = None,
+        api_type: str = "UIC",
+        power_on: bool = False,
+    ) -> None:
+        """Send one command without opening a competing control socket."""
+        request = build_mobile_request(
+            self._speaker_ip,
+            self._client_uuid,
+            method=method,
+            arguments=arguments,
+            port=self._port,
+            api_type=api_type,
+            power_on=power_on,
+            keep_alive=True,
+        )
+        with self._send_lock:
+            if self._socket is None:
+                raise WamEventError("Samsung WAM event connection is not open")
+            self._socket.sendall(request)
+
+    def events(
+        self,
+        *,
+        duration: float = 0.0,
+        stop: threading.Event | None = None,
+    ):
+        """Yield decoded responses and broadcasts from this connection."""
+        deadline = monotonic() + duration if duration > 0 else None
+        while deadline is None or monotonic() < deadline:
+            if stop is not None and stop.is_set():
+                return
+            if self._socket is None:
+                raise WamEventError("Samsung WAM event connection is not open")
+            try:
+                data = self._socket.recv(65536)
+            except TimeoutError:
+                continue
+            if not data:
+                raise WamEventError("Samsung WAM closed the persistent event connection")
+            for body in self._parser.feed(data):
+                yield parse_event(body)
+
+
+def send_mobile_command(
+    speaker_ip: str,
+    client_uuid: str,
+    *,
+    method: str,
+    arguments: list[tuple[str, str | int, str]] | None = None,
+    port: int = DEFAULT_PORT,
+    timeout: float = 5.0,
+    api_type: str = "UIC",
+    power_on: bool = False,
+) -> None:
+    """Send one identity-bearing command without waiting for a reply."""
+    request = build_mobile_request(
+        speaker_ip,
+        client_uuid,
+        method=method,
+        arguments=arguments,
+        port=port,
+        api_type=api_type,
+        power_on=power_on,
+    )
+    with socket.create_connection((speaker_ip, port), timeout=timeout) as writer:
+        writer.sendall(request)
 
 
 def send_probe(
@@ -185,9 +296,13 @@ def send_probe(
     timeout: float = 5.0,
 ) -> None:
     """Send a harmless GetFunc command through a separate writer socket."""
-    request = build_mobile_request(speaker_ip, client_uuid, port=port)
-    with socket.create_connection((speaker_ip, port), timeout=timeout) as writer:
-        writer.sendall(request)
+    send_mobile_command(
+        speaker_ip,
+        client_uuid,
+        method="GetFunc",
+        port=port,
+        timeout=timeout,
+    )
 
 
 def listen_events(
@@ -200,35 +315,13 @@ def listen_events(
     stop: threading.Event | None = None,
     ready: threading.Event | None = None,
 ):
-    """Yield speaker responses and unsolicited events from a persistent socket.
-
-    ``stop`` lets a caller running this in a background thread end the loop and
-    release the socket without waiting for ``duration`` to elapse.
-
-    ``ready`` is set once the socket is connected and the probe has been sent.
-    A caller that sends commands before that point can miss the very events it
-    is waiting for.
-    """
-    parser = WamHttpStreamParser()
-    deadline = monotonic() + duration if duration > 0 else None
-    with socket.create_connection((speaker_ip, port), timeout=timeout) as listener:
-        listener.settimeout(1.0)
-        send_probe(
-            speaker_ip,
-            client_uuid,
-            port=port,
-            timeout=timeout,
-        )
+    """Yield events while keeping commands and reads on one control socket."""
+    with WamEventConnection(
+        speaker_ip,
+        client_uuid,
+        port=port,
+        timeout=timeout,
+    ) as connection:
         if ready is not None:
             ready.set()
-        while deadline is None or monotonic() < deadline:
-            if stop is not None and stop.is_set():
-                return
-            try:
-                data = listener.recv(65536)
-            except TimeoutError:
-                continue
-            if not data:
-                raise WamEventError("Samsung WAM closed the persistent event connection")
-            for body in parser.feed(data):
-                yield parse_event(body)
+        yield from connection.events(duration=duration, stop=stop)

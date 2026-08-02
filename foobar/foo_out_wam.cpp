@@ -26,6 +26,12 @@ constexpr char kOutputName[] = "WAM Bridge";
 constexpr char kDeviceName[] = "Samsung M5 (Wi-Fi)";
 constexpr double kStartupLatencySeconds = 1.5;
 constexpr size_t kWriteBatchFrames = 4096;
+// One counter line per second, long enough to cover a whole track. The clock
+// terms are the only way to tell which one runs away; a physical run measured
+// foobar advancing at a median 11x with no term ever observed.
+constexpr unsigned kMaxCounterLines = 240;
+constexpr std::chrono::milliseconds kCounterInterval{1000};
+constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
 constexpr DWORD kActiveShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
@@ -140,6 +146,7 @@ struct Settings {
     std::wstring helper;
     std::wstring device;
     std::optional<int> volume;
+    bool diagnostics = false;
 };
 
 Settings load_settings() {
@@ -165,7 +172,17 @@ Settings load_settings() {
             volume = static_cast<int>(parsed);
         }
     }
-    return {std::move(helper), std::move(device), volume};
+    // Off unless asked for: the clock counters are a diagnostic, and a normal
+    // session should not push 240 lines into the user's console.
+    auto rawDiagnostics = environment_value(L"WAMBRIDGE_DIAGNOSTICS");
+    if (rawDiagnostics.empty()) {
+        rawDiagnostics = ini_value(L"diagnostics", L"", path);
+    }
+    const bool diagnostics =
+        rawDiagnostics == L"1" || rawDiagnostics == L"true" ||
+        rawDiagnostics == L"yes" || rawDiagnostics == L"on";
+
+    return {std::move(helper), std::move(device), volume, diagnostics};
 }
 
 void close_handle(HANDLE& handle) {
@@ -215,16 +232,58 @@ public:
     double get_latency() override {
         std::lock_guard lock(m_mutex);
         if (m_flushing || m_sampleRate == 0 || m_channels == 0) return 0.0;
-        const double queued = static_cast<double>(queued_frames_locked()) / m_sampleRate;
-        return queued + (m_playing.load() ? kStartupLatencySeconds : 0.0);
+        const auto now = std::chrono::steady_clock::now();
+        refresh_playback_clock_locked(now);
+        const uint64_t frames = buffered_frames_locked() +
+            startup_delay_frames_locked(now);
+        return static_cast<double>(frames) / m_sampleRate;
     }
 
     void process_samples(const audio_chunk& chunk) override {
-        (void)process_samples_v2(chunk);
+        // This entry point returns void, so a partial write cannot be
+        // reported and the caller counts the whole chunk as delivered.
+        // Taking only what fits therefore dropped the rest: measured on a
+        // physical M5 as foobar advancing at ~11x while the pipe stayed at
+        // 1.0x and free space hovered around 100 ms. Block until the chunk
+        // is in, and only give up when the stream is going away anyway.
+        const size_t frames = chunk.get_sample_count();
+        if (frames == 0 || chunk.get_channels() == 0) return;
+
+        uint64_t generation = 0;
+        {
+            std::lock_guard lock(m_mutex);
+            generation = m_generation;
+        }
+
+        size_t offset = 0;
+        while (offset < frames) {
+            const size_t taken = submit_chunk(chunk, offset);
+            if (taken > 0) {
+                offset += taken;
+                continue;
+            }
+            if (!wait_for_room(generation)) return;
+        }
     }
 
     size_t process_samples_v2(const audio_chunk& chunk) override {
-        if (chunk.get_sample_count() == 0 || chunk.get_channels() == 0) return 0;
+        return submit_chunk(chunk, 0);
+    }
+
+    // Returns false once waiting is pointless: the stream is being torn down,
+    // replaced or shut down, and dropping the remainder is then correct.
+    bool wait_for_room(uint64_t generation) {
+        std::unique_lock lock(m_mutex);
+        throw_if_failed_locked();
+        if (m_shutdown || m_flushing || generation != m_generation) return false;
+        m_cv.wait_for(lock, kAcceptWaitSlice);
+        throw_if_failed_locked();
+        return !(m_shutdown || m_flushing || generation != m_generation);
+    }
+
+    size_t submit_chunk(const audio_chunk& chunk, size_t offset) {
+        const size_t total = chunk.get_sample_count();
+        if (total == 0 || chunk.get_channels() == 0 || offset >= total) return 0;
 
         std::unique_lock lock(m_mutex);
         throw_if_failed_locked();
@@ -234,6 +293,7 @@ public:
         const unsigned channels = chunk.get_channels();
         if (sampleRate != m_sampleRate || channels != m_channels) {
             m_queue.clear();
+            reset_clock_locked();
             m_sampleRate = sampleRate;
             m_channels = channels;
             m_capacityFrames = static_cast<size_t>(
@@ -248,12 +308,22 @@ public:
             cancel_child();
         }
 
+        refresh_playback_clock_locked(std::chrono::steady_clock::now());
         const size_t freeFrames = free_frames_locked();
-        const size_t takenFrames = std::min<size_t>(freeFrames, chunk.get_sample_count());
+        const size_t takenFrames = std::min<size_t>(freeFrames, total - offset);
         if (takenFrames == 0) return 0;
+        // Count the offer once the first slice of it is in, so a retry cannot
+        // count it twice and a format change cannot reset the counter after
+        // it was already added. A radio switch to 48 kHz left offered a whole
+        // chunk behind submitted until this moved here.
+        if (offset == 0) m_offeredFrames += total;
         m_flushing = false;
+        m_drainRequested = false;
+        if (m_clockStarted && m_helperReady.load()) {
+            m_playing.store(true);
+        }
 
-        const audio_sample* input = chunk.get_data();
+        const audio_sample* input = chunk.get_data() + offset * channels;
         const size_t values = takenFrames * channels;
         for (size_t index = 0; index < values; ++index) {
             m_queue.push_back(static_cast<float>(input[index]));
@@ -271,6 +341,10 @@ public:
     size_t update_v2() override {
         std::lock_guard lock(m_mutex);
         throw_if_failed_locked();
+        const auto now = std::chrono::steady_clock::now();
+        refresh_playback_clock_locked(now);
+        finish_playback_clock_if_drained_locked();
+        log_counters_locked(now);
         if (m_paused.load()) return 0;
         if (m_sampleRate == 0 || m_channels == 0) return SIZE_MAX;
         return free_frames_locked();
@@ -278,11 +352,30 @@ public:
 
     bool is_progressing() override {
         std::lock_guard lock(m_mutex);
+        refresh_playback_clock_locked(std::chrono::steady_clock::now());
+        finish_playback_clock_if_drained_locked();
         return m_playing.load() && !m_paused.load() && !m_flushing;
     }
 
     void pause(bool state) override {
-        m_paused.store(state);
+        {
+            std::lock_guard lock(m_mutex);
+            const bool wasPaused = m_paused.load();
+            if (state == wasPaused) return;
+
+            const auto now = std::chrono::steady_clock::now();
+            refresh_playback_clock_locked(now);
+            if (state) {
+                m_pauseStarted = now;
+            } else {
+                if (m_clockStarted &&
+                    m_pauseStarted != std::chrono::steady_clock::time_point{}) {
+                    m_clockAnchor += now - m_pauseStarted;
+                }
+                m_pauseStarted = {};
+            }
+            m_paused.store(state);
+        }
         m_cv.notify_all();
     }
 
@@ -299,6 +392,11 @@ public:
     }
 
     void force_play() override {
+        {
+            std::lock_guard lock(m_mutex);
+            m_drainRequested = true;
+            finish_playback_clock_if_drained_locked();
+        }
         m_cv.notify_all();
     }
 
@@ -319,6 +417,7 @@ private:
         m_channels = 0;
         m_capacityFrames = 0;
         m_flushing = false;
+        reset_clock_locked();
         ++m_generation;
         m_helperReady.store(false);
         m_playing.store(false);
@@ -329,9 +428,133 @@ private:
         return m_channels == 0 ? 0 : m_queue.size() / m_channels;
     }
 
+    uint64_t buffered_frames_locked() const {
+        const uint64_t submitted = m_submittedFrames >= m_playedFrames
+            ? m_submittedFrames - m_playedFrames
+            : 0;
+        return static_cast<uint64_t>(queued_frames_locked()) +
+            m_writeInProgressFrames + submitted;
+    }
+
     size_t free_frames_locked() const {
-        const size_t queued = queued_frames_locked();
-        return queued >= m_capacityFrames ? 0 : m_capacityFrames - queued;
+        const uint64_t buffered = buffered_frames_locked();
+        return buffered >= m_capacityFrames
+            ? 0
+            : m_capacityFrames - static_cast<size_t>(buffered);
+    }
+
+    void reset_clock_locked() {
+        m_writeInProgressFrames = 0;
+        m_submittedFrames = 0;
+        m_playedFrames = 0;
+        m_clockAnchorFrames = 0;
+        m_clockTargetFrames = 0;
+        m_offeredFrames = 0;
+        m_clockAnchor = {};
+        m_pauseStarted = {};
+        m_clockStarted = false;
+        m_drainRequested = false;
+        m_childExited = false;
+    }
+
+    void start_playback_clock_locked(
+        std::chrono::steady_clock::time_point now
+    ) {
+        if (m_clockStarted) return;
+        m_clockStarted = true;
+        m_clockAnchorFrames = m_playedFrames;
+        m_clockAnchor = now + std::chrono::duration_cast<
+            std::chrono::steady_clock::duration
+        >(std::chrono::duration<double>(kStartupLatencySeconds));
+        if (m_paused.load()) m_pauseStarted = now;
+    }
+
+    void refresh_playback_clock_locked(
+        std::chrono::steady_clock::time_point now
+    ) {
+        if (!m_clockStarted || m_paused.load() || m_sampleRate == 0 ||
+            now <= m_clockAnchor) {
+            return;
+        }
+
+        const auto elapsed = std::chrono::duration<double>(now - m_clockAnchor);
+        const uint64_t elapsedFrames = static_cast<uint64_t>(
+            elapsed.count() * static_cast<double>(m_sampleRate)
+        );
+        const uint64_t target = m_clockAnchorFrames + elapsedFrames;
+        m_clockTargetFrames = target;
+        m_playedFrames = std::min(target, m_submittedFrames);
+    }
+
+    unsigned frames_to_ms_locked(uint64_t frames) const {
+        if (m_sampleRate == 0) return 0;
+        return static_cast<unsigned>(frames * 1000ull / m_sampleRate);
+    }
+
+    void log_counters_locked(std::chrono::steady_clock::time_point now) {
+        if (!m_settings.diagnostics) return;
+        if (m_sampleRate == 0 || !m_clockStarted) return;
+        if (m_counterLines >= kMaxCounterLines) return;
+        if (m_lastCounterLog != std::chrono::steady_clock::time_point{} &&
+            now - m_lastCounterLog < kCounterInterval) {
+            return;
+        }
+        m_lastCounterLog = now;
+        ++m_counterLines;
+
+        std::string flags;
+        if (m_playing.load()) flags += 'P';
+        if (m_paused.load()) flags += 'p';
+        if (m_flushing) flags += 'f';
+        if (m_drainRequested) flags += 'd';
+        if (m_helperReady.load()) flags += 'R';
+        if (flags.empty()) flags = "-";
+
+        // Only %u and %s: console::printf is pfc's formatter and prints the
+        // length modifiers in %lu and %llu literally.
+        console::printf(
+            "%s: CLOCK target=%ums offered=%ums submitted=%ums played=%ums "
+            "queued=%ums write=%ums buffered=%ums free=%ums capacity=%ums "
+            "flags=%s",
+            kComponentName,
+            frames_to_ms_locked(m_clockTargetFrames),
+            frames_to_ms_locked(m_offeredFrames),
+            frames_to_ms_locked(m_submittedFrames),
+            frames_to_ms_locked(m_playedFrames),
+            frames_to_ms_locked(queued_frames_locked()),
+            frames_to_ms_locked(m_writeInProgressFrames),
+            frames_to_ms_locked(buffered_frames_locked()),
+            frames_to_ms_locked(free_frames_locked()),
+            frames_to_ms_locked(m_capacityFrames),
+            flags.c_str()
+        );
+    }
+
+    uint64_t startup_delay_frames_locked(
+        std::chrono::steady_clock::time_point now
+    ) const {
+        auto effectiveNow = now;
+        if (m_paused.load() &&
+            m_pauseStarted != std::chrono::steady_clock::time_point{}) {
+            effectiveNow = m_pauseStarted;
+        }
+        if (!m_clockStarted || m_sampleRate == 0 ||
+            effectiveNow >= m_clockAnchor) {
+            return 0;
+        }
+        const auto remaining = std::chrono::duration<double>(
+            m_clockAnchor - effectiveNow
+        );
+        return static_cast<uint64_t>(
+            remaining.count() * static_cast<double>(m_sampleRate)
+        );
+    }
+
+    void finish_playback_clock_if_drained_locked() {
+        if (m_drainRequested && buffered_frames_locked() == 0) {
+            m_drainRequested = false;
+            m_playing.store(false);
+        }
     }
 
     void throw_if_failed_locked() const {
@@ -373,6 +596,7 @@ private:
     void set_protocol_state_if_current(
         uint64_t generation,
         bool ready,
+        bool audioStarted,
         bool playing
     ) {
         bool accepted = false;
@@ -383,6 +607,11 @@ private:
                 !m_childStopping.load() &&
                 (!m_flushing || playing)) {
                 if (ready) m_helperReady.store(true);
+                if (audioStarted || playing) {
+                    start_playback_clock_locked(
+                        std::chrono::steady_clock::now()
+                    );
+                }
                 if (playing) {
                     m_playing.store(true);
                     m_childReachedPlaying.store(true);
@@ -432,6 +661,10 @@ private:
         m_childStopping.store(false);
         m_helperReady.store(false);
         m_childReachedPlaying.store(false);
+        {
+            std::lock_guard lock(m_mutex);
+            m_childExited = false;
+        }
 
         SECURITY_ATTRIBUTES security{};
         security.nLength = sizeof(security);
@@ -600,23 +833,58 @@ private:
                 auto line = pending.substr(0, newline);
                 pending.erase(0, newline + 1);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (!line.empty()) {
+                    console::printf("%s: %s", kComponentName, line.c_str());
+                }
                 if (line == "WAMBRIDGE READY") {
-                    set_protocol_state_if_current(generation, true, false);
+                    set_protocol_state_if_current(
+                        generation,
+                        true,
+                        false,
+                        false
+                    );
+                } else if (line == "WAMBRIDGE AUDIO_STARTED") {
+                    set_protocol_state_if_current(
+                        generation,
+                        false,
+                        true,
+                        false
+                    );
                 } else if (line.rfind("WAMBRIDGE PLAYING", 0) == 0) {
-                    set_protocol_state_if_current(generation, false, true);
+                    set_protocol_state_if_current(
+                        generation,
+                        false,
+                        false,
+                        true
+                    );
                 } else if (line.rfind("WAMBRIDGE ERROR ", 0) == 0) {
                     set_failure_if_current(line.substr(16), generation);
                 }
             }
         }
-        set_failure_if_current(
-            "wambridge-pcm exited unexpectedly",
-            generation
-        );
+        bool expected = false;
+        {
+            std::lock_guard lock(m_mutex);
+            expected = m_shutdown || m_restart || m_childStopping.load();
+        }
+        if (!expected) {
+            set_failure_if_current(
+                "wambridge-pcm exited unexpectedly",
+                generation
+            );
+        }
+        {
+            std::lock_guard lock(m_mutex);
+            if (generation == m_generation) m_childExited = true;
+        }
+        m_cv.notify_all();
     }
 
     void worker_loop() {
         std::vector<float> batch;
+        bool pacingSilence = false;
+        uint64_t pacedSilenceFrames = 0;
+        std::chrono::steady_clock::time_point silenceEpoch{};
         while (true) {
             unsigned sampleRate = 0;
             unsigned channels = 0;
@@ -629,7 +897,7 @@ private:
                         (m_failure.empty() && (
                             m_restart || m_flushing ||
                             (m_sampleRate != 0 && m_channels != 0 && (
-                                !m_queue.empty() ||
+                                !m_queue.empty() || m_childExited ||
                                 (m_paused.load() && m_helperReady.load())
                             ))
                         ));
@@ -667,9 +935,14 @@ private:
                 }
                 continue;
             }
-            if (childState == ChildState::none &&
-                !start_child(sampleRate, channels, generation)) {
-                continue;
+            if (childState == ChildState::none) {
+                bool hasAudio = false;
+                {
+                    std::lock_guard lock(m_mutex);
+                    hasAudio = !m_queue.empty();
+                }
+                if (!hasAudio) continue;
+                if (!start_child(sampleRate, channels, generation)) continue;
             }
 
             bool sendSilence = false;
@@ -689,7 +962,8 @@ private:
                                 channels
                             ) ||
                             (m_helperReady.load() && (
-                                m_flushing || m_paused.load() || !m_queue.empty()
+                                m_flushing || m_paused.load() ||
+                                !m_queue.empty()
                             ));
                     }
                 );
@@ -708,8 +982,9 @@ private:
                 }
                 if (stopAfterFlush) {
                     batchFrames = 0;
-                } else if (!m_helperReady.load() ||
-                    (!sendSilence && m_queue.empty())) {
+                } else if (!m_helperReady.load()) {
+                    continue;
+                } else if (!sendSilence && m_queue.empty()) {
                     continue;
                 } else {
                     batchFrames = sendSilence
@@ -720,6 +995,8 @@ private:
                     if (sendSilence) {
                         std::fill(batch.begin(), batch.end(), 0.0f);
                     } else {
+                        pacingSilence = false;
+                        pacedSilenceFrames = 0;
                         const double gain = m_gain.load();
                         for (size_t index = 0; index < values; ++index) {
                             const double scaled =
@@ -729,10 +1006,10 @@ private:
                             );
                             m_queue.pop_front();
                         }
+                        m_writeInProgressFrames = batchFrames;
                     }
                 }
             }
-            m_cv.notify_all();
 
             if (stopAfterFlush) {
                 stop_child();
@@ -744,7 +1021,14 @@ private:
                 std::lock_guard lock(m_childMutex);
                 input = m_childStdin;
             }
-            if (input == nullptr) continue;
+            if (input == nullptr) {
+                if (!sendSilence) {
+                    std::lock_guard lock(m_mutex);
+                    if (generation == m_generation) m_writeInProgressFrames = 0;
+                }
+                m_cv.notify_all();
+                continue;
+            }
 
             const auto* bytes = reinterpret_cast<const std::byte*>(batch.data());
             size_t remaining = batch.size() * sizeof(float);
@@ -762,6 +1046,11 @@ private:
                 remaining -= written;
             }
             if (writeFailed) {
+                if (!sendSilence) {
+                    std::lock_guard lock(m_mutex);
+                    if (generation == m_generation) m_writeInProgressFrames = 0;
+                }
+                m_cv.notify_all();
                 set_failure_if_current(
                     "wambridge-pcm closed its PCM input",
                     generation
@@ -770,6 +1059,43 @@ private:
                 continue;
             }
 
+            if (sendSilence) {
+                const auto now = std::chrono::steady_clock::now();
+                if (!pacingSilence) {
+                    pacingSilence = true;
+                    pacedSilenceFrames = 0;
+                    silenceEpoch = now;
+                }
+                pacedSilenceFrames += batchFrames;
+                const auto deadline = silenceEpoch +
+                    std::chrono::duration_cast<
+                        std::chrono::steady_clock::duration
+                    >(std::chrono::duration<double>(
+                        static_cast<double>(pacedSilenceFrames) / sampleRate
+                    ));
+                std::unique_lock lock(m_mutex);
+                m_cv.wait_until(
+                    lock,
+                    deadline,
+                    [this, generation] {
+                        return m_shutdown || m_restart ||
+                            generation != m_generation ||
+                            (!m_paused.load() && !m_flushing);
+                    }
+                );
+            }
+
+            if (!sendSilence) {
+                std::lock_guard lock(m_mutex);
+                if (generation == m_generation) {
+                    refresh_playback_clock_locked(
+                        std::chrono::steady_clock::now()
+                    );
+                    m_submittedFrames += batchFrames;
+                    m_writeInProgressFrames = 0;
+                }
+            }
+            m_cv.notify_all();
         }
     }
 
@@ -836,6 +1162,19 @@ private:
     unsigned m_sampleRate = 0;
     unsigned m_channels = 0;
     size_t m_capacityFrames = 0;
+    size_t m_writeInProgressFrames = 0;
+    uint64_t m_submittedFrames = 0;
+    uint64_t m_playedFrames = 0;
+    uint64_t m_clockAnchorFrames = 0;
+    uint64_t m_clockTargetFrames = 0;
+    uint64_t m_offeredFrames = 0;
+    unsigned m_counterLines = 0;
+    std::chrono::steady_clock::time_point m_lastCounterLog{};
+    std::chrono::steady_clock::time_point m_clockAnchor{};
+    std::chrono::steady_clock::time_point m_pauseStarted{};
+    bool m_clockStarted = false;
+    bool m_drainRequested = false;
+    bool m_childExited = false;
     uint64_t m_generation = 0;
     bool m_shutdown = false;
     bool m_restart = false;
@@ -864,7 +1203,7 @@ output_factory_t<WamOutput> g_outputFactory;
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.3",
+    "0.1.7",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
 );
 

@@ -41,7 +41,12 @@ Optional keys and overrides:
 - `helper` or `WAMBRIDGE_PCM` for a development PCM helper,
 - `WAMBRIDGE_CONTROL` for a development control helper,
 - `WAMBRIDGE_DEVICE`,
-- `WAMBRIDGE_VOLUME`.
+- `WAMBRIDGE_VOLUME`,
+- `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
+  console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
+  `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on
+  before reporting anything about pacing — it is what attributed the runaway start to a
+  dropped chunk rather than to the output clock.
 
 The M5 uses raw volume steps `0..30`; the UI must not pretend these are percentages until a
 model-aware conversion exists.
