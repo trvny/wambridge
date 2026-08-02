@@ -220,3 +220,17 @@ class FoobarSourceTests(TestCase):
         # Out-of-range values fall back rather than reaching the helper CLI,
         # which would reject them and take the whole stream down.
         self.assertIn("parsed <= kMaximumStartupSilenceMs", source)
+
+    def test_clock_holds_back_by_the_configured_silence(self) -> None:
+        # The clock must wait exactly as long as the silence FFmpeg prepends,
+        # because that silence is what the speaker plays first. A hardcoded
+        # 1.5 s left a phantom delay at startup_silence=0 and marked frames
+        # played under real audio at larger values.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertNotIn("kStartupLatencySeconds", source)
+        self.assertIn("m_clockAnchor = now + startup_silence_duration();", source)
+        self.assertIn(
+            "std::chrono::milliseconds(m_settings.startupSilenceMs)",
+            source,
+        )

@@ -24,7 +24,6 @@ namespace {
 constexpr char kComponentName[] = "WAM Bridge Output";
 constexpr char kOutputName[] = "WAM Bridge";
 constexpr char kDeviceName[] = "Samsung M5 (Wi-Fi)";
-constexpr double kStartupLatencySeconds = 1.5;
 constexpr size_t kWriteBatchFrames = 4096;
 // One counter line per second, long enough to cover a whole track. The clock
 // terms are the only way to tell which one runs away; a physical run measured
@@ -508,9 +507,12 @@ private:
         if (m_clockStarted) return;
         m_clockStarted = true;
         m_clockAnchorFrames = m_playedFrames;
-        m_clockAnchor = now + std::chrono::duration_cast<
-            std::chrono::steady_clock::duration
-        >(std::chrono::duration<double>(kStartupLatencySeconds));
+        // The clock must hold back exactly as long as the silence FFmpeg is
+        // prepending, because that silence is what the speaker plays first.
+        // Hardcoding 1.5 s here while the helper is told something else leaves
+        // a phantom delay at 0 and marks frames played under real audio at
+        // larger values, which skews latency, capacity and track transitions.
+        m_clockAnchor = now + startup_silence_duration();
         if (m_paused.load()) m_pauseStarted = now;
     }
 
@@ -572,6 +574,12 @@ private:
             frames_to_ms_locked(free_frames_locked()),
             frames_to_ms_locked(m_capacityFrames),
             flags.c_str()
+        );
+    }
+
+    std::chrono::steady_clock::duration startup_silence_duration() const {
+        return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::milliseconds(m_settings.startupSilenceMs)
         );
     }
 
