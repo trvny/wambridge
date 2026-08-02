@@ -34,6 +34,7 @@ FAVORITES = TOP3 + (
     RadioStation(
         alias="radioparadise",
         url="http://stream.radioparadise.com/ogg-192m",
+        fallback_urls=("http://stream.radioparadise.com/flacm",),
     ),
     RadioStation(
         alias="electroswing",
