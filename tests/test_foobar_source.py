@@ -205,3 +205,18 @@ class FoobarSourceTests(TestCase):
         self.assertIn('line == "WAMBRIDGE AUDIO_STARTED"', source)
         self.assertIn('line.rfind("WAMBRIDGE PLAYING", 0)', source)
         self.assertIn('line.rfind("WAMBRIDGE ERROR ", 0)', source)
+
+    def test_startup_silence_is_configurable(self) -> None:
+        # 1.5 s of the measured ~13.4 s delay is silence this project prepends
+        # itself. It carries no comment and has been there since the initial
+        # import, so whether it is still load-bearing is a hardware question.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kDefaultStartupSilenceMs = 1500;", source)
+        self.assertIn("int startupSilenceMs = kDefaultStartupSilenceMs;", source)
+        self.assertIn('environment_value(L"WAMBRIDGE_STARTUP_SILENCE")', source)
+        self.assertIn('ini_value(L"startup_silence", L"", path)', source)
+        self.assertIn('command += L" --startup-silence " +', source)
+        # Out-of-range values fall back rather than reaching the helper CLI,
+        # which would reject them and take the whole stream down.
+        self.assertIn("parsed <= kMaximumStartupSilenceMs", source)

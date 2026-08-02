@@ -86,6 +86,7 @@ class PcmAudioStreamServer(AudioStreamServer):
         bind: str = "0.0.0.0",  # nosec B104 - WAM must reach the LAN server
         port: int = 0,
         ffmpeg: str = "ffmpeg",
+        startup_silence_ms: int = STARTUP_SILENCE_MS,
     ) -> None:
         if not MIN_SAMPLE_RATE <= sample_rate <= MAX_SAMPLE_RATE:
             raise ValueError(
@@ -103,10 +104,14 @@ class PcmAudioStreamServer(AudioStreamServer):
                 f"choose from {', '.join(PCM_FORMATS)}"
             )
 
+        if not 0 <= startup_silence_ms <= 10000:
+            raise ValueError("startup silence must be between 0 and 10000 ms")
+
         self.pcm_input = pcm_input
         self.sample_rate = sample_rate
         self.channels = channels
         self.sample_format = sample_format
+        self.startup_silence_ms = startup_silence_ms
         self.encoder_started = threading.Event()
         super().__init__(
             "raw PCM input",
@@ -134,23 +139,42 @@ class PcmAudioStreamServer(AudioStreamServer):
         """Skip source preflight because PCM is supplied after the READY marker."""
         del timeout
 
-    def _serve_audio(self, output: BinaryIO) -> None:
+    def encoder_command(self) -> list[str]:
+        """Return the FFmpeg command line for this stream.
+
+        Separate from launching it so the argument list can be asserted on
+        without starting a process.
+        """
         # No "-re" here. The input on pipe:0 is already produced in real time by
         # foobar, and the speaker paces the output itself: pushing over HTTP as
         # fast as the socket allows converges to real time as its TCP window
         # closes. An extra FFmpeg clock only adds drift.
         # See "Transport and pacing" in docs/WAM_PROTOCOL.md.
-        command = [
+        #
+        # The leading silence is pure added delay: every millisecond here is a
+        # millisecond further from the ear, on a path already about 13 s long.
+        # It carries no comment anywhere and has been present since the initial
+        # import, so whether it is still load-bearing is a question for the
+        # hardware, not for reading. At 0 the filter is dropped entirely rather
+        # than passed a zero.
+        silence_args = (
+            ["-af", f"adelay={self.startup_silence_ms}:all=1"]
+            if self.startup_silence_ms > 0
+            else []
+        )
+        return [
             self.ffmpeg,
             "-hide_banner",
             "-loglevel",
             "warning",
             *self.input_args,
-            "-af",
-            f"adelay={STARTUP_SILENCE_MS}:all=1",
+            *silence_args,
             *self.profile.args_for(self.sample_rate),
             "pipe:1",
         ]
+
+    def _serve_audio(self, output: BinaryIO) -> None:
+        command = self.encoder_command()
         LOGGER.info(
             "Starting FFmpeg for %s Hz, %s channel %s PCM",
             self.sample_rate,

@@ -45,6 +45,9 @@ Optional keys and overrides:
 - `format` or `WAMBRIDGE_FORMAT`, one of `flac` (default) or `mp3`. Anything else falls
   back to `flac`. `mp3` runs at 320 kbps against FLAC's 700-900, which is the way to find
   out whether the speaker's roughly 7-8 s of prebuffer counts bytes or seconds,
+- `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
+  `0..10000`, default `1500`. Out-of-range values fall back to the default rather than
+  reaching the helper, which would reject them and take the stream down with it,
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on

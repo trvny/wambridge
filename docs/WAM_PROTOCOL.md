@@ -140,6 +140,20 @@ Two consequences for anything built on this path:
   written for pause — is heard 13 s later. Controls that must feel immediate belong on the
   `55001` path, which answers in about a second.
 
+One of those terms is self-inflicted. The helper prepends `adelay=1500`, so 1.5 s of the
+total is silence this project adds to its own stream. It has carried no explanatory comment
+since the initial import, which is not evidence that it is useless — only that nobody
+recorded why. `startup_silence=0` turns it off; if startup still reaches
+`WAMBRIDGE PLAYING`, that is 1.5 s recovered, and if it does not, the reason finally gets
+written down.
+
+A caution about the 7-8 s attributed to the speaker: it was never measured directly. It is
+what remains after subtracting the terms that can be counted, so it also absorbs every
+mistake in the others. The owner reports that Samsung's own PC and Android clients felt
+slower than instant but clearly faster than this, which is circumstantial evidence that part
+of that remainder belongs to how this project feeds the speaker rather than to the speaker
+itself. Treat the figure as an upper bound on the untouchable part, not a measurement.
+
 The prebuffer is not a duration. Measured 2026-08-02 by running the same test at MP3 320 kbps
 against FLAC's 700-900: the delay grew from about 13.4 s to about 16.9 s.
 

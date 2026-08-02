@@ -147,12 +147,19 @@ std::wstring quoted(const std::wstring& value) {
 constexpr const wchar_t* kStreamFormats[] = {L"flac", L"mp3"};
 constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 
+// Milliseconds of silence FFmpeg prepends to the stream. Straight added delay
+// on a path already about 13 s long; kept configurable so the hardware can say
+// whether it is still load-bearing.
+constexpr int kDefaultStartupSilenceMs = 1500;
+constexpr int kMaximumStartupSilenceMs = 10000;
+
 struct Settings {
     std::wstring helper;
     std::wstring device;
     std::wstring format;
     std::optional<int> volume;
     bool diagnostics = false;
+    int startupSilenceMs = kDefaultStartupSilenceMs;
 };
 
 Settings load_settings() {
@@ -199,12 +206,27 @@ Settings load_settings() {
         rawDiagnostics == L"1" || rawDiagnostics == L"true" ||
         rawDiagnostics == L"yes" || rawDiagnostics == L"on";
 
+    int startupSilenceMs = kDefaultStartupSilenceMs;
+    auto rawSilence = environment_value(L"WAMBRIDGE_STARTUP_SILENCE");
+    if (rawSilence.empty()) {
+        rawSilence = ini_value(L"startup_silence", L"", path);
+    }
+    if (!rawSilence.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawSilence.c_str(), &end, 10);
+        if (end != rawSilence.c_str() && *end == L'\0' && parsed >= 0 &&
+            parsed <= kMaximumStartupSilenceMs) {
+            startupSilenceMs = static_cast<int>(parsed);
+        }
+    }
+
     return {
         std::move(helper),
         std::move(device),
         std::move(format),
         volume,
         diagnostics,
+        startupSilenceMs,
     };
 }
 
@@ -662,6 +684,8 @@ private:
         command += L" --channels " + std::to_wstring(channels);
         command += L" --sample-format f32le --format " + m_settings.format;
         command += L" --startup-timeout 45";
+        command += L" --startup-silence " +
+            std::to_wstring(m_settings.startupSilenceMs);
         if (m_settings.volume.has_value()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         }
