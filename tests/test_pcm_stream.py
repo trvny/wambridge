@@ -234,3 +234,39 @@ class StartupPayloadProgressTests(TestCase):
 
     def test_non_flac_payload_is_returned(self) -> None:
         self.assertEqual(_read_startup_payload(BytesIO(b"abc"), "mp3"), b"abc")
+
+
+class StartupSilenceTests(TestCase):
+    def _command(self, **kwargs: object) -> list[str]:
+        server = PcmAudioStreamServer(
+            BytesIO(b""),
+            sample_rate=48000,
+            channels=2,
+            **kwargs,
+        )
+        try:
+            return server.encoder_command()
+        finally:
+            server.close()
+
+    def test_default_prepends_the_historic_silence(self) -> None:
+        command = self._command()
+
+        self.assertIn("-af", command)
+        self.assertIn("adelay=1500:all=1", command)
+
+    def test_zero_drops_the_filter_instead_of_passing_zero(self) -> None:
+        # adelay=0 would still build a filter graph for nothing.
+        command = self._command(startup_silence_ms=0)
+
+        self.assertNotIn("-af", command)
+        self.assertFalse([arg for arg in command if arg.startswith("adelay=")])
+
+    def test_custom_value_reaches_ffmpeg(self) -> None:
+        command = self._command(startup_silence_ms=250)
+
+        self.assertIn("adelay=250:all=1", command)
+
+    def test_out_of_range_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "between 0 and 10000"):
+            self._command(startup_silence_ms=10001)

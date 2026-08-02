@@ -16,7 +16,7 @@ from .identity import load_client_uuid
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import WamApiError, get_volume, methods_agree, probe, set_volume
-from .stream import OUTPUT_PROFILES, StreamError
+from .stream import OUTPUT_PROFILES, STARTUP_SILENCE_MS, StreamError
 from .wam_events import WamEvent, WamEventConnection, WamEventError
 
 LOGGER = logging.getLogger("wambridge")
@@ -49,6 +49,21 @@ def channel_count(value: str) -> int:
         raise argparse.ArgumentTypeError("channels must be an integer") from error
     if parsed <= 0:
         raise argparse.ArgumentTypeError("channels must be positive")
+    return parsed
+
+
+def startup_silence(value: str) -> int:
+    """Parse the leading silence in milliseconds."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "startup silence must be an integer number of milliseconds"
+        ) from error
+    if not 0 <= parsed <= 10000:
+        raise argparse.ArgumentTypeError(
+            "startup silence must be between 0 and 10000 ms"
+        )
     return parsed
 
 
@@ -112,6 +127,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=30.0,
         help="Seconds to wait for the speaker and first PCM frame",
+    )
+    parser.add_argument(
+        "--startup-silence",
+        type=startup_silence,
+        default=STARTUP_SILENCE_MS,
+        help=(
+            "Milliseconds of silence prepended to the stream; 0 disables the "
+            "filter entirely. Every millisecond here is a millisecond of delay"
+        ),
     )
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -457,6 +481,7 @@ def run(
         bind=args.bind,
         port=args.http_port,
         ffmpeg=args.ffmpeg,
+        startup_silence_ms=args.startup_silence,
     )
     restore_volume: int | None = None
     volume_changed = False

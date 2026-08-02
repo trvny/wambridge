@@ -24,7 +24,6 @@ namespace {
 constexpr char kComponentName[] = "WAM Bridge Output";
 constexpr char kOutputName[] = "WAM Bridge";
 constexpr char kDeviceName[] = "Samsung M5 (Wi-Fi)";
-constexpr double kStartupLatencySeconds = 1.5;
 constexpr size_t kWriteBatchFrames = 4096;
 // One counter line per second, long enough to cover a whole track. The clock
 // terms are the only way to tell which one runs away; a physical run measured
@@ -147,12 +146,19 @@ std::wstring quoted(const std::wstring& value) {
 constexpr const wchar_t* kStreamFormats[] = {L"flac", L"mp3"};
 constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 
+// Milliseconds of silence FFmpeg prepends to the stream. Straight added delay
+// on a path already about 13 s long; kept configurable so the hardware can say
+// whether it is still load-bearing.
+constexpr int kDefaultStartupSilenceMs = 1500;
+constexpr int kMaximumStartupSilenceMs = 10000;
+
 struct Settings {
     std::wstring helper;
     std::wstring device;
     std::wstring format;
     std::optional<int> volume;
     bool diagnostics = false;
+    int startupSilenceMs = kDefaultStartupSilenceMs;
 };
 
 Settings load_settings() {
@@ -199,12 +205,27 @@ Settings load_settings() {
         rawDiagnostics == L"1" || rawDiagnostics == L"true" ||
         rawDiagnostics == L"yes" || rawDiagnostics == L"on";
 
+    int startupSilenceMs = kDefaultStartupSilenceMs;
+    auto rawSilence = environment_value(L"WAMBRIDGE_STARTUP_SILENCE");
+    if (rawSilence.empty()) {
+        rawSilence = ini_value(L"startup_silence", L"", path);
+    }
+    if (!rawSilence.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawSilence.c_str(), &end, 10);
+        if (end != rawSilence.c_str() && *end == L'\0' && parsed >= 0 &&
+            parsed <= kMaximumStartupSilenceMs) {
+            startupSilenceMs = static_cast<int>(parsed);
+        }
+    }
+
     return {
         std::move(helper),
         std::move(device),
         std::move(format),
         volume,
         diagnostics,
+        startupSilenceMs,
     };
 }
 
@@ -486,9 +507,12 @@ private:
         if (m_clockStarted) return;
         m_clockStarted = true;
         m_clockAnchorFrames = m_playedFrames;
-        m_clockAnchor = now + std::chrono::duration_cast<
-            std::chrono::steady_clock::duration
-        >(std::chrono::duration<double>(kStartupLatencySeconds));
+        // The clock must hold back exactly as long as the silence FFmpeg is
+        // prepending, because that silence is what the speaker plays first.
+        // Hardcoding 1.5 s here while the helper is told something else leaves
+        // a phantom delay at 0 and marks frames played under real audio at
+        // larger values, which skews latency, capacity and track transitions.
+        m_clockAnchor = now + startup_silence_duration();
         if (m_paused.load()) m_pauseStarted = now;
     }
 
@@ -550,6 +574,12 @@ private:
             frames_to_ms_locked(free_frames_locked()),
             frames_to_ms_locked(m_capacityFrames),
             flags.c_str()
+        );
+    }
+
+    std::chrono::steady_clock::duration startup_silence_duration() const {
+        return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::milliseconds(m_settings.startupSilenceMs)
         );
     }
 
@@ -662,6 +692,8 @@ private:
         command += L" --channels " + std::to_wstring(channels);
         command += L" --sample-format f32le --format " + m_settings.format;
         command += L" --startup-timeout 45";
+        command += L" --startup-silence " +
+            std::to_wstring(m_settings.startupSilenceMs);
         if (m_settings.volume.has_value()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         }
