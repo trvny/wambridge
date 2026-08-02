@@ -9,25 +9,51 @@
 Windows-first bridge for streaming audio over Wi-Fi to Samsung Wireless Audio
 Multiroom speakers, including Shape M5 (`WAM550`/`WAM551`).
 
-The stable CLI path serves a tokenized local stream and starts it through
-Samsung's `SetUrlPlayback` API. The foobar output is experimental while its
-fixed-anchor clock is validated on a physical M5. Finite share/DLNA playback is
-protocol-proven but not integrated.
+The CLI serves a tokenized local stream and starts it through Samsung's
+`SetUrlPlayback` API. The foobar2000 output component sends whatever foobar is
+playing, including internet radio. Finite share/DLNA playback is protocol-proven
+but not integrated.
 
-## Status
+Everything here was measured against one physical Shape M5 (`SPK-WAM550`,
+firmware `WAM550WWB-3117.1`). Other models in the family are untested.
 
-- CLI discovery, saved devices, playback controls, custom radio stations and
-  native TuneIn presets are implemented.
-- GitHub Actions builds bundled helpers and the foobar2000 2.x x64 component.
-- `Playback → WAM Bridge` provides emergency stop, standby and raw physical
-  volume actions.
-- The physical M5 produces audible output from foobar's `f32le → FLAC` path.
-- PR #21 is merged and fixes host latency, backlog capacity and fixed-anchor
-  clock pacing.
-- Long-track hardware validation continues for seekbar, transitions, cleanup
-  and the remaining speaker-side delay.
-- Helper isolation PR #2 is merged. Manual pacing PR #4 and the large share
-  experiment PR #7 are closed; their measured conclusions remain documented.
+## Status: working alpha
+
+Both paths play audio on real hardware. The foobar component passed its full
+physical checklist on 2026-08-02: a complete 213-second track start to finish at
+a median 1.00x with every sample between 0.9x and 1.1x, seek, pause and resume,
+an unattended transition into the next track, internet radio across a 44.1 to
+48 kHz switch, and a clean shutdown leaving no FFmpeg or helper behind.
+
+What works:
+
+- SSDP discovery, saved devices resolved by stable device ID, playback control,
+  custom radio stations and native TuneIn presets from the CLI.
+- foobar2000 2.x x64 output: `f32le → FFmpeg FLAC → local HTTP → speaker`.
+- `Playback → WAM Bridge` with emergency stop, standby and raw volume steps.
+- Configuration through `%LOCALAPPDATA%\WAMBridge\foobar.ini`.
+
+### The one limitation worth knowing before you install
+
+**Audio reaches the speaker about 13 seconds after foobar plays it.** This is
+measured, not estimated. Roughly 7-8 s of it sits inside the speaker's own
+prebuffer, where no amount of host-side accounting can reach; the rest is host
+buffering and a 1.5 s leading silence that can be turned off with
+`startup_silence=0`.
+
+Playback itself is unaffected — the stream runs at wall-clock speed and the
+seekbar is honest. What suffers is **control latency**: pause, stop, skip and
+the volume slider all act on audio the speaker will not play for another
+thirteen seconds. Lowering the bitrate makes it worse, not better, which was
+measured too. The fix is to route each control onto the speaker's own `55001`
+command path rather than to shorten the audio path, and that work is in
+progress.
+
+Everything else is documented honestly, including the approaches that failed:
+
+- helper isolation (PR #2) and the output clock (PR #21) are merged,
+- manual pacing (PR #4) and the large share experiment (PR #7) are closed, with
+  their measured conclusions kept.
 
 Current architecture, failed approaches and continuation notes are in
 [`docs/DEVELOPMENT_STATUS.md`](docs/DEVELOPMENT_STATUS.md). Measured protocol
@@ -49,8 +75,12 @@ Open the `.fb2k-component` file with foobar2000 2.x x64, then select:
 Preferences → Playback → Output → Samsung M5 (Wi-Fi)
 ```
 
-The artifact is for development testing, not a stable release. Configuration,
-known limitations and the physical checklist are documented in
+This is alpha software built by one person against one speaker. It works, and it
+is not polished: there is no preferences page yet, so configuration is an INI
+file, and the control latency above is real. If you own a Shape speaker and were
+looking for exactly this, it should serve you — just read the limitation first.
+
+Configuration, known limitations and the physical checklist are documented in
 [`foobar/README.md`](foobar/README.md).
 
 ## Requirements

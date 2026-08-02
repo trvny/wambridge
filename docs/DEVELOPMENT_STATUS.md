@@ -164,16 +164,50 @@ the universal foundation because it does not cover endless sources.
 
 Status: rejected for the tested `SPK-WAM550`. The service is not exposed.
 
-## Next order
+## Settled, do not re-litigate
 
-1. Make the speaker-facing format configurable, then measure whether the speaker prebuffers
-   bytes or seconds. It decides whether the 13 s delay has a knob at all.
-2. Route the foobar volume slider to the speaker's own volume instead of the host gain,
-   with send throttling for slider drags. This subsumes fixing raw M5 volume to `0..30`.
-3. Measure pause the same way the volume delay was measured.
-3. Reduce and reimplement the finite share path from its measured working form.
-4. Add a proper foobar preferences page while retaining legacy INI compatibility.
-5. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+Each of these cost real time and each is closed by measurement, not by argument.
+
+| Question | Answer | Where |
+|---|---|---|
+| What caused the runaway start | `process_samples` returns void; taking `min(free, chunk)` binned ~9/10 of every chunk | this file, above |
+| Does a lower bitrate shorten the delay | **No, it lengthens it.** MP3 320k = 16.9 s against FLAC's 13.4 s | `WAM_PROTOCOL.md` |
+| Is `cp` submode a fault | No. It is the normal submode for `SetUrlPlayback` and also the idle one | `WAM_PROTOCOL.md` |
+| Does the SDK offer a hardware volume interface | `output_entry_v2::get_volume_control` exists but no public component implements it; not a foundation to build on | PR #30 |
+| Does `flag_needs_shims` affect volume | No. It means regular `update()` calls and end-of-stream padding | SDK `output.h` |
+| Can a command clear `cp` | Not observed. `SetPlaybackControl stop` is accepted and does not clear it | `WAM_PROTOCOL.md` |
+| Does the M5 auto-power-down | No configurable one exists. `SetSleepTimer` in **seconds** is the only lever | `WAM_PROTOCOL.md` |
+
+## Open, in the order that makes sense
+
+1. **Physical checklist for PR #30** (routed volume slider). It changes `volume_set` and the
+   helper's startup volume, so the full gate applies before merging.
+2. **Measure the delay again with `startup_silence=0`.** Expected saving is about 1 s, not
+   1.5: with the silence gone `AUDIO_STARTED` arrives about six pipe writes later, because
+   the prepended silence used to supply the first FLAC audio frame immediately. That is
+   close to the method's own spread, so it needs four or five volume changes in one run,
+   not two. **`hardware_volume` must be off for this** — with the slider routed to `55001`
+   it no longer travels the delayed path, and the measuring instrument is gone.
+3. **Try a fatter stream, not a thinner one.** The speaker's prebuffer is partly bounded by
+   bytes, so raw PCM at roughly twice FLAC's bitrate should hold fewer seconds. This is the
+   one remaining idea with a plausible several-second payoff. Needs a `wav` output profile.
+4. **Route pause onto `55001`** (`SetPlaybackControl pause`/`resume`), then stop, seek and
+   skip. Same shape as the volume fix. Measure pause first, or there is no baseline. Risk to
+   watch: whether a paused speaker stops pulling and the HTTP connection times out.
+5. Log unknown INI keys to the console. Keys from an unbuilt branch are silently ignored
+   today, so the file does not tell anyone what is actually active.
+6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`.
+7. Reduce and reimplement the finite share path from its measured working form.
+8. Add a proper foobar preferences page while retaining legacy INI compatibility.
+9. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+
+## What the 7-8 s speaker figure actually is
+
+A subtraction remainder, not a measurement: total delay minus the terms that can be counted.
+It therefore absorbs every error in the others. The owner reports Samsung's own PC and
+Android clients felt slower than instant but clearly faster than 13 s on this same speaker,
+which is circumstantial evidence that part of that remainder belongs to how this project
+feeds the speaker. Treat it as an upper bound on the untouchable part.
 
 ## Rules for continuing
 
