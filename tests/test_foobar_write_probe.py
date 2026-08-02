@@ -24,5 +24,16 @@ class FoobarWriteProbeTests(TestCase):
         self.assertIn("const unsigned call = calls.fetch_add(1);", probe)
         self.assertIn("if (call < 8)", probe)
         self.assertIn("PCM WriteFile #%u", probe)
-        self.assertIn("elapsedMs=%llu", probe)
         self.assertIn("#define WriteFile wambridge_probe_write_file", probe)
+
+    def test_probe_avoids_length_modifiers_pfc_cannot_print(self) -> None:
+        # console::printf is pfc's formatter. It printed "%lu" as a literal
+        # "lu" and swallowed the number, so the probe logged no measurements.
+        probe = PROBE.read_text(encoding="utf-8")
+        format_line = "".join(
+            line for line in probe.splitlines() if "PCM WriteFile" in line
+        )
+
+        self.assertNotIn("%lu", format_line)
+        self.assertNotIn("%llu", format_line)
+        self.assertIn("elapsedMs=%u", probe)

@@ -27,17 +27,19 @@ inline BOOL WINAPI wambridge_probe_write_file(
     );
     if (call < 8) {
         const DWORD error = result ? ERROR_SUCCESS : GetLastError();
+        // console::printf is pfc's formatter, not the CRT one: it prints the
+        // length modifiers in %lu and %llu literally and drops the value.
+        // Measured on 2026-08-02, which is why this probe reported
+        // "requested=lu written=lu elapsedMs=llu" and diagnosed nothing.
         console::printf(
-            "WAM Bridge Output: PCM WriteFile #%u result=%u requested=%lu "
-            "written=%lu elapsedMs=%llu error=%lu",
+            "WAM Bridge Output: PCM WriteFile #%u result=%u requested=%u "
+            "written=%u elapsedMs=%u error=%u",
             call + 1,
             result ? 1U : 0U,
-            static_cast<unsigned long>(bytesToWrite),
-            static_cast<unsigned long>(
-                bytesWritten == nullptr ? 0 : *bytesWritten
-            ),
-            static_cast<unsigned long long>(GetTickCount64() - started),
-            static_cast<unsigned long>(error)
+            static_cast<unsigned>(bytesToWrite),
+            static_cast<unsigned>(bytesWritten == nullptr ? 0 : *bytesWritten),
+            static_cast<unsigned>(GetTickCount64() - started),
+            static_cast<unsigned>(error)
         );
     }
     return result;
