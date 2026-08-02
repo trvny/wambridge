@@ -257,6 +257,37 @@ the ear about 13 s later. Volume that should feel immediate belongs on this path
 matched `result="ng"` for `SetVolume` must be surfaced: startup mutes the speaker on purpose,
 so a rejected unmute leaves it silent while every other signal says it is playing.
 
+## Standby and the front LED
+
+Measured 2026-08-02. The front LED is the only indicator of the speaker's power state, and
+nothing on the control port reports it: `GetPowerStatus`, `GetLedStatus` and `GetStandbyMode`
+do not exist on this firmware and all three time out. A human has to look at the speaker.
+
+LED off is network standby, not power off. With the LED dark the M5 still answers `GetFunc`,
+`GetVolume` and `GetApInfo` on `55001`. Wi-Fi and the control port stay up; the amplifier and
+the display go down.
+
+`SetSleepTimer` reaches that state on demand:
+
+- `sleeptime` is in **seconds**, not minutes. `60` counted down to `0` in one minute.
+- On firing, the timer clears itself back to `sleepoption=off`, `sleeptime=0` and the speaker
+  stays in standby. A fired timer leaves no trace, so `GetSleepTimer` cannot distinguish
+  "asleep because a timer fired" from "asleep for any other reason".
+- There is no configurable idle power-down. `GetPowerSaving` and `GetAutoPowerDown` do not
+  exist either. The sleep timer is the only power lever this firmware exposes.
+
+The component's standby menu item is therefore misnamed. It sends a stop and a mute, which
+leaves the speaker lit and fully powered. Only the sleep timer produces the state a user
+recognises as the speaker having gone to sleep.
+
+Something about a hard-killed session keeps the speaker awake. After a run whose helper and
+FFmpeg were killed by hand instead of stopped over the protocol, the M5 was still lit some
+hours later. `submode` was `cp`, but `cp` is not the cause: the sleep timer put the speaker
+into standby while it stayed in `cp`, and the speaker returns to `cp` on its own while idle.
+A `SetPlaybackControl stop` on the CPM API was accepted and reported `playstatus=stop`
+without clearing `cp`. The likelier explanation is a half-open HTTP pull the speaker never
+gave up on, since it cannot tell a dead local server from a slow one.
+
 ## No AVTransport renderer
 
 The tested M5 exposes no standard UPnP MediaRenderer or AVTransport service. Ports `7676`,
@@ -272,6 +303,11 @@ without evidence from different firmware.
   count either; a lower bitrate lengthened the delay by less than the bitrate ratio.
 - Whether pause carries the same ~13 s delay. It writes silence into the same pipe, so it
   probably does, but that has not been measured.
+- Whether the M5 returns to standby by itself after a clean stop, and if so whether it arms
+  a sleep timer to do it. One sample taken hours after a hard-killed session read
+  `sleepoption=off` with the LED still on, which argues against self-arming but does not
+  settle it: a fired timer reads the same as one that never existed, so only a countdown
+  observed while the speaker is idle and still lit would prove the mechanism.
 
 ## Safety and acceptance
 

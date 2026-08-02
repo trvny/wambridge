@@ -73,6 +73,12 @@ Emergency stop and standby stop foobar before invoking the control helper. Comma
 serialized so button presses cannot launch overlapping control processes. Physical volume
 commands operate in raw M5 steps.
 
+Standby is misnamed. It stops and mutes, which leaves the speaker lit and fully powered.
+The state a user recognises as the speaker sleeping comes only from `SetSleepTimer`, whose
+`sleeptime` is in seconds and which clears itself after firing. Renaming the item or
+switching it to a short sleep timer is open work; see the standby section of
+`docs/WAM_PROTOCOL.md`.
+
 Do not restore the old `cp` warning. `cp` is normal for `SetUrlPlayback`; it is not evidence
 that emergency stop should request a speaker power cycle.
 
