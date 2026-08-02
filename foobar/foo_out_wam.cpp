@@ -142,9 +142,15 @@ std::wstring quoted(const std::wstring& value) {
     return result;
 }
 
+// Formats the helper accepts. Anything else would reach its CLI as a rejected
+// argument and take the whole stream down with it.
+constexpr const wchar_t* kStreamFormats[] = {L"flac", L"mp3"};
+constexpr const wchar_t* kDefaultStreamFormat = L"flac";
+
 struct Settings {
     std::wstring helper;
     std::wstring device;
+    std::wstring format;
     std::optional<int> volume;
     bool diagnostics = false;
 };
@@ -161,6 +167,17 @@ Settings load_settings() {
 
     auto device = environment_value(L"WAMBRIDGE_DEVICE");
     if (device.empty()) device = ini_value(L"device", L"M5", path);
+
+    // FLAC unless asked otherwise. The knob exists to measure whether the
+    // speaker prebuffers bytes or seconds: at 320 kbps against FLAC's 700-900
+    // the delay either shrinks with the bitrate or does not move at all.
+    auto format = environment_value(L"WAMBRIDGE_FORMAT");
+    if (format.empty()) format = ini_value(L"format", L"", path);
+    bool known = false;
+    for (const wchar_t* candidate : kStreamFormats) {
+        if (format == candidate) known = true;
+    }
+    if (!known) format = kDefaultStreamFormat;
 
     std::optional<int> volume;
     auto rawVolume = environment_value(L"WAMBRIDGE_VOLUME");
@@ -182,7 +199,13 @@ Settings load_settings() {
         rawDiagnostics == L"1" || rawDiagnostics == L"true" ||
         rawDiagnostics == L"yes" || rawDiagnostics == L"on";
 
-    return {std::move(helper), std::move(device), volume, diagnostics};
+    return {
+        std::move(helper),
+        std::move(device),
+        std::move(format),
+        volume,
+        diagnostics,
+    };
 }
 
 void close_handle(HANDLE& handle) {
@@ -637,7 +660,8 @@ private:
         command += L" --device " + quoted(m_settings.device);
         command += L" --sample-rate " + std::to_wstring(sampleRate);
         command += L" --channels " + std::to_wstring(channels);
-        command += L" --sample-format f32le --format flac --startup-timeout 45";
+        command += L" --sample-format f32le --format " + m_settings.format;
+        command += L" --startup-timeout 45";
         if (m_settings.volume.has_value()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         }
