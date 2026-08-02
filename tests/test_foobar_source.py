@@ -234,3 +234,38 @@ class FoobarSourceTests(TestCase):
             "std::chrono::milliseconds(m_settings.startupSilenceMs)",
             source,
         )
+    def test_hardware_volume_replaces_the_host_gain(self) -> None:
+        # Applying both would attenuate twice. The host gain is the one heard
+        # about thirteen seconds late, so routing the slider must drop it.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("if (!m_settings.hardwareVolume) {", source)
+        self.assertIn("m_gain.store(1.0);", source)
+        self.assertIn(
+            "wam::request_volume_step(volume_step_for(decibels, m_settings.volumeMax));",
+            source,
+        )
+
+    def test_slider_top_is_not_the_speaker_maximum(self) -> None:
+        # A fresh foobar sits at 0 dB. Mapping that onto the M5's step 30 would
+        # make installing the component an unannounced blast at full volume.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kMaximumRawVolume = 30;", source)
+        self.assertIn("constexpr int kDefaultVolumeMax = 10;", source)
+        self.assertIn("int volumeMax = kDefaultVolumeMax;", source)
+        self.assertIn("parsed <= kMaximumRawVolume", source)
+
+    def test_hardware_volume_is_off_unless_asked_for(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("bool hardwareVolume = false;", source)
+        self.assertIn('environment_value(L"WAMBRIDGE_HARDWARE_VOLUME")', source)
+        self.assertIn('ini_value(L"hardware_volume", L"", path)', source)
+
+    def test_silence_maps_to_step_zero(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("if (decibels <= kSilenceDecibels) return 0;", source)
+        self.assertIn("constexpr double kSilenceDecibels = -60.0;", source)
+        self.assertIn("std::min<long>(ceiling, step)", source)

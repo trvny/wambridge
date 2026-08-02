@@ -99,7 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
             "volume-up",
             "volume-down",
             "safe-volume",
+            "set-volume",
         ),
+    )
+    parser.add_argument(
+        "--level",
+        type=raw_volume,
+        help="Raw 0..30 level for set-volume",
     )
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--speaker", help="Speaker IPv4 address")
@@ -330,6 +336,31 @@ def change_volume(
     ]
 
 
+def set_exact_volume(
+    target: Target,
+    level: int,
+    *,
+    action: str,
+    retries: int,
+    retry_delay: float,
+) -> list[str]:
+    """Set one raw level without reading the speaker first or touching mute.
+
+    The volume slider sends absolute levels, so this must not spend a round
+    trip on `GetVolume` the way `change_volume` does: a drag would double the
+    traffic on the shared control port for a value it already knows.
+    """
+    success, error = _attempt(
+        f"set volume {level}",
+        lambda: set_volume(target.ip, level, port=target.port, timeout=3.0),
+        retries=retries,
+        retry_delay=retry_delay,
+    )
+    if not success:
+        raise ControlError(f"Could not set volume: {error}")
+    return [f"action={action}", f"volume={level}"]
+
+
 def set_safe_volume(
     target: Target,
     safe_volume: int,
@@ -338,15 +369,13 @@ def set_safe_volume(
     retry_delay: float,
 ) -> list[str]:
     """Set the configured raw safe level without changing mute state."""
-    success, error = _attempt(
-        "set safe volume",
-        lambda: set_volume(target.ip, safe_volume, port=target.port, timeout=3.0),
+    return set_exact_volume(
+        target,
+        safe_volume,
+        action="safe-volume",
         retries=retries,
         retry_delay=retry_delay,
     )
-    if not success:
-        raise ControlError(f"Could not set safe volume: {error}")
-    return ["action=safe-volume", f"volume={safe_volume}"]
 
 
 def run(args: argparse.Namespace) -> list[str]:
@@ -379,6 +408,16 @@ def run(args: argparse.Namespace) -> list[str]:
         return prefix + change_volume(
             target,
             -1,
+            retries=args.retries,
+            retry_delay=args.retry_delay,
+        )
+    if args.action == "set-volume":
+        if args.level is None:
+            raise ControlError("set-volume requires --level")
+        return prefix + set_exact_volume(
+            target,
+            args.level,
+            action="set-volume",
             retries=args.retries,
             retry_delay=args.retry_delay,
         )

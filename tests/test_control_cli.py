@@ -6,10 +6,13 @@ from unittest.mock import call, patch
 from wambridge.control_cli import (
     ControlError,
     Target,
+    build_parser,
     change_volume,
     emergency_stop,
     raw_volume,
     resolve_target,
+    run,
+    set_exact_volume,
     set_safe_volume,
     standby,
 )
@@ -180,3 +183,50 @@ class VolumeControlTests(TestCase):
             set_mock.mock_calls,
             [call("10.0.0.118", 3, port=55001, timeout=3.0)],
         )
+
+    @patch("wambridge.control_cli.get_volume")
+    @patch("wambridge.control_cli.set_volume")
+    def test_set_volume_does_not_read_the_speaker_first(
+        self,
+        set_mock,
+        get_mock,
+    ) -> None:
+        # The slider already knows the level it wants. Reading first would
+        # double the traffic a drag puts on the shared control port.
+        lines = set_exact_volume(
+            Target("10.0.0.118", 55001),
+            7,
+            action="set-volume",
+            retries=1,
+            retry_delay=0,
+        )
+
+        self.assertEqual(lines, ["action=set-volume", "volume=7"])
+        get_mock.assert_not_called()
+        self.assertEqual(
+            set_mock.mock_calls,
+            [call("10.0.0.118", 7, port=55001, timeout=3.0)],
+        )
+
+    @patch("wambridge.control_cli.set_volume", side_effect=WamApiError("nope"))
+    def test_set_volume_failure_is_an_error(self, _set_mock) -> None:
+        with self.assertRaisesRegex(ControlError, "Could not set volume"):
+            set_exact_volume(
+                Target("10.0.0.118", 55001),
+                7,
+                action="set-volume",
+                retries=1,
+                retry_delay=0,
+            )
+
+    def test_set_volume_level_stays_inside_the_measured_range(self) -> None:
+        parser = build_parser()
+
+        self.assertEqual(parser.parse_args(["set-volume", "--level", "30"]).level, 30)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["set-volume", "--level", "31"])
+
+    def test_set_volume_without_a_level_is_rejected(self) -> None:
+        args = build_parser().parse_args(["set-volume", "--speaker", "10.0.0.118"])
+        with self.assertRaisesRegex(ControlError, "requires --level"):
+            run(args)

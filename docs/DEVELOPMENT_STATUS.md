@@ -168,8 +168,9 @@ Status: rejected for the tested `SPK-WAM550`. The service is not exposed.
 
 1. Make the speaker-facing format configurable, then measure whether the speaker prebuffers
    bytes or seconds. It decides whether the 13 s delay has a knob at all.
-2. Route the foobar volume slider to the speaker's own volume instead of the host gain,
-   with send throttling for slider drags. This subsumes fixing raw M5 volume to `0..30`.
+2. Confirm the routed volume slider on hardware: whether the M5's raw steps are linear in
+   amplitude, and how a drag behaves against the 250 ms send interval. The routing itself
+   is implemented behind `hardware_volume=1`, off by default.
 3. Measure pause the same way the volume delay was measured.
 3. Reduce and reimplement the finite share path from its measured working form.
 4. Add a proper foobar preferences page while retaining legacy INI compatibility.
