@@ -490,7 +490,9 @@ public:
         // Applying both would attenuate twice. The host gain is the one that
         // arrives about thirteen seconds late, so it is the one that goes.
         m_gain.store(1.0);
-        wam::request_volume_step(volume_step_for(decibels, m_settings.volumeMax));
+        const int step = volume_step_for(decibels, m_settings.volumeMax);
+        m_lastVolumeStep.store(step);
+        wam::request_volume_step(step);
     }
 
     // foobar hands out dB, the M5 takes raw steps. The mapping is linear in
@@ -752,7 +754,15 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
-        if (m_settings.volume.has_value()) {
+        // The helper mutes the speaker for startup and restores this level
+        // afterwards. With the slider routed, restoring the ini value instead
+        // would land the speaker somewhere the slider does not point: a
+        // physical run started the slider at maximum, the helper restored 3
+        // and the first touch of the slider jumped the speaker to 10.
+        const int routed = m_lastVolumeStep.load();
+        if (m_settings.hardwareVolume && routed >= 0) {
+            command += L" --volume " + std::to_wstring(routed);
+        } else if (m_settings.volume.has_value()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         }
         return command;
@@ -1301,6 +1311,9 @@ private:
     std::atomic<bool> m_childStopping{false};
     std::atomic<bool> m_childReachedPlaying{false};
     std::atomic<double> m_gain{1.0};
+    // -1 until foobar reports the slider position, which it does before the
+    // first stream starts. Only meaningful when hardwareVolume is on.
+    std::atomic<int> m_lastVolumeStep{-1};
     std::thread m_worker;
 
     mutable std::mutex m_childMutex;

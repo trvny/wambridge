@@ -242,9 +242,10 @@ class FoobarSourceTests(TestCase):
         self.assertIn("if (!m_settings.hardwareVolume) {", source)
         self.assertIn("m_gain.store(1.0);", source)
         self.assertIn(
-            "wam::request_volume_step(volume_step_for(decibels, m_settings.volumeMax));",
+            "const int step = volume_step_for(decibels, m_settings.volumeMax);",
             source,
         )
+        self.assertIn("wam::request_volume_step(step);", source)
 
     def test_slider_top_is_not_the_speaker_maximum(self) -> None:
         # A fresh foobar sits at 0 dB. Mapping that onto the M5's step 30 would
@@ -269,3 +270,20 @@ class FoobarSourceTests(TestCase):
         self.assertIn("if (decibels <= kSilenceDecibels) return 0;", source)
         self.assertIn("constexpr double kSilenceDecibels = -60.0;", source)
         self.assertIn("std::min<long>(ceiling, step)", source)
+
+    def test_startup_volume_follows_the_slider_when_routed(self) -> None:
+        # The helper mutes for startup and restores one level afterwards. A
+        # physical run started the slider at maximum, the helper restored the
+        # ini value 3, and the first touch of the slider jumped the speaker to
+        # 10 - the routed level and the restored one must be the same number.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("std::atomic<int> m_lastVolumeStep{-1};", source)
+        self.assertIn("m_lastVolumeStep.store(step);", source)
+        self.assertIn("const int routed = m_lastVolumeStep.load();", source)
+        self.assertIn(
+            "if (m_settings.hardwareVolume && routed >= 0) {",
+            source,
+        )
+        # The ini value stays the fallback for everyone not routing the slider.
+        self.assertIn("} else if (m_settings.volume.has_value()) {", source)
