@@ -7,12 +7,20 @@ import logging
 import sys
 from pathlib import Path
 
-from .discovery import DiscoveredSpeaker, discover, local_ip_for
+from .cli_common import (
+    DEFAULT_MAX_START_VOLUME,
+    add_target_arguments,
+    bounded_int,
+    configure_logging,
+    find_speakers,
+    select_discovered_speaker,
+    select_speaker,
+)
+from .discovery import local_ip_for
 from .profiles import (
     ProfileError,
     ProfileStore,
     remember_device,
-    resolve_device,
 )
 from .samsung import (
     MAX_VOLUME,
@@ -32,22 +40,9 @@ from .samsung import (
 from .stream import AudioStreamServer, OUTPUT_PROFILES, StreamError
 
 LOGGER = logging.getLogger("wambridge")
-DEFAULT_MAX_START_VOLUME = 10
 
-
-def volume_level(value: str) -> int:
-    """Parse a raw WAM volume level for argparse."""
-    try:
-        level = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            "volume must be an integer from 0 to 100"
-        ) from error
-    if not MIN_VOLUME <= level <= MAX_VOLUME:
-        raise argparse.ArgumentTypeError(
-            f"volume must be between {MIN_VOLUME} and {MAX_VOLUME}"
-        )
-    return level
+volume_level = bounded_int("volume", minimum=MIN_VOLUME, maximum=MAX_VOLUME)
+"""Parse a raw WAM volume level for argparse."""
 
 
 def choose_start_volume(
@@ -74,18 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="Audio file, radio URL or other FFmpeg input",
     )
-    target = parser.add_mutually_exclusive_group()
-    target.add_argument("--speaker", help="Speaker IPv4 address")
-    target.add_argument(
-        "--device",
-        help="Saved device alias; current IP is resolved automatically",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=55001,
-        help="Samsung WAM API port",
-    )
+    add_target_arguments(parser)
     parser.add_argument(
         "--format",
         choices=sorted(OUTPUT_PROFILES),
@@ -193,78 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop playback and mute so the speaker can enter standby",
     )
 
-    parser.add_argument(
-        "--config",
-        type=Path,
-        help="Override the per-user device profile file",
-    )
-    parser.add_argument(
-        "--discovery-timeout",
-        type=float,
-        default=4.0,
-        help="Seconds to wait for SSDP replies before the API-scan fallback",
-    )
-    parser.add_argument(
-        "--interface",
-        action="append",
-        dest="interfaces",
-        help="Local IPv4 used for SSDP; repeat to try multiple interfaces",
-    )
-    parser.add_argument(
-        "--no-scan",
-        action="store_true",
-        help="Disable fallback scanning of local /24 networks on port 55001",
-    )
     parser.add_argument("--verbose", action="store_true")
     return parser
-
-
-def find_speakers(args: argparse.Namespace) -> list[DiscoveredSpeaker]:
-    """Run discovery using CLI diagnostics and fallback settings."""
-    return discover(
-        timeout=args.discovery_timeout,
-        local_addresses=args.interfaces,
-        port=args.port,
-        scan=not args.no_scan,
-    )
-
-
-def select_discovered_speaker(args: argparse.Namespace) -> str:
-    """Discover exactly one speaker."""
-    speakers = find_speakers(args)
-    if not speakers:
-        raise RuntimeError("No Samsung WAM speaker found; pass --speaker IP")
-    if len(speakers) > 1:
-        addresses = ", ".join(speaker.ip for speaker in speakers)
-        raise RuntimeError(
-            f"More than one Samsung WAM found ({addresses}); pass --speaker IP"
-        )
-    return speakers[0].ip
-
-
-def select_speaker(
-    args: argparse.Namespace,
-    store: ProfileStore,
-) -> tuple[str, int]:
-    """Select a direct address, resolve a saved profile or discover one speaker."""
-    if args.device:
-        profile = resolve_device(
-            args.device,
-            store=store,
-            timeout=args.discovery_timeout,
-            local_addresses=args.interfaces,
-            scan=not args.no_scan,
-        )
-        LOGGER.info(
-            "Resolved saved device %s (%s) to %s",
-            profile.alias,
-            profile.device_id,
-            profile.last_ip,
-        )
-        return profile.last_ip, profile.port
-    if args.speaker:
-        return args.speaker, args.port
-    return select_discovered_speaker(args), args.port
 
 
 def normalize_source(source: str) -> str:
@@ -284,6 +198,20 @@ def _print_saved_devices(store: ProfileStore) -> int:
             f"{profile.device_id}\t{profile.name}"
         )
     return 0
+
+
+def has_control_action(args: argparse.Namespace) -> bool:
+    """Report whether any one-shot device or playback action was requested."""
+    return any(
+        (
+            args.probe,
+            args.discover,
+            args.remember,
+            args.list_devices,
+            args.forget,
+            _has_remote_action(args),
+        )
+    )
 
 
 def _has_remote_action(args: argparse.Namespace) -> bool:
@@ -371,14 +299,7 @@ def run(args: argparse.Namespace) -> int:
     """Execute one bridge session."""
     store = ProfileStore(args.config)
 
-    if args.source and (
-        args.probe
-        or args.discover
-        or args.remember
-        or args.list_devices
-        or args.forget
-        or _has_remote_action(args)
-    ):
+    if args.source and has_control_action(args):
         raise RuntimeError(
             "Audio source cannot be combined with a one-shot control action"
         )
@@ -533,10 +454,7 @@ def main(argv: list[str] | None = None) -> int:
     """Command-line entry point."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
+    configure_logging(args.verbose)
     try:
         return run(args)
     except (

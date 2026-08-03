@@ -6,12 +6,11 @@ import argparse
 import logging
 import sys
 from datetime import datetime
-from pathlib import Path
 from uuid import UUID, uuid4
 
-from .discovery import discover
-from .profiles import ProfileError, ProfileStore, resolve_device
-from .samsung import DEFAULT_PORT, WamApiError
+from .cli_common import add_target_arguments, configure_logging, select_speaker
+from .profiles import ProfileError, ProfileStore
+from .samsung import WamApiError
 from .wam_events import WamEvent, WamEventError, listen_events
 
 LOGGER = logging.getLogger("wambridge")
@@ -33,10 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
             "WAM speaker on TCP 55001."
         ),
     )
-    target = parser.add_mutually_exclusive_group()
-    target.add_argument("--speaker", help="Speaker IPv4 address")
-    target.add_argument("--device", help="Saved device alias")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    add_target_arguments(parser)
     parser.add_argument(
         "--client-uuid",
         type=client_uuid,
@@ -53,61 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the complete XML body after each summary",
     )
-    parser.add_argument("--config", type=Path, help="Override device profile file")
-    parser.add_argument(
-        "--discovery-timeout",
-        type=float,
-        default=4.0,
-        help="Seconds to resolve speakers",
-    )
-    parser.add_argument(
-        "--interface",
-        action="append",
-        dest="interfaces",
-        help="Local IPv4 used for discovery; repeat when needed",
-    )
-    parser.add_argument(
-        "--no-scan",
-        action="store_true",
-        help="Disable fallback scanning of local /24 networks",
-    )
     parser.add_argument("--verbose", action="store_true")
     return parser
-
-
-def select_speaker(args: argparse.Namespace, store: ProfileStore) -> tuple[str, int]:
-    if args.device:
-        profile = resolve_device(
-            args.device,
-            store=store,
-            timeout=args.discovery_timeout,
-            local_addresses=args.interfaces,
-            scan=not args.no_scan,
-        )
-        LOGGER.info(
-            "Resolved saved device %s (%s) to %s",
-            profile.alias,
-            profile.device_id,
-            profile.last_ip,
-        )
-        return profile.last_ip, profile.port
-    if args.speaker:
-        return args.speaker, args.port
-
-    speakers = discover(
-        timeout=args.discovery_timeout,
-        local_addresses=args.interfaces,
-        port=args.port,
-        scan=not args.no_scan,
-    )
-    if not speakers:
-        raise RuntimeError("No Samsung WAM speaker found")
-    if len(speakers) > 1:
-        addresses = ", ".join(speaker.ip for speaker in speakers)
-        raise RuntimeError(
-            f"More than one Samsung WAM found ({addresses}); pass --speaker IP"
-        )
-    return speakers[0].ip, args.port
 
 
 def _short_value(value: str, limit: int = 120) -> str:
@@ -158,10 +101,7 @@ def run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
+    configure_logging(args.verbose)
     try:
         return run(args)
     except KeyboardInterrupt:

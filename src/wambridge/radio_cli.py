@@ -9,6 +9,7 @@ from pathlib import Path
 from time import monotonic, sleep
 
 from . import cli
+from .cli_common import configure_logging
 from .profiles import ProfileError, ProfileStore
 from .samsung import (
     WamApiError,
@@ -92,26 +93,6 @@ def _radio_action(args: argparse.Namespace) -> bool:
             args.radio_play,
             args.tunein_list,
             args.tunein_play,
-        )
-    )
-
-
-def _legacy_action(args: argparse.Namespace) -> bool:
-    return any(
-        (
-            args.probe,
-            args.discover,
-            args.remember,
-            args.list_devices,
-            args.forget,
-            args.status,
-            args.set_volume is not None,
-            args.mute,
-            args.unmute,
-            args.pause,
-            args.play,
-            args.stop,
-            args.standby,
         )
     )
 
@@ -285,7 +266,7 @@ def run(args: argparse.Namespace) -> int:
         raise RuntimeError(
             "A positional audio source cannot be combined with a radio action"
         )
-    if _legacy_action(args):
+    if cli.has_control_action(args):
         raise RuntimeError(
             "A radio action cannot be combined with another control action"
         )
@@ -340,10 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     """Command-line entry point with radio extensions."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
+    configure_logging(args.verbose)
     try:
         return run(args)
     except (

@@ -6,11 +6,17 @@ import argparse
 import logging
 import sys
 import threading
-from pathlib import Path
 from time import monotonic
 from typing import BinaryIO, TextIO
 
-from .cli import choose_start_volume, select_speaker, volume_level
+from .cli import choose_start_volume, volume_level
+from .cli_common import (
+    DEFAULT_MAX_START_VOLUME,
+    add_target_arguments,
+    bounded_int,
+    configure_logging,
+    select_speaker,
+)
 from .discovery import local_ip_for
 from .identity import load_client_uuid
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
@@ -20,7 +26,6 @@ from .stream import OUTPUT_PROFILES, STARTUP_SILENCE_MS, StreamError
 from .wam_events import WamEvent, WamEventConnection, WamEventError
 
 LOGGER = logging.getLogger("wambridge")
-DEFAULT_MAX_START_VOLUME = 10
 _BROKEN_PIPE_ERRORS = {109, 233}
 _SUCCESS_EVENT = "StartPlaybackEvent"
 _FAILURE_EVENT = "ErrorEvent"
@@ -30,41 +35,14 @@ _VOLUME_COMMAND = "SetVolume"
 _VOLUME_ACK_TIMEOUT = 1.0
 
 
-def sample_rate(value: str) -> int:
-    """Parse a PCM sample rate."""
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("sample rate must be an integer") from error
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("sample rate must be positive")
-    return parsed
+sample_rate = bounded_int("sample rate", minimum=1)
+"""Parse a PCM sample rate."""
 
+channel_count = bounded_int("channels", minimum=1)
+"""Parse a PCM channel count."""
 
-def channel_count(value: str) -> int:
-    """Parse a PCM channel count."""
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("channels must be an integer") from error
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("channels must be positive")
-    return parsed
-
-
-def startup_silence(value: str) -> int:
-    """Parse the leading silence in milliseconds."""
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            "startup silence must be an integer number of milliseconds"
-        ) from error
-    if not 0 <= parsed <= 10000:
-        raise argparse.ArgumentTypeError(
-            "startup silence must be between 0 and 10000 ms"
-        )
-    return parsed
+startup_silence = bounded_int("startup silence in ms", minimum=0, maximum=10000)
+"""Parse the leading silence in milliseconds."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,22 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="wambridge-pcm",
         description="Read raw PCM from stdin and stream it to Samsung WAM.",
     )
-    target = parser.add_mutually_exclusive_group()
-    target.add_argument("--speaker", help="Speaker IPv4 address")
-    target.add_argument(
-        "--device",
-        help="Saved device alias; current IP is resolved automatically",
-    )
-    parser.add_argument("--port", type=int, default=55001)
-    parser.add_argument("--config", type=Path)
-    parser.add_argument("--discovery-timeout", type=float, default=4.0)
-    parser.add_argument(
-        "--interface",
-        action="append",
-        dest="interfaces",
-        help="Local IPv4 used for discovery; may be repeated",
-    )
-    parser.add_argument("--no-scan", action="store_true")
+    add_target_arguments(parser)
     parser.add_argument(
         "--sample-rate",
         type=sample_rate,
@@ -599,10 +562,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run the PCM helper protocol."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
+    configure_logging(args.verbose)
     try:
         return run(args)
     except (
