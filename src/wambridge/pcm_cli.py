@@ -6,6 +6,7 @@ import argparse
 import logging
 import sys
 import threading
+from collections.abc import Iterator
 from time import monotonic
 from typing import BinaryIO, TextIO
 
@@ -149,6 +150,17 @@ def _raise_if_pcm_input_closed(stream: BinaryIO) -> None:
         )
 
 
+def _wait_slices(timeout: float, *, slice_seconds: float = 0.1) -> Iterator[float]:
+    """Yield short wait budgets until the timeout expires.
+
+    Callers poll their own abort conditions between slices, so no wait may
+    swallow the remaining budget in one blocking call.
+    """
+    deadline = monotonic() + timeout
+    while (remaining := deadline - monotonic()) > 0:
+        yield min(slice_seconds, remaining)
+
+
 def _wait_for_stream_request(
     server: PcmAudioStreamServer,
     pcm_input: BinaryIO,
@@ -156,11 +168,8 @@ def _wait_for_stream_request(
     timeout: float,
     watcher: PlaybackWatcher | None = None,
 ) -> None:
-    deadline = monotonic() + timeout
-    while monotonic() < deadline:
-        if server.request_started.wait(
-            timeout=min(0.1, max(0.0, deadline - monotonic()))
-        ):
+    for budget in _wait_slices(timeout):
+        if server.request_started.wait(timeout=budget):
             return
         _raise_if_pcm_input_closed(pcm_input)
         if watcher is not None:
@@ -182,9 +191,8 @@ def _wait_for_stream_event(
     timeout: float,
 ) -> None:
     event = getattr(server, event_name)
-    deadline = monotonic() + timeout
-    while monotonic() < deadline:
-        if event.wait(timeout=min(0.1, max(0.0, deadline - monotonic()))):
+    for budget in _wait_slices(timeout):
+        if event.wait(timeout=budget):
             return
         if server.request_finished.is_set():
             raise StreamError(
@@ -263,11 +271,8 @@ class PlaybackWatcher:
         )
 
     def wait_for_start(self, *, timeout: float) -> None:
-        deadline = monotonic() + timeout
-        while monotonic() < deadline:
-            if self._started.wait(
-                timeout=min(0.1, max(0.0, deadline - monotonic()))
-            ):
+        for budget in _wait_slices(timeout):
+            if self._started.wait(timeout=budget):
                 return
             self.raise_if_failed()
         raise StreamError(f"Speaker did not confirm {_SUCCESS_EVENT}")
@@ -340,9 +345,7 @@ class PlaybackWatcher:
                 self._results[command] = ""
             return
 
-        code = event.error_code or event.values.get("errCode") or (
-            event.values.get("errcode", "")
-        )
+        code = event.reported_error_code
         suffix = f" (error {code})" if code else ""
         message = f"Speaker rejected {command}{suffix}"
         with self._response_lock:
@@ -385,9 +388,7 @@ class PlaybackWatcher:
                         self._record_response(command, event)
                         continue
                     if event.method == _FAILURE_EVENT and self._armed.is_set():
-                        code = event.error_code or event.values.get("errCode") or (
-                            event.values.get("errcode", "")
-                        )
+                        code = event.reported_error_code
                         if (
                             self._stream_active.is_set()
                             and not self._started.is_set()

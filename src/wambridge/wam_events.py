@@ -49,6 +49,19 @@ class WamEvent:
     values: dict[str, str] = field(default_factory=dict)
     body: str = ""
 
+    @property
+    def reported_error_code(self) -> str:
+        """Return the error code in whichever spelling the firmware used.
+
+        Measured M5 firmware reports the code as an attribute, as a nested
+        ``errCode`` element and as a lowercase ``errcode`` element.
+        """
+        return (
+            self.error_code
+            or self.values.get("errCode")
+            or self.values.get("errcode", "")
+        )
+
 
 class WamHttpStreamParser:
     """Incrementally split Samsung's adjacent HTTP responses by Content-Length."""

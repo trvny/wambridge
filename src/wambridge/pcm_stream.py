@@ -14,6 +14,7 @@ from .stream import (
     AudioStreamServer,
     StreamError,
     _read_chunk,
+    terminate_process,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -218,13 +219,7 @@ class PcmAudioStreamServer(AudioStreamServer):
         except (BrokenPipeError, ConnectionResetError):
             LOGGER.info("Speaker closed the PCM stream")
         finally:
-            if process.poll() is None:
-                process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
+            terminate_process(process)
             with self._process_lock:
                 # Only clear the slot if a newer request has not claimed it, or
                 # a late-finishing handler would strand the live encoder.

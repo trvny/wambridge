@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import argparse
 import logging
-import socket
 import threading
 from contextlib import suppress
 from pathlib import Path
 
+from .discovery import local_ip_for
 from .identity import load_client_uuid
 from .samsung import (
     DEFAULT_PORT,
@@ -40,14 +40,6 @@ LOGGER = logging.getLogger(__name__)
 SUCCESS_EVENT = "StartPlaybackEvent"
 PROGRESS_EVENTS = ("MediaBufferStartEvent", "MediaBufferEndEvent")
 FAILURE_EVENT = "ErrorEvent"
-
-
-def local_ip_for(speaker_ip: str) -> str:
-    """Return the local address the speaker will be able to reach."""
-
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.connect((speaker_ip, 9))
-        return probe.getsockname()[0]
 
 
 class SpeakerState:
@@ -135,9 +127,7 @@ class PlaybackWatcher:
                     self.started.set()
                     return
                 elif event.method == FAILURE_EVENT:
-                    self.error_code = event.values.get("errCode") or event.values.get(
-                        "errcode", ""
-                    )
+                    self.error_code = event.reported_error_code
                     self.failed.set()
                     return
         except Exception as error:  # noqa: BLE001 - must not kill playback
