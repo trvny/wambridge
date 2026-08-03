@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
 from urllib.parse import quote
 from urllib.request import ProxyHandler, build_opener
 from xml.etree import ElementTree
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_PORT = 55001
 MIN_VOLUME = 0
@@ -465,7 +468,10 @@ def get_playback_status(
         return status
     try:
         radio = get_radio_info(speaker_ip, port=port, timeout=timeout)
-    except WamApiError:
+    except WamApiError as error:
+        LOGGER.debug(
+            "Could not enrich play status with provider metadata: %s", error
+        )
         return status
     return replace(
         status,
