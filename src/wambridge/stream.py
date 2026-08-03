@@ -230,7 +230,11 @@ class AudioStreamServer:
             protocol_version = "HTTP/1.0"
 
             def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-                if self.path != owner.path:
+                # The random path is the only thing standing between this LAN
+                # server and the stream, so it is compared without leaking how
+                # much of a guess was right.
+                requested = self.path.encode("utf-8", errors="replace")
+                if not secrets.compare_digest(requested, owner.path.encode()):
                     self.send_error(404)
                     return
 

@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from urllib.parse import quote
 from urllib.request import ProxyHandler, build_opener
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape
 
 DEFAULT_PORT = 55001
 MIN_VOLUME = 0
 MAX_VOLUME = 100
+MAX_RESPONSE_BYTES = 1024 * 1024
+API_TYPES = ("UIC", "CPM")
 LOCAL_OPENER = build_opener(ProxyHandler({}))
+_NAME_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_.-]*\Z")
+_HOST_RE = re.compile(r"\A[A-Za-z0-9._:%\[\]-]+\Z")
 
 
 class WamApiError(RuntimeError):
@@ -78,16 +84,43 @@ class WamStatus:
     power_status: str | None
 
 
+def _attribute_value(value: str | int) -> str:
+    """Escape one value for a double-quoted XML attribute.
+
+    ``quoteattr`` would switch to single quotes around a value containing a
+    double quote, and nothing measured says the firmware's parser accepts that
+    spelling, so the quoting stays fixed and the value is escaped instead.
+    """
+
+    return escape(str(value), {'"': "&quot;"})
+
+
+def _validate_xml_name(value: str, label: str) -> str:
+    """Reject a method or parameter name that is not a plain XML name."""
+
+    if not _NAME_RE.match(value):
+        raise ValueError(f"Invalid WAM {label}: {value!r}")
+    return value
+
+
 def build_command(
     method: str,
     arguments: list[tuple[str, str | int, str]] | None = None,
     *,
     power_on: bool = False,
 ) -> str:
-    """Build the XML command accepted by the Samsung WAM API."""
+    """Build the XML command accepted by the Samsung WAM API.
+
+    Values reach the speaker's parser inside an attribute or a CDATA section, so
+    every one of them is escaped. A station name or profile field carrying a
+    quote or an angle bracket would otherwise close the attribute and inject
+    parameters into the command.
+    """
+    _validate_xml_name(method, "method")
     parts = ["<pwron>on</pwron>"] if power_on else []
     parts.append(f"<name>{method}</name>")
     for name, value, value_type in arguments or []:
+        _validate_xml_name(name, "parameter name")
         if value_type == "cdata":
             safe_value = str(value).replace("]]>", "]]]]><![CDATA[>")
             parts.append(
@@ -95,7 +128,10 @@ def build_command(
                 f"<![CDATA[{safe_value}]]></p>"
             )
         elif value_type in {"str", "dec"}:
-            parts.append(f'<p type="{value_type}" name="{name}" val="{value}"/>')
+            parts.append(
+                f'<p type="{value_type}" name="{name}" '
+                f'val="{_attribute_value(value)}"/>'
+            )
         else:
             raise ValueError(f"Unsupported WAM value type: {value_type}")
     return "".join(parts)
@@ -111,8 +147,28 @@ def build_api_url(
     power_on: bool = False,
 ) -> str:
     """Build a complete local WAM API URL."""
+    validate_speaker_address(speaker_ip, port)
+    if api_type.upper() not in API_TYPES:
+        raise ValueError(f"WAM API type must be one of: {', '.join(API_TYPES)}")
     command = build_command(method, arguments, power_on=power_on)
-    return f"http://{speaker_ip}:{port}/{api_type}?cmd={quote(command, safe='')}"
+    return (
+        f"http://{speaker_ip}:{port}/{api_type.upper()}"
+        f"?cmd={quote(command, safe='')}"
+    )
+
+
+def validate_speaker_address(speaker_ip: str, port: int = DEFAULT_PORT) -> None:
+    """Reject an address that would change the request instead of addressing it.
+
+    The address is interpolated into a URL and, on the persistent control
+    connection, into request headers. A value carrying a slash, a space or a
+    line break would target another path or append headers of its own.
+    """
+
+    if not speaker_ip or not _HOST_RE.match(speaker_ip):
+        raise ValueError(f"Invalid Samsung WAM address: {speaker_ip!r}")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError(f"Invalid Samsung WAM port: {port!r}")
 
 
 def _local_name(tag: str) -> str:
@@ -251,7 +307,14 @@ def request(
             url,
             timeout=timeout,
         ) as response:
-            body = response.read().decode("utf-8", errors="replace")
+            # Bounded: the speaker is a network peer, and an unbounded read of
+            # whatever answers on port 55001 is a memory-exhaustion primitive.
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise WamApiError(
+                    f"Samsung WAM response exceeded {MAX_RESPONSE_BYTES} bytes"
+                )
+            body = raw.decode("utf-8", errors="replace")
     except OSError as error:
         raise WamApiError(
             f"Cannot reach Samsung WAM at {speaker_ip}:{port}: {error}"

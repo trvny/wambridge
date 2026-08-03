@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -86,16 +87,18 @@ def media_type(path: Path) -> tuple[str, str]:
         ) from None
 
 
-def object_id_for(path: Path) -> str:
+def object_id_for(path: Path, *, salt: bytes | None = None) -> str:
     """Build the flat object identifier the official application uses.
 
     The captured session used ``<uppercase hash>.<extension>`` served from a
-    single flat namespace, with no parent hierarchy.
+    single flat namespace, with no parent hierarchy. The shape is kept, but the
+    digest is salted with fresh random bytes unless a salt is supplied: the
+    identifier is the whole of the media server's access control, and a plain
+    hash of the file path is reproducible by anyone who can guess the path.
     """
 
-    digest = hashlib.sha1(  # noqa: S324 - identifier only, not security
-        str(path.resolve()).encode("utf-8")
-    ).hexdigest()
+    material = secrets.token_bytes(16) if salt is None else salt
+    digest = hashlib.sha256(material + str(path.resolve()).encode("utf-8")).hexdigest()
     return f"{digest[:32].upper()}{path.suffix.lower()}"
 
 
@@ -173,7 +176,11 @@ class ShareServer:
 
             def _serve(self, *, include_body: bool) -> None:
                 requested = unquote(urlsplit(self.path).path)
-                if requested != f"{SHARE_PATH_PREFIX}{owner.object_id}":
+                expected = f"{SHARE_PATH_PREFIX}{owner.object_id}"
+                if not secrets.compare_digest(
+                    requested.encode("utf-8", errors="replace"),
+                    expected.encode(),
+                ):
                     self.send_error(404)
                     return
                 owner._note_request()
