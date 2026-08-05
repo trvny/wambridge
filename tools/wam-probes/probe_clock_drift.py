@@ -94,13 +94,13 @@ def _watch_for_playback() -> None:
             # da sie odroznic "glosnik nie wysyla zdarzenia" od "nasluch nie dziala".
             if event.method and event.method not in seen:
                 seen.add(event.method)
-                print("[nasluch] %s" % event.method, file=sys.stderr, flush=True)
+                print(f"[nasluch] {event.method}", file=sys.stderr, flush=True)
             if event.method == "StartPlaybackEvent":
                 _playback_start = time.monotonic()
                 print("[kotwica] StartPlaybackEvent", file=sys.stderr, flush=True)
                 return
     except OSError as error:  # glosnik nieosiagalny - nie przerywamy pomiaru
-        print("[kotwica] nasluch padl: %s" % error, file=sys.stderr, flush=True)
+        print(f"[kotwica] nasluch padl: {error}", file=sys.stderr, flush=True)
 
 
 def _in_flight(audio_emitted: float) -> str:
@@ -155,8 +155,9 @@ def main() -> int:
             elapsed = now - start
             audio = total / REALTIME
             print(
-                "%5.1fs %8.1f kB/s %8.2fx %12.1fs %+9.1fs %s"
-                % (elapsed, rate / 1024, rate / REALTIME, audio, audio - elapsed, _in_flight(audio)),
+                f"{elapsed:5.1f}s {rate / 1024:8.1f} kB/s "
+                f"{rate / REALTIME:8.2f}x {audio:12.1f}s "
+                f"{audio - elapsed:+9.1f}s {_in_flight(audio)}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -166,7 +167,7 @@ def main() -> int:
 
     dst.flush()
     print(
-        "KONIEC: %.1f MB w %.1fs" % (total / 1048576, time.monotonic() - start),
+        f"KONIEC: {total / 1048576:.1f} MB w {time.monotonic() - start:.1f}s",
         file=sys.stderr,
         flush=True,
     )
