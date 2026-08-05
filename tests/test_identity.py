@@ -12,31 +12,56 @@ from unittest.mock import patch
 from wambridge.identity import IDENTITY_VERSION, default_identity_path, load_client_uuid
 
 
+HOME = "/tmp/home"
+
+
+def cleared_environment(**values: str) -> dict[str, str]:
+    """Return an environment holding only these values and a home directory.
+
+    ``clear=True`` also drops the variables a home is resolved from. POSIX
+    falls back to the password database, Windows has none and raises
+    ``RuntimeError`` from ``Path.home()`` instead, so the tests keep one.
+    """
+
+    return {"HOME": HOME, "USERPROFILE": HOME, **values}
+
+
 class DefaultIdentityPathTests(unittest.TestCase):
     def test_explicit_override_wins(self) -> None:
         with patch.dict(
             "os.environ",
-            {"WAMBRIDGE_IDENTITY": "~/custom.json", "LOCALAPPDATA": r"C:\Users\x\AppData\Local"},
+            cleared_environment(
+                WAMBRIDGE_IDENTITY="~/custom.json",
+                LOCALAPPDATA=r"C:\Users\x\AppData\Local",
+            ),
             clear=True,
         ):
             self.assertEqual(default_identity_path(), Path("~/custom.json").expanduser())
 
     def test_windows_uses_local_app_data(self) -> None:
-        with patch.dict("os.environ", {"LOCALAPPDATA": "/tmp/LocalAppData"}, clear=True):
+        with patch.dict(
+            "os.environ",
+            cleared_environment(LOCALAPPDATA="/tmp/LocalAppData"),
+            clear=True,
+        ):
             self.assertEqual(
                 default_identity_path(),
                 Path("/tmp/LocalAppData") / "WAMBridge" / "identity.json",
             )
 
     def test_falls_back_to_xdg_config_home(self) -> None:
-        with patch.dict("os.environ", {"XDG_CONFIG_HOME": "/tmp/config"}, clear=True):
+        with patch.dict(
+            "os.environ",
+            cleared_environment(XDG_CONFIG_HOME="/tmp/config"),
+            clear=True,
+        ):
             self.assertEqual(
                 default_identity_path(),
                 Path("/tmp/config") / "wambridge" / "identity.json",
             )
 
     def test_falls_back_to_home_config(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
+        with patch.dict("os.environ", cleared_environment(), clear=True):
             self.assertEqual(
                 default_identity_path(),
                 Path.home() / ".config" / "wambridge" / "identity.json",
