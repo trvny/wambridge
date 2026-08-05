@@ -94,9 +94,15 @@ def _windows_ipv4_addresses() -> list[str]:
             check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as error:
+        LOGGER.debug("Could not query Windows adapter addresses: %s", error)
         return []
     if result.returncode != 0:
+        LOGGER.debug(
+            "PowerShell adapter query exited with %s: %s",
+            result.returncode,
+            result.stderr.strip(),
+        )
         return []
     return [line.strip() for line in result.stdout.splitlines() if _usable_address(line.strip())]
 
