@@ -37,22 +37,32 @@ jobs:
           python-version: "3.13"
 
       - name: Check Python
+        shell: pwsh
         run: |
           python -m pip install "ruff>=0.12,<1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m compileall -q src tests foobar/wambridge_pcm_entry.py tools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test Python package
+        shell: pwsh
         run: |
           python -m pip install -e .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           wambridge-control --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           wambridge-events --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build standalone helper
         shell: pwsh
         run: |
           python -m pip install pyinstaller
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller `
             --noconfirm `
             --clean `
@@ -62,6 +72,7 @@ jobs:
             --workpath build/pyinstaller `
             --specpath build/pyinstaller `
             foobar/wambridge_pcm_entry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & dist/helper/wambridge-pcm/wambridge-pcm.exe --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -79,6 +90,7 @@ jobs:
             --workpath build/pyinstaller-control `
             --specpath build/pyinstaller-control `
             tools/wambridge_control_entry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & dist/control/wambridge-control.exe --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -96,6 +108,7 @@ jobs:
             --workpath build/pyinstaller-events `
             --specpath build/pyinstaller-events `
             tools/wambridge_events_entry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & dist/events/wambridge-events.exe --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -109,6 +122,7 @@ jobs:
             -Uri "https://www.foobar2000.org/downloads/SDK-2025-03-07.7z" `
             -OutFile external/foobar-sdk.7z
           7z x external/foobar-sdk.7z -oexternal/foobar-sdk -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $sdkProject = Get-ChildItem external/foobar-sdk `
             -Recurse -Filter foobar2000_SDK.vcxproj | Select-Object -First 1
@@ -160,12 +174,15 @@ jobs:
             dist/component/wambridge-control/wambridge-control.exe
           Push-Location dist/component
           7z a -tzip ../foo_out_wam.fb2k-component *
+          $packed = $LASTEXITCODE
           Pop-Location
+          if ($packed -ne 0) { exit $packed }
           Copy-Item $output dist/foo_out_wam.dll
           git archive `
             --format=zip `
             --output=dist/wambridge-source.zip `
             HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v7
         with:
