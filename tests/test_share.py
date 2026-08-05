@@ -62,6 +62,20 @@ class MediaTypeTests(unittest.TestCase):
         self.assertNotIn("/", object_id)
         self.assertEqual(object_id, object_id.upper().replace(".MP3", ".mp3"))
 
+    def test_object_id_is_not_derived_from_the_path_alone(self) -> None:
+        # The identifier is the only thing protecting the served file on the
+        # LAN, so two servers for the same file must not share it.
+        self.assertNotEqual(
+            object_id_for(Path("a.mp3")),
+            object_id_for(Path("a.mp3")),
+        )
+
+    def test_object_id_is_reproducible_with_an_explicit_salt(self) -> None:
+        self.assertEqual(
+            object_id_for(Path("a.mp3"), salt=b"salt"),
+            object_id_for(Path("a.mp3"), salt=b"salt"),
+        )
+
 
 class IdentifierRuleTests(unittest.TestCase):
     """The uuid: prefix makes the firmware ignore the command silently."""

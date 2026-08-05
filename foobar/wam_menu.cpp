@@ -221,17 +221,18 @@ std::wstring quoted(const std::wstring& value) {
     return result;
 }
 
+// A bare file name would leave CreateProcessW resolving the helper against the
+// working directory, so only the configured override or the absolute bundled
+// path is ever used. An empty result fails the launch with a console error.
 std::wstring control_helper_path() {
     const auto overridePath = environment_value(L"WAMBRIDGE_CONTROL");
     if (!overridePath.empty()) return overridePath;
 
     const auto directory = module_directory();
-    if (!directory.empty()) {
-        const auto bundled = directory +
-            L"\\wambridge-control\\wambridge-control.exe";
-        if (file_exists(bundled)) return bundled;
-    }
-    return L"wambridge-control.exe";
+    if (directory.empty()) return {};
+    const auto bundled = directory +
+        L"\\wambridge-control\\wambridge-control.exe";
+    return file_exists(bundled) ? bundled : std::wstring{};
 }
 
 std::wstring configured_device() {

@@ -4,7 +4,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from wambridge.event_cli import client_uuid, format_event
 from wambridge.wam_events import (
+    MAX_MESSAGE_BYTES,
     WamEvent,
+    WamEventError,
     WamHttpStreamParser,
     build_mobile_request,
     parse_event,
@@ -56,6 +58,17 @@ class WamHttpStreamParserTests(TestCase):
         parser = WamHttpStreamParser()
 
         self.assertEqual(parser.feed(http_response("failure", status=500)), [])
+
+    def test_rejects_oversized_announced_message(self) -> None:
+        parser = WamHttpStreamParser()
+        header = (
+            "HTTP/1.1 200 OK\r\n"
+            f"Content-Length: {MAX_MESSAGE_BYTES + 1}\r\n"
+            "\r\n"
+        ).encode()
+
+        with self.assertRaisesRegex(WamEventError, "byte limit"):
+            parser.feed(header)
 
 
 class WamEventTests(TestCase):
@@ -113,6 +126,17 @@ class WamEventTests(TestCase):
         )
         self.assertIn("mobileName: Wireless Audio", headers)
         self.assertIn("mobileVersion: 1.0", headers)
+
+    def test_rejects_client_uuid_carrying_a_header_break(self) -> None:
+        with self.assertRaisesRegex(ValueError, "client UUID"):
+            build_mobile_request(
+                "10.0.0.118",
+                "abc\r\nmobileName: attacker",
+            )
+
+    def test_rejects_address_carrying_a_header_break(self) -> None:
+        with self.assertRaisesRegex(ValueError, "address"):
+            build_mobile_request("10.0.0.118\r\nX: y", "abc")
 
     def test_builds_identity_bearing_playback_command(self) -> None:
         request = build_mobile_request(
