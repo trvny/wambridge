@@ -16,13 +16,11 @@ Glosnosci nie ruszamy.
 
 from __future__ import annotations
 
-import socket
+import os
 import socketserver
 import threading
 import time
-import os
 from pathlib import Path
-from urllib.parse import quote
 
 import probe_share as ps
 
@@ -65,17 +63,23 @@ class RawHandler(socketserver.BaseRequestHandler):
         ctype = "audio/mpeg" if is_mp3 else "audio/wav"
 
         if variant == "A":
-            head = (f"HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\n"
-                    f"Content-Length: {FAKE_LEN}\r\nAccept-Ranges: bytes\r\n"
-                    "transferMode.dlna.org: Streaming\r\n\r\n")
+            head = (
+                f"HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\n"
+                f"Content-Length: {FAKE_LEN}\r\nAccept-Ranges: bytes\r\n"
+                "transferMode.dlna.org: Streaming\r\n\r\n"
+            )
         elif variant == "B":
-            head = (f"HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\n"
-                    "Transfer-Encoding: chunked\r\n"
-                    "transferMode.dlna.org: Streaming\r\n\r\n")
+            head = (
+                f"HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "transferMode.dlna.org: Streaming\r\n\r\n"
+            )
         else:  # C, D
-            head = (f"HTTP/1.0 200 OK\r\nContent-Type: {ctype}\r\n"
-                    "Connection: close\r\n"
-                    "transferMode.dlna.org: Streaming\r\n\r\n")
+            head = (
+                f"HTTP/1.0 200 OK\r\nContent-Type: {ctype}\r\n"
+                "Connection: close\r\n"
+                "transferMode.dlna.org: Streaming\r\n\r\n"
+            )
 
         try:
             sock.sendall(head.encode())
@@ -87,7 +91,7 @@ class RawHandler(socketserver.BaseRequestHandler):
         step = rate // 8
         pos, deadline = 0, time.time() + STREAM_SECONDS
         while pos < len(data) and time.time() < deadline:
-            piece = data[pos:pos + step]
+            piece = data[pos : pos + step]
             pos += step
             try:
                 if variant == "B":
@@ -108,12 +112,14 @@ class RawHandler(socketserver.BaseRequestHandler):
 
 
 def url_play(name: str) -> None:
-    ps.send(f'<name>SetUrlPlayback</name>'
-            f'<p type="cdata" name="url" val="empty">'
-            f'<![CDATA[http://{ps.HOST_IP}:{ps.DMS_PORT}/{name}]]></p>'
-            f'<p type="dec" name="buffersize" val="0"/>'
-            f'<p type="dec" name="seektime" val="0"/>'
-            f'<p type="dec" name="resume" val="1"/>')
+    ps.send(
+        f'<name>SetUrlPlayback</name>'
+        f'<p type="cdata" name="url" val="empty">'
+        f'<![CDATA[http://{ps.HOST_IP}:{ps.DMS_PORT}/{name}]]></p>'
+        f'<p type="dec" name="buffersize" val="0"/>'
+        f'<p type="dec" name="seektime" val="0"/>'
+        f'<p type="dec" name="resume" val="1"/>'
+    )
 
 
 def main() -> None:
@@ -151,8 +157,10 @@ def main() -> None:
             verdict = "cisza"
         print(f"  --> {verdict}  oddane {kb} kB, zdarzenia={methods or '-'}")
         results.append((label, verdict, kb))
-        ps.send('<name>SetPlaybackControl</name>'
-                '<p type="str" name="playbackcontrol" val="pause"/>')
+        ps.send(
+            '<name>SetPlaybackControl</name>'
+            '<p type="str" name="playbackcontrol" val="pause"/>'
+        )
         time.sleep(1.5)
 
     ps._stop.set()

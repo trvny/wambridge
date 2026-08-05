@@ -44,7 +44,6 @@ _orig_serve = ps.Handler._serve
 
 
 def _counting_serve(self, body: bool) -> None:
-    before = getattr(self.wfile, "_total", 0)
     _orig_serve(self, body)
     served["last"] = time.time()
 
@@ -55,7 +54,7 @@ def main() -> None:
     print("=" * 62)
     print(f"  plik      : {ps.MEDIA.name}")
     print(f"  DMS       : http://{ps.HOST_IP}:{ps.DMS_PORT}/DLNA/{ps.OBJECT_NAME}")
-    print(f"  glosnosc  : NIE RUSZAM (twoje ustawienie)")
+    print("  glosnosc  : NIE RUSZAM (twoje ustawienie)")
     print(f"  czas gry  : {PLAY_SECONDS} s\n")
 
     srv = ps.Server(("0.0.0.0", ps.DMS_PORT), CountingHandler)
@@ -74,8 +73,11 @@ def main() -> None:
 
     for remaining in range(PLAY_SECONDS, 0, -5):
         time.sleep(5)
-        print(f"    ... gra jeszcze {remaining - 5} s "
-              f"(zadan HTTP: {served['requests']})", flush=True)
+        print(
+            f"    ... gra jeszcze {remaining - 5} s "
+            f"(zadan HTTP: {served['requests']})",
+            flush=True,
+        )
 
     ps._stop.set()
     srv.shutdown()
@@ -85,8 +87,12 @@ def main() -> None:
     print("=" * 62)
     print(f"  zadan HTTP od glosnika : {served['requests']}")
     if served["first"]:
-        print(f"  pierwsze zadanie       : +{served['first'] - served['first']:.1f} s od startu")
-        print(f"  strumien trwal         : {(served['last'] or served['first']) - served['first']:.1f} s")
+        print(
+            f"  pierwsze zadanie       : "
+            f"+{served['first'] - served['first']:.1f} s od startu"
+        )
+        stream_seconds = (served["last"] or served["first"]) - served["first"]
+        print(f"  strumien trwal         : {stream_seconds:.1f} s")
     print(f"  wszystkie trafienia    : {ps.http_hits}")
     print("\n  Glosnosci nie zmienialem ani razu.")
 
