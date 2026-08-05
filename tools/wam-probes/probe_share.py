@@ -71,7 +71,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
         else:
             self.send_response(200)
-        chunk = data[start:end + 1]
+        chunk = data[start : end + 1]
         self.send_header("Content-Type", "audio/mpeg")
         self.send_header("Content-Length", str(len(chunk)))
         self.send_header("Accept-Ranges", "bytes")
@@ -121,7 +121,7 @@ def bodies(raw: bytes) -> tuple[list[str], bytes]:
         total = head_end + 4 + length
         if len(raw) < total:
             return out, raw
-        out.append(raw[head_end + 4:total].decode("utf-8", "replace"))
+        out.append(raw[head_end + 4 : total].decode("utf-8", "replace"))
         raw = raw[total:]
 
 
@@ -131,7 +131,7 @@ def field(body: str, name: str) -> str:
     if i < 0:
         return ""
     j = body.find(close_tag, i)
-    return body[i + len(open_tag):j].replace("<![CDATA[", "").replace("]]>", "")
+    return body[i + len(open_tag) : j].replace("<![CDATA[", "").replace("]]>", "")
 
 
 def listener(phase: dict) -> None:
@@ -145,7 +145,7 @@ def listener(phase: dict) -> None:
             if not got:
                 break
             buf += got
-        except socket.timeout:
+        except TimeoutError:
             continue
         except OSError:
             break
@@ -155,8 +155,12 @@ def listener(phase: dict) -> None:
             who = field(b, "user_identifier")
             tag = "wlasny" if who == CLIENT_UUID else ("public" if who == "public" else "obcy")
             events.append((time.time(), phase["name"], method, tag))
-            mark = {"DMSAddedEvent": "***", "StartPlaybackEvent": "***",
-                    "MediaBufferStartEvent": "***", "ErrorEvent": "!!!"}.get(method, "")
+            mark = {
+                "DMSAddedEvent": "***",
+                "StartPlaybackEvent": "***",
+                "MediaBufferStartEvent": "***",
+                "ErrorEvent": "!!!",
+            }.get(method, "")
             print(f"    [55001] {method:<28} user={tag:<7}{mark}", flush=True)
     sock.close()
 
@@ -169,7 +173,7 @@ def send(cmd: str, wait: float = 2.0) -> str:
     while time.time() < deadline:
         try:
             buf += sock.recv(4096)
-        except socket.timeout:
+        except TimeoutError:
             break
     sock.close()
     found, _ = bodies(buf)
@@ -179,8 +183,10 @@ def send(cmd: str, wait: float = 2.0) -> str:
 # ---------------------------------------------------------------- warianty
 
 def register() -> None:
-    send(f'<name>SetIpInfo</name><p type="str" name="uuid" val="{CLIENT_UUID}"/>'
-         f'<p type="str" name="ip" val="{HOST_IP}:{DMS_PORT}"/>')
+    send(
+        f'<name>SetIpInfo</name><p type="str" name="uuid" val="{CLIENT_UUID}"/>'
+        f'<p type="str" name="ip" val="{HOST_IP}:{DMS_PORT}"/>'
+    )
 
 
 def share(device_udn: str) -> str:
@@ -196,21 +202,35 @@ def share(device_udn: str) -> str:
 
 
 def url_playback() -> str:
-    return send(f'<name>SetUrlPlayback</name>'
-                f'<p type="cdata" name="url" val="empty">'
-                f'<![CDATA[http://{HOST_IP}:{DMS_PORT}/{OBJECT_NAME}]]></p>'
-                f'<p type="dec" name="buffersize" val="0"/>'
-                f'<p type="dec" name="seektime" val="0"/>'
-                f'<p type="dec" name="resume" val="1"/>')
+    return send(
+        f'<name>SetUrlPlayback</name>'
+        f'<p type="cdata" name="url" val="empty">'
+        f'<![CDATA[http://{HOST_IP}:{DMS_PORT}/{OBJECT_NAME}]]></p>'
+        f'<p type="dec" name="buffersize" val="0"/>'
+        f'<p type="dec" name="seektime" val="0"/>'
+        f'<p type="dec" name="resume" val="1"/>'
+    )
 
 
 def phase_report(label: str, before_hits: int, before_events: int) -> dict:
     new_http = http_hits[before_hits:]
     new_ev = [e for e in events[before_events:]]
-    interesting = [m for _, _, m, _ in new_ev
-                   if m in ("DMSAddedEvent", "MediaBufferStartEvent",
-                            "StartPlaybackEvent", "ErrorEvent", "MusicInfo")]
-    print(f"\n  --> {label}: HTTP={len(new_http)}  kluczowe zdarzenia={interesting or 'brak'}")
+    interesting = [
+        m
+        for _, _, m, _ in new_ev
+        if m
+        in (
+            "DMSAddedEvent",
+            "MediaBufferStartEvent",
+            "StartPlaybackEvent",
+            "ErrorEvent",
+            "MusicInfo",
+        )
+    ]
+    print(
+        f"\n  --> {label}: HTTP={len(new_http)}  "
+        f"kluczowe zdarzenia={interesting or 'brak'}"
+    )
     return {"label": label, "http": new_http, "events": interesting}
 
 
@@ -244,11 +264,16 @@ def main() -> None:
         register()
         time.sleep(0.5)
         resp = action()
-        print(f"    odpowiedz: {field(resp, 'method') or '(brak)'} "
-              f"err={field(resp, 'errCode') or field(resp, 'errcode') or '-'}")
+        print(
+            f"    odpowiedz: {field(resp, 'method') or '(brak)'} "
+            f"err={field(resp, 'errCode') or field(resp, 'errcode') or '-'}"
+        )
         time.sleep(12)
         results.append(phase_report(label, h0, e0))
-        send('<name>SetPlaybackControl</name><p type="str" name="playbackcontrol" val="pause"/>')
+        send(
+            '<name>SetPlaybackControl</name>'
+            '<p type="str" name="playbackcontrol" val="pause"/>'
+        )
         time.sleep(1)
 
     _stop.set()
@@ -259,9 +284,14 @@ def main() -> None:
     print("=" * 66)
     for r in results:
         ok = "TAK" if r["http"] else "nie"
-        print(f"  {r['label']:<40} glosnik pobral plik: {ok:<4} zdarzenia: {r['events'] or '-'}")
-    print("\nUWAGA: jesli KONTROLA nie pobrala pliku, to firewall blokuje "
-          f"port {DMS_PORT} i wyniki wariantow sa nierozstrzygajace.")
+        print(
+            f"  {r['label']:<40} glosnik pobral plik: {ok:<4} "
+            f"zdarzenia: {r['events'] or '-'}"
+        )
+    print(
+        "\nUWAGA: jesli KONTROLA nie pobrala pliku, to firewall blokuje "
+        f"port {DMS_PORT} i wyniki wariantow sa nierozstrzygajace."
+    )
 
 
 if __name__ == "__main__":

@@ -238,12 +238,13 @@ class StartupPayloadProgressTests(TestCase):
 
 class StartupSilenceTests(TestCase):
     def _command(self, **kwargs: object) -> list[str]:
-        server = PcmAudioStreamServer(
-            BytesIO(b""),
-            sample_rate=48000,
-            channels=2,
-            **kwargs,
-        )
+        with patch("wambridge.stream.shutil.which", return_value="ffmpeg"):
+            server = PcmAudioStreamServer(
+                BytesIO(b""),
+                sample_rate=48000,
+                channels=2,
+                **kwargs,
+            )
         try:
             return server.encoder_command()
         finally:
