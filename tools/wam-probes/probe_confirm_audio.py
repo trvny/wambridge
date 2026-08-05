@@ -29,6 +29,11 @@ class CountingHandler(DlnaHandler):
         if served["first"] is None:
             served["first"] = time.time()
         super()._serve(body)
+        # Ten handler jest jedynym, ktory trafia do ps.Server, wiec "last"
+        # trzeba stemplowac tutaj. Wczesniej robil to _counting_serve, ktory
+        # nigdy nie zostal podpiety pod ps.Handler._serve - przez co "last"
+        # zostawal None, a podsumowanie drukowalo stale 0.0 s.
+        served["last"] = time.time()
 
     def wfile_write(self, data):  # nieuzywane, zostawione dla czytelnosci
         return
@@ -38,14 +43,6 @@ class CountingHandler(DlnaHandler):
 
     def copyfile(self, src, dst):
         super().copyfile(src, dst)
-
-
-_orig_serve = ps.Handler._serve
-
-
-def _counting_serve(self, body: bool) -> None:
-    _orig_serve(self, body)
-    served["last"] = time.time()
 
 
 def main() -> None:
@@ -69,6 +66,7 @@ def main() -> None:
     ps.register()
     time.sleep(0.5)
     print(">>> START - sluchaj\n")
+    started = time.time()
     ps.share(ps.CLIENT_UUID)
 
     for remaining in range(PLAY_SECONDS, 0, -5):
@@ -89,7 +87,7 @@ def main() -> None:
     if served["first"]:
         print(
             f"  pierwsze zadanie       : "
-            f"+{served['first'] - served['first']:.1f} s od startu"
+            f"+{served['first'] - started:.1f} s od startu"
         )
         stream_seconds = (served["last"] or served["first"]) - served["first"]
         print(f"  strumien trwal         : {stream_seconds:.1f} s")
