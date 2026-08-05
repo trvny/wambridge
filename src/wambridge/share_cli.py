@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import logging
 import threading
-from contextlib import suppress
 from pathlib import Path
 
 from .discovery import local_ip_for
@@ -59,10 +58,14 @@ class SpeakerState:
         self._mute_touched = False
 
     def capture(self) -> None:
-        with suppress(WamApiError):
+        try:
             self.previous_volume = get_volume(self.speaker_ip, port=self.port)
-        with suppress(WamApiError):
+        except WamApiError as error:
+            LOGGER.debug("Could not read speaker volume before playback: %s", error)
+        try:
             self.previous_mute = get_mute(self.speaker_ip, port=self.port)
+        except WamApiError as error:
+            LOGGER.debug("Could not read speaker mute before playback: %s", error)
 
     def set_volume(self, value: int) -> None:
         self._volume_touched = True
@@ -73,12 +76,27 @@ class SpeakerState:
         set_mute(self.speaker_ip, value, port=self.port)
 
     def restore(self) -> None:
+        # A failed restore leaves the speaker muted or at the wrong volume, which
+        # is silent to the user unless it is logged. Try both regardless of which
+        # one fails.
         if self._mute_touched and self.previous_mute is not None:
-            with suppress(WamApiError):
+            try:
                 set_mute(self.speaker_ip, self.previous_mute, port=self.port)
+            except WamApiError as error:
+                LOGGER.warning(
+                    "Could not restore speaker mute to %s: %s",
+                    self.previous_mute,
+                    error,
+                )
         if self._volume_touched and self.previous_volume is not None:
-            with suppress(WamApiError):
+            try:
                 set_volume(self.speaker_ip, self.previous_volume, port=self.port)
+            except WamApiError as error:
+                LOGGER.warning(
+                    "Could not restore speaker volume to %s: %s",
+                    self.previous_volume,
+                    error,
+                )
 
 
 class PlaybackWatcher:
