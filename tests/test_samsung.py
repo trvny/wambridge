@@ -53,6 +53,37 @@ class SamsungCommandTests(TestCase):
         )
         self.assertIn('name="buffersize" val="0"', command)
 
+    def test_escapes_attribute_values(self) -> None:
+        command = build_command(
+            "SetSpkName",
+            [("spkname", '" val="injected', "str")],
+        )
+
+        self.assertNotIn('val="" val="injected"', command)
+        self.assertIn("&quot;", command)
+
+    def test_rejects_method_that_is_not_an_xml_name(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid WAM method"):
+            build_command("Set<Volume>")
+
+    def test_rejects_parameter_name_that_is_not_an_xml_name(self) -> None:
+        with self.assertRaisesRegex(ValueError, "parameter name"):
+            build_command("SetVolume", [('volume" foo="bar', 3, "dec")])
+
+    def test_rejects_address_carrying_a_request_line(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid Samsung WAM address"):
+            build_api_url("10.0.0.118/UIC?cmd=x", "GetSpkName")
+        with self.assertRaisesRegex(ValueError, "Invalid Samsung WAM address"):
+            build_api_url("10.0.0.118\r\nX: y", "GetSpkName")
+
+    def test_rejects_unknown_api_type(self) -> None:
+        with self.assertRaisesRegex(ValueError, "API type"):
+            build_api_url("10.0.0.118", "GetSpkName", api_type="../UIC")
+
+    def test_rejects_port_outside_the_tcp_range(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid Samsung WAM port"):
+            build_api_url("10.0.0.118", "GetSpkName", port=0)
+
     def test_builds_encoded_api_url(self) -> None:
         url = build_api_url("192.168.1.50", "GetSpkName")
         parsed = urlparse(url)

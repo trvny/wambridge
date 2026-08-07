@@ -73,6 +73,10 @@ bool file_exists(const std::wstring& path) {
         (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+// Always an absolute path next to the component, never a bare file name: a
+// bare name makes CreateProcessW search the working directory first, so any
+// writable directory foobar happens to be started from could supply the
+// helper. An empty result fails the launch with the configuration message.
 std::wstring bundled_helper_path() {
     HMODULE module = nullptr;
     if (!GetModuleHandleExW(
@@ -81,7 +85,7 @@ std::wstring bundled_helper_path() {
             reinterpret_cast<LPCWSTR>(&kOutputGuid),
             &module
         )) {
-        return L"wambridge-pcm.exe";
+        return {};
     }
 
     std::vector<wchar_t> buffer(32768);
@@ -90,15 +94,14 @@ std::wstring bundled_helper_path() {
         buffer.data(),
         static_cast<DWORD>(buffer.size())
     );
-    if (size == 0 || size >= buffer.size()) return L"wambridge-pcm.exe";
+    if (size == 0 || size >= buffer.size()) return {};
 
     std::wstring modulePath(buffer.data(), size);
     const size_t separator = modulePath.find_last_of(L"\\/");
-    if (separator == std::wstring::npos) return L"wambridge-pcm.exe";
+    if (separator == std::wstring::npos) return {};
 
-    const auto bundled = modulePath.substr(0, separator) +
+    return modulePath.substr(0, separator) +
         L"\\wambridge-pcm\\wambridge-pcm.exe";
-    return file_exists(bundled) ? bundled : L"wambridge-pcm.exe";
 }
 
 std::wstring ini_value(

@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from time import monotonic
 from urllib.parse import urlsplit
 
-from .samsung import DEFAULT_PORT, build_api_url
+from .samsung import DEFAULT_PORT, build_api_url, validate_speaker_address
 
+MAX_MESSAGE_BYTES = 1024 * 1024
 _HEADER_END = b"\r\n\r\n"
 _STATUS_RE = re.compile(rb"^HTTP/1\.[01]\s+(\d{3})\b", re.IGNORECASE)
 _CONTENT_LENGTH_RE = re.compile(
@@ -32,6 +33,7 @@ _PARAMETER_RE = re.compile(
     r"<p\b[^>]*\bname=(['\"])(.*?)\1[^>]*\bval=(['\"])(.*?)\3[^>]*/>",
     re.IGNORECASE | re.DOTALL,
 )
+_HEADER_VALUE_RE = re.compile(r"\A[\x21-\x7e]+\Z")
 
 
 class WamEventError(RuntimeError):
@@ -92,6 +94,11 @@ class WamHttpStreamParser:
                 raise WamEventError("Samsung WAM sent HTTP without status or Content-Length")
 
             content_length = int(length_match.group(1))
+            if content_length > MAX_MESSAGE_BYTES:
+                raise WamEventError(
+                    f"Samsung WAM announced {content_length} bytes, above the "
+                    f"{MAX_MESSAGE_BYTES} byte limit"
+                )
             message_end = header_end + len(_HEADER_END) + content_length
             if len(self._buffer) < message_end:
                 break
@@ -167,7 +174,15 @@ def build_mobile_request(
     power_on: bool = False,
     keep_alive: bool = False,
 ) -> bytes:
-    """Build the raw request shape used by Samsung Multiroom clients."""
+    """Build the raw request shape used by Samsung Multiroom clients.
+
+    The address and the client UUID become request-line and header values, so
+    both are checked first: a line break in either would append headers or a
+    second request to the speaker's control connection.
+    """
+    validate_speaker_address(speaker_ip, port)
+    if not client_uuid or not _HEADER_VALUE_RE.match(client_uuid):
+        raise ValueError(f"Invalid Samsung WAM client UUID: {client_uuid!r}")
     parsed = urlsplit(
         build_api_url(
             speaker_ip,
