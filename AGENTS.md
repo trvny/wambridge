@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Guidance for assistants working in this repository. Read this file together with
-`docs/WAM_PROTOCOL.md` and `docs/DEVELOPMENT_STATUS.md` before changing playback code.
-Measured facts override old comments, issue summaries and plausible-looking assumptions.
+Read `docs/WAM_PROTOCOL.md` and `docs/DEVELOPMENT_STATUS.md` before changing
+playback code. Measured facts override old comments, issue summaries and
+plausible-looking assumptions.
 
 ## Testing
 
