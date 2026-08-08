@@ -199,6 +199,12 @@ void report_unknown_ini_keys(const std::wstring& path) {
         const std::wstring key(buffer.data() + index);
         index += static_cast<DWORD>(key.size()) + 1;
         if (key.empty()) continue;
+        // Windows treats `;` as the comment marker and `#` as an ordinary
+        // character, so `#format=flac` reaches this loop as a key named
+        // `#format`. Files copied from an earlier foobar.ini.example carry
+        // exactly that, and reporting a commented-out example as an ignored
+        // setting is noise indistinguishable from a real warning.
+        if (key.front() == L'#' || key.front() == L';') continue;
 
         // Case-insensitively: GetPrivateProfileStringW finds `Device=M5` when
         // asked for `device`, so an exact comparison would announce a setting

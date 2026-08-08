@@ -122,6 +122,22 @@ class FoobarSourceTests(TestCase):
         self.assertIn("unknown format %s, falling back to %s", source)
         self.assertIn("startup_silence %s is out of range", source)
         self.assertIn("volume %s is not a number in 0..100", source)
+        # `#` is an ordinary character to the profile API, so a file copied from
+        # an older example arrives carrying keys called `#format` and friends.
+        self.assertIn("if (key.front() == L'#' || key.front() == L';') continue;", source)
+
+    def test_example_ini_comments_use_the_windows_marker(self) -> None:
+        # `#startup_silence=0` is not a disabled setting to Windows; it is a key
+        # named `#startup_silence`. The example shipped that way.
+        example = SOURCE.parent / "foobar.ini.example"
+        for number, line in enumerate(
+            example.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            self.assertFalse(
+                line.startswith("#"),
+                f"foobar.ini.example:{number} comments with '#', which the "
+                "Windows profile API reads as a key name",
+            )
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
