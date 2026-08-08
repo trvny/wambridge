@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-02.
+Last reviewed: 2026-08-08.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -21,6 +21,8 @@ branch or implementing another timing layer.
   encoder owns stdin.
 - `cp` is documented as normal for the URL path; no URL startup gate or power-cycle advice
   may depend on that submode.
+- Speaker-facing output profiles `flac` (default), `wav` and `mp3`, selected by `format` in
+  the INI or `--format` on the helper. Only `flac` has played a full track on hardware.
 
 The stable universal transport is local HTTP started through `SetUrlPlayback`. The speaker
 paces the HTTP side through TCP backpressure. Finite share/DLNA playback is proven as a
@@ -108,9 +110,12 @@ Consequences, none of them optional to know:
   construction. Route it to the speaker's own volume, which answers in about 1.3 s.
 - Pause writes silence into the same pipe, so it very likely has the same delay. Not
   measured yet.
-- Whether the speaker prebuffers bytes or seconds is unknown. If bytes, a lower bitrate
-  shortens everything proportionally, and the `mp3` profile at 320 kbps against FLAC's
-  700-900 kbps is a cheap way to find out.
+- A thinner stream is slower, not faster. The `mp3` profile at 320 kbps measured 16.9 s
+  against FLAC's 13.4 s, so the prebuffer is at least partly bounded by bytes and a thinner
+  stream simply fits more seconds into it. The lever therefore points the other way: the
+  `wav` profile serves uncompressed 16-bit PCM at roughly twice FLAC's bitrate. The mp3
+  ratio, 1.26x where the bitrate difference predicted 2.4x, says something else is bounded
+  too, so do not expect the full half.
 
 ## Closed investigations retained as evidence
 
@@ -192,7 +197,11 @@ Each of these cost real time and each is closed by measurement, not by argument.
    it no longer travels the delayed path, and the measuring instrument is gone.
 3. **Try a fatter stream, not a thinner one.** The speaker's prebuffer is partly bounded by
    bytes, so raw PCM at roughly twice FLAC's bitrate should hold fewer seconds. This is the
-   one remaining idea with a plausible several-second payoff. Needs a `wav` output profile.
+   one remaining idea with a plausible several-second payoff. The `wav` profile now exists
+   (`format=wav`, uncompressed 16-bit PCM, resampled only above 48 kHz); nothing about it
+   has been heard on hardware yet, including whether the M5 accepts a streamed WAV header
+   whose two size fields are `0xFFFFFFFF`. Measure it against the 13.4 s FLAC baseline with
+   the same volume-change method, `hardware_volume` off.
 4. **Route pause onto `55001`** (`SetPlaybackControl pause`/`resume`), then stop, seek and
    skip. Same shape as the volume fix. Measure pause first, or there is no baseline. Risk to
    watch: whether a paused speaker stops pulling and the HTTP connection times out.

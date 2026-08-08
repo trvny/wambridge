@@ -146,7 +146,7 @@ std::wstring quoted(const std::wstring& value) {
 
 // Formats the helper accepts. Anything else would reach its CLI as a rejected
 // argument and take the whole stream down with it.
-constexpr const wchar_t* kStreamFormats[] = {L"flac", L"mp3"};
+constexpr const wchar_t* kStreamFormats[] = {L"flac", L"wav", L"mp3"};
 constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 
 // Milliseconds of silence FFmpeg prepends to the stream. Straight added delay

@@ -68,6 +68,32 @@ OUTPUT_PROFILES: dict[str, OutputProfile] = {
         ),
         max_sample_rate=96000,
     ),
+    "wav": OutputProfile(
+        extension="wav",
+        content_type="audio/wav",
+        # Uncompressed 16-bit PCM, about twice FLAC's bitrate. The speaker's
+        # prebuffer is partly bounded by bytes, so a fatter stream should hold
+        # fewer seconds of audio and arrive at the ear sooner. `-fflags
+        # +bitexact` drops FFmpeg's LIST/INFO chunk, leaving the plain 44-byte
+        # header. Both size fields in it are 0xFFFFFFFF because the muxer
+        # cannot seek back on a pipe; that is the streaming-WAV convention and
+        # not a faked HTTP `Content-Length`, which the M5 does punish.
+        ffmpeg_args=(
+            "-vn",
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s16le",
+            "-fflags",
+            "+bitexact",
+            "-f",
+            "wav",
+        ),
+        # WAV was confirmed on a physical M5 at 44.1 kHz / 16-bit only. Nothing
+        # measured says a higher rate survives this container, so anything
+        # above 48 kHz is resampled rather than gambled on.
+        max_sample_rate=48000,
+    ),
     "mp3": OutputProfile(
         extension="mp3",
         content_type="audio/mpeg",

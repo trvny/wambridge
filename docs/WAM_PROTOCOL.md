@@ -254,6 +254,13 @@ MP4 requires Range support. FLAC does not require transcoding, including the mea
 
 Never fake a length. Use chunked or close-delimited output.
 
+The `wav` profile is the one place where a length still appears, inside the payload rather
+than the HTTP response: FFmpeg cannot seek back on a pipe, so both the RIFF and the `data`
+size fields are `0xFFFFFFFF`. That is the streaming-WAV convention, but whether this
+firmware reads it as endless or as a real 4 GiB length is **not measured**. WAV 44.1/16 is
+confirmed only through share playback of a complete file, never as a `SetUrlPlayback`
+stream.
+
 ## Volume
 
 The tested firmware uses raw steps `0..30`. Values above 30 are silently clamped to maximum

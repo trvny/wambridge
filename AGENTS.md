@@ -72,6 +72,11 @@ and plausible-looking assumptions.
 - Anything applied where PCM leaves the queue, including the volume gain,
   reaches the ear about 13 s later. Controls that need to feel immediate belong
   on the `55001` control path, which answers in about a second.
+- A thinner stream is not a faster one: mp3 at 320 kbps measured 16.9 s against
+  FLAC's 13.4 s, because a prebuffer bounded by bytes holds more seconds of a
+  thinner stream. The `wav` profile pulls the same lever the other way and is the
+  last untested latency idea. It has never played on hardware, so `flac` remains
+  the default until it does.
 - Foobar's `f32le -> FLAC -> M5` path passed the full physical checklist in
   2026-08: a complete track at a median 1.00x, stable seekbar, second track,
   pause/resume, seek, stop/change, radio HLS across a 44.1 to 48 kHz switch, and

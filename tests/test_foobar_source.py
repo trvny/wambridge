@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from unittest import TestCase
 
@@ -98,6 +99,23 @@ class FoobarSourceTests(TestCase):
         self.assertIn('constexpr const wchar_t* kDefaultStreamFormat = L"flac";', source)
         self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
         self.assertNotIn("--format flac --startup-timeout", source)
+
+    def test_accepted_formats_match_the_helper(self) -> None:
+        # The whitelist and the helper's --format choices are edited in two
+        # separate languages. A name in only one of them is either a profile
+        # nobody can select from the INI or a command line the helper rejects.
+        from wambridge.stream import OUTPUT_PROFILES
+
+        source = SOURCE.read_text(encoding="utf-8")
+        declaration = re.search(
+            r"constexpr const wchar_t\* kStreamFormats\[\] = \{(.*?)\};",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(declaration)
+        accepted = set(re.findall(r'L"([^"]+)"', declaration.group(1)))
+
+        self.assertEqual(accepted, set(OUTPUT_PROFILES))
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.

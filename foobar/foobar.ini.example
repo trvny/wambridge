@@ -9,9 +9,12 @@ volume=4
 # startup still reaches WAMBRIDGE PLAYING, that is 1.5 s back for free.
 #startup_silence=0
 
-# Speaker-facing format, flac or mp3, default flac. Not a latency lever - mp3
-# at 320 kbps measured worse than flac, 16.9 s against 13.4 s.
-#format=flac
+# Speaker-facing format: flac, wav or mp3, default flac. Thinner is not faster -
+# mp3 at 320 kbps measured worse than flac, 16.9 s against 13.4 s, because a
+# prebuffer bounded by bytes holds more seconds of a thinner stream. wav is the
+# same lever pulled the other way, uncompressed 16-bit PCM at roughly twice
+# flac's bitrate, and is the one remaining untested latency idea.
+#format=wav
 
 # Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
 # 240 lines. Turn it on before reporting anything about pacing.
