@@ -94,7 +94,10 @@ class FoobarSourceTests(TestCase):
 
         self.assertIn('environment_value(L"WAMBRIDGE_FORMAT")', source)
         self.assertIn('ini_value(L"format", L"", path)', source)
-        self.assertIn("format = kDefaultStreamFormat;", source)
+        # The fallback must stay guarded by the validation. Asserting only that
+        # the assignment exists would match it anywhere in the file.
+        guard = source.index("if (!known) {")
+        self.assertLess(guard, source.index("format = kDefaultStreamFormat;", guard))
         self.assertIn('constexpr const wchar_t* kDefaultStreamFormat = L"flac";', source)
         self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
         self.assertNotIn("--format flac --startup-timeout", source)
@@ -109,9 +112,16 @@ class FoobarSourceTests(TestCase):
         # A null key name is what asks for the section's key names.
         self.assertIn('L"wambridge",\n        nullptr,', source)
         self.assertIn("ignoring unknown setting(s) in foobar.ini", source)
+        # Windows resolves INI keys case-insensitively, so `Device=M5` is
+        # applied. Comparing exactly would report an active setting as dead -
+        # the same false impression this function exists to remove.
+        self.assertIn("CompareStringOrdinal(", source)
+        self.assertIn("CSTR_EQUAL", source)
+        self.assertNotIn("if (key == candidate) known = true;", source)
         # A rejected value is the same silence in a different place.
         self.assertIn("unknown format %s, falling back to %s", source)
         self.assertIn("startup_silence %s is out of range", source)
+        self.assertIn("volume %s is not a number in 0..100", source)
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.

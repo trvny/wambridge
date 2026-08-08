@@ -200,9 +200,22 @@ void report_unknown_ini_keys(const std::wstring& path) {
         index += static_cast<DWORD>(key.size()) + 1;
         if (key.empty()) continue;
 
+        // Case-insensitively: GetPrivateProfileStringW finds `Device=M5` when
+        // asked for `device`, so an exact comparison would announce a setting
+        // as ignored while it was being applied. Reporting a working key as
+        // dead is the same failure this function exists to remove, pointed the
+        // other way.
         bool known = false;
         for (const wchar_t* candidate : kKnownIniKeys) {
-            if (key == candidate) known = true;
+            if (CompareStringOrdinal(
+                    key.c_str(),
+                    -1,
+                    candidate,
+                    -1,
+                    TRUE
+                ) == CSTR_EQUAL) {
+                known = true;
+            }
         }
         if (known) continue;
 
@@ -272,6 +285,16 @@ Settings load_settings() {
         const long parsed = std::wcstol(rawVolume.c_str(), &end, 10);
         if (end != rawVolume.c_str() && *end == L'\0' && parsed >= 0 && parsed <= 100) {
             volume = static_cast<int>(parsed);
+        } else {
+            // Same silence as the two above: without this the speaker simply
+            // starts wherever it was, and the file looks like it asked for
+            // something else.
+            console::printf(
+                "%s: volume %s is not a number in 0..100, leaving the "
+                "speaker's own level",
+                kComponentName,
+                narrowed(rawVolume).c_str()
+            );
         }
     }
     // Off unless asked for: the clock counters are a diagnostic, and a normal
