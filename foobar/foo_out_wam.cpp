@@ -121,6 +121,19 @@ std::wstring ini_value(
     return std::wstring(buffer.data(), size);
 }
 
+// Key names are ASCII by construction; anything else in the file is a typo and
+// only has to survive as far as the console line that reports it.
+std::string narrowed(const std::wstring& value) {
+    std::string result;
+    result.reserve(value.size());
+    for (const wchar_t character : value) {
+        result.push_back(
+            character > 0 && character < 128 ? static_cast<char>(character) : '?'
+        );
+    }
+    return result;
+}
+
 std::wstring quoted(const std::wstring& value) {
     std::wstring result = L"\"";
     size_t slashes = 0;
@@ -155,6 +168,57 @@ constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 constexpr int kDefaultStartupSilenceMs = 1500;
 constexpr int kMaximumStartupSilenceMs = 10000;
 
+// Every key this component reads. A file may legitimately outlive the build that
+// understood it -- `hardware_volume` exists only on an unmerged branch -- and an
+// ignored key is indistinguishable from a working one from the outside.
+constexpr const wchar_t* kKnownIniKeys[] = {
+    L"helper",
+    L"device",
+    L"format",
+    L"volume",
+    L"diagnostics",
+    L"startup_silence",
+};
+
+void report_unknown_ini_keys(const std::wstring& path) {
+    // A null key name asks for the section's key names as a double-null
+    // terminated block, which is the only way to see what the file actually has.
+    std::vector<wchar_t> buffer(32768);
+    const DWORD size = GetPrivateProfileStringW(
+        L"wambridge",
+        nullptr,
+        L"",
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()),
+        path.c_str()
+    );
+    if (size == 0) return;
+
+    std::wstring unknown;
+    for (DWORD index = 0; index < size;) {
+        const std::wstring key(buffer.data() + index);
+        index += static_cast<DWORD>(key.size()) + 1;
+        if (key.empty()) continue;
+
+        bool known = false;
+        for (const wchar_t* candidate : kKnownIniKeys) {
+            if (key == candidate) known = true;
+        }
+        if (known) continue;
+
+        if (!unknown.empty()) unknown += L", ";
+        unknown += key;
+    }
+    if (unknown.empty()) return;
+
+    // Only %u and %s: console::printf is pfc's formatter, not the CRT one.
+    console::printf(
+        "%s: ignoring unknown setting(s) in foobar.ini: %s",
+        kComponentName,
+        narrowed(unknown).c_str()
+    );
+}
+
 struct Settings {
     std::wstring helper;
     std::wstring device;
@@ -166,6 +230,7 @@ struct Settings {
 
 Settings load_settings() {
     const auto path = config_path();
+    report_unknown_ini_keys(path);
     auto helper = environment_value(L"WAMBRIDGE_PCM");
     if (helper.empty()) {
         const auto configured = ini_value(L"helper", L"", path);
@@ -186,7 +251,18 @@ Settings load_settings() {
     for (const wchar_t* candidate : kStreamFormats) {
         if (format == candidate) known = true;
     }
-    if (!known) format = kDefaultStreamFormat;
+    if (!known) {
+        // Falling back silently is how a typo becomes "wav did not help".
+        if (!format.empty()) {
+            console::printf(
+                "%s: unknown format %s, falling back to %s",
+                kComponentName,
+                narrowed(format).c_str(),
+                narrowed(kDefaultStreamFormat).c_str()
+            );
+        }
+        format = kDefaultStreamFormat;
+    }
 
     std::optional<int> volume;
     auto rawVolume = environment_value(L"WAMBRIDGE_VOLUME");
@@ -219,6 +295,13 @@ Settings load_settings() {
         if (end != rawSilence.c_str() && *end == L'\0' && parsed >= 0 &&
             parsed <= kMaximumStartupSilenceMs) {
             startupSilenceMs = static_cast<int>(parsed);
+        } else {
+            console::printf(
+                "%s: startup_silence %s is out of range, using %u ms",
+                kComponentName,
+                narrowed(rawSilence).c_str(),
+                static_cast<unsigned>(kDefaultStartupSilenceMs)
+            );
         }
     }
 

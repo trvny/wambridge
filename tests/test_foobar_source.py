@@ -94,10 +94,24 @@ class FoobarSourceTests(TestCase):
 
         self.assertIn('environment_value(L"WAMBRIDGE_FORMAT")', source)
         self.assertIn('ini_value(L"format", L"", path)', source)
-        self.assertIn("if (!known) format = kDefaultStreamFormat;", source)
+        self.assertIn("format = kDefaultStreamFormat;", source)
         self.assertIn('constexpr const wchar_t* kDefaultStreamFormat = L"flac";', source)
         self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
         self.assertNotIn("--format flac --startup-timeout", source)
+
+    def test_unknown_ini_keys_are_reported(self) -> None:
+        # An ignored key looks exactly like a working one from the outside. The
+        # owner's file carried hardware_volume, which only exists on an unmerged
+        # branch, and nothing said so.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("report_unknown_ini_keys(path);", source)
+        # A null key name is what asks for the section's key names.
+        self.assertIn('L"wambridge",\n        nullptr,', source)
+        self.assertIn("ignoring unknown setting(s) in foobar.ini", source)
+        # A rejected value is the same silence in a different place.
+        self.assertIn("unknown format %s, falling back to %s", source)
+        self.assertIn("startup_silence %s is out of range", source)
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
