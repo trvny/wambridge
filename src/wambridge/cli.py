@@ -49,6 +49,15 @@ RECOVERY_VOLUME = 3
 """Level used when the speaker is found silent and nobody asked for one."""
 
 
+def recovers_from_silence(current_volume: int, explicit_volume: int | None) -> bool:
+    """Report whether a start level is being invented rather than followed.
+
+    Callers need this to decide what "put it back" means on an aborted startup:
+    restoring a 0 that was found rather than chosen would undo the recovery.
+    """
+    return current_volume == 0 and explicit_volume is None
+
+
 def choose_start_volume(
     current_volume: int,
     explicit_volume: int | None,
@@ -57,7 +66,7 @@ def choose_start_volume(
     """Choose an explicit level or clamp the current volume to a safe maximum."""
     if explicit_volume is not None:
         return explicit_volume
-    if current_volume == 0:
+    if recovers_from_silence(current_volume, explicit_volume):
         # Startup mutes the speaker and restores it once audio flows, so a
         # helper killed in between leaves it at 0. Following that reading would
         # start the next stream silent while every other signal reports playing

@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from time import monotonic
 from typing import BinaryIO, TextIO
 
-from .cli import choose_start_volume, volume_level
+from .cli import choose_start_volume, recovers_from_silence, volume_level
 from .cli_common import (
     DEFAULT_MAX_START_VOLUME,
     add_target_arguments,
@@ -462,8 +462,11 @@ def run(
         # this startup just took it out of, and the abort path is exactly when
         # nobody is watching. With an explicit level the 0 was not recovered
         # from, so leaving no trace remains the right contract.
-        recovered_from_silence = current_volume == 0 and args.volume is None
-        restore_volume = start_volume if recovered_from_silence else current_volume
+        restore_volume = (
+            start_volume
+            if recovers_from_silence(current_volume, args.volume)
+            else current_volume
+        )
         LOGGER.info(
             "Speaker volume is %s; starting PCM playback at %s",
             current_volume,
