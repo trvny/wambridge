@@ -252,12 +252,12 @@ Each of these cost real time and each is closed by measurement, not by argument.
    silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and
    the HTTP connection times out - a 30 s pause did not disturb either socket or restart any
    process.
-6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
+5. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer.
-7. Reduce and reimplement the finite share path from its measured working form.
-8. Add a proper foobar preferences page while retaining legacy INI compatibility.
-9. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+6. Reduce and reimplement the finite share path from its measured working form.
+7. Add a proper foobar preferences page while retaining legacy INI compatibility.
+8. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
 
 ## What the 7-8 s speaker figure was
 

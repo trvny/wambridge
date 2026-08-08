@@ -95,10 +95,55 @@ class FoobarSourceTests(TestCase):
 
         self.assertIn('environment_value(L"WAMBRIDGE_FORMAT")', source)
         self.assertIn('ini_value(L"format", L"", path)', source)
-        self.assertIn("if (!known) format = kDefaultStreamFormat;", source)
+        # The fallback must stay guarded by the validation. Asserting only that
+        # the assignment exists would match it anywhere in the file.
+        guard = source.index("if (!known) {")
+        self.assertLess(guard, source.index("format = kDefaultStreamFormat;", guard))
         self.assertIn('constexpr const wchar_t* kDefaultStreamFormat = L"flac";', source)
         self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
         self.assertNotIn("--format flac --startup-timeout", source)
+
+    def test_unknown_ini_keys_are_reported(self) -> None:
+        # An ignored key looks exactly like a working one from the outside. The
+        # owner's file carried hardware_volume, which only exists on an unmerged
+        # branch, and nothing said so.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("report_unknown_ini_keys(path);", source)
+        # A null key name is what asks for the section's key names.
+        self.assertIn('L"wambridge",\n        nullptr,', source)
+        self.assertIn("ignoring unknown setting(s) in foobar.ini", source)
+        # Windows resolves INI keys case-insensitively, so `Device=M5` is
+        # applied. Comparing exactly would report an active setting as dead -
+        # the same false impression this function exists to remove.
+        self.assertIn("CompareStringOrdinal(", source)
+        self.assertIn("CSTR_EQUAL", source)
+        self.assertNotIn("if (key == candidate) known = true;", source)
+        # A rejected value is the same silence in a different place.
+        self.assertIn("unknown format %s, falling back to %s", source)
+        # "out of range" also covered `startup_silence=fast`, which is not a
+        # range problem and reads as though a number was rejected.
+        self.assertIn("startup_silence %s is not a number in 0..%u", source)
+        self.assertIn("helper %s does not exist, using the bundled one", source)
+        self.assertIn("volume %s is not a number in 0..100", source)
+        # `#` is an ordinary character to the profile API, so a file copied from
+        # an older example arrives carrying keys called `#format`. Reported, not
+        # skipped: `#hardware_volume=1` is a setting someone believes is active.
+        self.assertIn("if (key.front() == L'#') {", source)
+        self.assertIn("Windows \"\n            \"comments start with ';'", source)
+
+    def test_example_ini_comments_use_the_windows_marker(self) -> None:
+        # `#startup_silence=0` is not a disabled setting to Windows; it is a key
+        # named `#startup_silence`. The example shipped that way.
+        example = SOURCE.parent / "foobar.ini.example"
+        for number, line in enumerate(
+            example.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            self.assertFalse(
+                line.startswith("#"),
+                f"foobar.ini.example:{number} comments with '#', which the "
+                "Windows profile API reads as a key name",
+            )
 
     def test_accepted_formats_match_the_helper(self) -> None:
         # The whitelist and the helper's --format choices are edited in two
@@ -159,6 +204,9 @@ class FoobarSourceTests(TestCase):
         self.assertIn('environment_value(L"WAMBRIDGE_BUFFER_EXTRA")', source)
         self.assertIn('ini_value(L"buffer_extra", L"", path)', source)
         self.assertIn("m_settings.bufferExtraMs / 1000.0", source)
+        # And it has to join the known-key list, or the component reports its
+        # own setting as unknown - the drift that list exists to catch.
+        self.assertIn('L"buffer_extra",', source)
         # The old constant must be gone, or the knob would do nothing.
         self.assertNotIn("(m_bufferLength + 2.0)", source)
 
