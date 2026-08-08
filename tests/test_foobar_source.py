@@ -230,6 +230,20 @@ class FoobarSourceTests(TestCase):
             for marker in ("<<<<<<< ", "=======\n", ">>>>>>> "):
                 self.assertNotIn(marker, text, f"{path.name} carries {marker!r}")
 
+    def test_control_channel_socket_calls_are_linked(self) -> None:
+        # Calling into Winsock without ws2_32 links nothing and the failure is
+        # nine LNK2001 lines at the very end of a two-minute build.
+        source = SOURCE.read_text(encoding="utf-8")
+        project = (SOURCE.parent / "foo_out_wam.vcxproj").read_text(encoding="utf-8")
+
+        self.assertIn("#include <winsock2.h>", source)
+        # Before windows.h, or the 1.1 declarations collide with these.
+        self.assertLess(
+            source.index("#include <winsock2.h>"),
+            source.index("#include <windows.h>"),
+        )
+        self.assertIn("ws2_32.lib", project)
+
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
         # Every foobar source is checked, not just the output adapter: the
