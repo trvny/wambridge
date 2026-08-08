@@ -47,11 +47,23 @@ Optional keys and overrides:
   directions: `mp3` at 320 kbps against FLAC's 700-900 measured *worse*, 16.9 s against
   13.4 s, because a thinner stream fits more seconds into the same space; `wav`, which is
   uncompressed 16-bit PCM fixed at 44.1 kHz, measured *better* than FLAC on every passage
-  of the same source, 5.68 s against 6.67 s, and halved the spread. `wav` is opt-in until
-  the rest of the physical checklist passes on it,
+  of the same source, 5.68 s against 6.67 s, and halved the spread. **`wav` stays opt-in.**
+  Its transport passed the physical checklist on 2026-08-08 - complete track at a median
+  1.00x, seamless track change, seek, pause/resume, clean shutdown, no leaks - but every one
+  of those was read off instruments while nobody was listening, so the absence of audible
+  artefacts is still unverified. It also costs depth: FLAC carries 24 bit through this path
+  and `wav` is fixed at 16,
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
-  `0..10000`, default `1500`. Out-of-range values fall back to the default rather than
+  `0..10000`, default `1500`. Values outside that fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,
+
+**Nothing here is ignored quietly any more.** Unknown keys, a `format` that is not one of
+the three, a `volume` or `startup_silence` that is not a number in range, and a `helper`
+path that does not exist all say so in the console. So do settings written as `#key=value`:
+Windows comments start with `;`, so those are key names rather than disabled lines and
+nothing reads them. The owner ran for days with `hardware_volume=1`, a key that exists only
+on an unmerged branch, with nothing anywhere saying it was dead.
+
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on
