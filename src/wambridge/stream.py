@@ -100,6 +100,35 @@ OUTPUT_PROFILES: dict[str, OutputProfile] = {
             "wav",
         ),
     ),
+    "wav24": OutputProfile(
+        extension="wav",
+        content_type="audio/wav",
+        # The same lever as `wav`, pulled harder: 2117 kbps against 1411, so a
+        # byte-bounded prebuffer should hold fewer seconds again. It also closes
+        # the one place `wav` is worse than FLAC, which carries 24 bit through
+        # this path while `wav` truncates to 16.
+        #
+        # Two unknowns at once, and they are worth separating if this fails on
+        # hardware. Only 44.1 kHz / 16-bit WAV has ever been confirmed on this
+        # firmware, and FFmpeg's WAV muxer additionally switches to
+        # WAVE_FORMAT_EXTENSIBLE above 16 bits: the format tag becomes 0xFFFE
+        # and the `fmt ` chunk grows from 16 bytes to 40. A speaker that refuses
+        # this may be refusing the depth or the header shape, so try a 16-bit
+        # extensible stream before concluding anything about 24-bit support.
+        ffmpeg_args=(
+            "-vn",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            "-c:a",
+            "pcm_s24le",
+            "-fflags",
+            "+bitexact",
+            "-f",
+            "wav",
+        ),
+    ),
     "mp3": OutputProfile(
         extension="mp3",
         content_type="audio/mpeg",
