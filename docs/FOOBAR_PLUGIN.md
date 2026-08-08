@@ -56,28 +56,24 @@ Optional keys and overrides:
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
   `0..10000`, default `1500`. Values outside that fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,
-<<<<<<< HEAD
 - `buffer_extra` or `WAMBRIDGE_BUFFER_EXTRA`, milliseconds of queue kept on top of foobar's
   own buffer length, `0..10000`, default `2000`. Capacity is delay on this path almost one
   for one - the queue measured 3.79-3.99 s full of a 4.0 s capacity - so this is the largest
   single share of the roughly six seconds that reach the ear, and it was chosen rather than
   measured. Lower it to find where the pipe starves; starving shows up as `free` climbing in
   the `CLOCK` line and as audible dropouts,
-=======
-
-**Nothing here is ignored quietly any more.** Unknown keys, a `format` that is not one of
-the three, a `volume` or `startup_silence` that is not a number in range, and a `helper`
-path that does not exist all say so in the console. So do settings written as `#key=value`:
-Windows comments start with `;`, so those are key names rather than disabled lines and
-nothing reads them. The owner ran for days with `hardware_volume=1`, a key that exists only
-on an unmerged branch, with nothing anywhere saying it was dead.
-
->>>>>>> origin/main
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on
   before reporting anything about pacing — it is what attributed the runaway start to a
   dropped chunk rather than to the output clock.
+
+**Nothing here is ignored quietly any more.** Unknown keys, a `format` that is not one of
+the three, a `volume`, `startup_silence` or `buffer_extra` that is not a number in range,
+and a `helper` path that does not exist all say so in the console. So do settings written as
+`#key=value`: Windows comments start with `;`, so those are key names rather than disabled
+lines and nothing reads them. The owner ran for days with `hardware_volume=1`, a key that
+exists only on an unmerged branch, with nothing anywhere saying it was dead.
 
 The M5 uses raw volume steps `0..30`; the UI must not pretend these are percentages until a
 model-aware conversion exists.

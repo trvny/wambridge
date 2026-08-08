@@ -207,8 +207,28 @@ class FoobarSourceTests(TestCase):
         # And it has to join the known-key list, or the component reports its
         # own setting as unknown - the drift that list exists to catch.
         self.assertIn('L"buffer_extra",', source)
+        # A typo in a knob meant for walking down during a measurement would
+        # otherwise read as "that value changed nothing".
+        self.assertIn("buffer_extra %s is not a number in 0..%u", source)
         # The old constant must be gone, or the knob would do nothing.
         self.assertNotIn("(m_bufferLength + 2.0)", source)
+
+    def test_no_conflict_markers_in_tracked_text(self) -> None:
+        # A resolution script that only covered the files git named left markers
+        # in the plugin guide, and they were committed and reviewed before
+        # anyone noticed.
+        root = SOURCE.parents[1]
+        for path in sorted(root.glob("docs/*.md")) + sorted(
+            root.glob("foobar/*")
+        ) + [root / "README.md", root / "AGENTS.md"]:
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue  # binary project files
+            for marker in ("<<<<<<< ", "=======\n", ">>>>>>> "):
+                self.assertNotIn(marker, text, f"{path.name} carries {marker!r}")
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.

@@ -388,6 +388,16 @@ Settings load_settings() {
         if (end != rawBufferExtra.c_str() && *end == L'\0' && parsed >= 0 &&
             parsed <= kMaximumBufferExtraMs) {
             bufferExtraMs = static_cast<int>(parsed);
+        } else {
+            // This knob exists to be walked down during a measurement, so a
+            // typo would otherwise read as "that value changed nothing".
+            console::printf(
+                "%s: buffer_extra %s is not a number in 0..%u, using %u ms",
+                kComponentName,
+                narrowed(rawBufferExtra).c_str(),
+                static_cast<unsigned>(kMaximumBufferExtraMs),
+                static_cast<unsigned>(kDefaultBufferExtraMs)
+            );
         }
     }
 
