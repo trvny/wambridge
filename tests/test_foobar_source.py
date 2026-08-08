@@ -230,6 +230,35 @@ class FoobarSourceTests(TestCase):
             for marker in ("<<<<<<< ", "=======\n", ">>>>>>> "):
                 self.assertNotIn(marker, text, f"{path.name} carries {marker!r}")
 
+    def test_slider_maps_evenly_across_its_travel(self) -> None:
+        # Linear in amplitude put four fifths of the slider into silence: at
+        # -20 dB the amplitude is 0.1, which against a ceiling of 10 is step 1,
+        # and everything below it is step 0. Reported by a listener as "from
+        # -20 dB down it is all the same, silence or nearly".
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertNotIn("amplitude * static_cast<double>(ceiling)", source)
+        self.assertIn("(decibels - kSilenceDecibels) / span", source)
+        # Above the floor the slider is asking for something audible.
+        self.assertIn("std::max<long>(1, std::min<long>(ceiling, step))", source)
+
+    def test_menu_actions_move_the_slider(self) -> None:
+        # Two ways to change one level. A menu press that moved the speaker
+        # without moving the slider left them disagreeing until the next drag
+        # yanked the speaker back: "volume to safe level went quiet but the
+        # slider did not move".
+        source = SOURCE.read_text(encoding="utf-8")
+        menu = (SOURCE.parent / "wam_menu.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("void note_speaker_step(int step)", source)
+        self.assertIn("static double decibels_for_step(", source)
+        self.assertIn("wam::note_speaker_step(step);", menu)
+        # playback_control is main-thread only and the dispatcher is not it.
+        self.assertIn("main_thread_callback_manager::get()->add_callback(", source)
+        # Doing nothing when the slider is not routed, or the menu would fight
+        # a slider that means something else entirely.
+        self.assertIn("if (!g_hardwareVolume.load()) return;", source)
+
     def test_control_channel_socket_calls_are_linked(self) -> None:
         # Calling into Winsock without ws2_32 links nothing and the failure is
         # nine LNK2001 lines at the very end of a two-minute build.

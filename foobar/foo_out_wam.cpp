@@ -464,6 +464,26 @@ Settings load_settings() {
 std::mutex g_controlMutex;
 SOCKET g_controlSocket = INVALID_SOCKET;
 
+// Read by the menu dispatcher through wam_control.h, which is a different
+// translation unit and has no access to the output's settings.
+std::atomic<bool> g_hardwareVolume{false};
+std::atomic<int> g_volumeMax{kDefaultVolumeMax};
+
+// Moves foobar's own slider. playback_control is a main-thread interface and
+// the dispatcher runs on its own thread, so the change is handed over rather
+// than made where it was decided.
+class SliderSync : public main_thread_callback {
+public:
+    explicit SliderSync(double decibels) : m_decibels(decibels) {}
+
+    void callback_run() override {
+        playback_control::get()->set_volume(static_cast<float>(m_decibels));
+    }
+
+private:
+    double m_decibels;
+};
+
 void close_control_socket_locked() {
     if (g_controlSocket == INVALID_SOCKET) return;
     shutdown(g_controlSocket, SD_BOTH);
@@ -528,7 +548,12 @@ public:
     WamOutput(const GUID&, double bufferLength, bool, t_uint32)
         : m_bufferLength(std::clamp(bufferLength, 2.0, 30.0)),
           m_settings(load_settings()),
-          m_worker(&WamOutput::worker_loop, this) {}
+          m_worker(&WamOutput::worker_loop, this) {
+        // Published for the menu dispatcher, which lives in another translation
+        // unit and has to know whether moving the slider is its business.
+        g_hardwareVolume.store(m_settings.hardwareVolume);
+        g_volumeMax.store(m_settings.volumeMax);
+    }
 
     ~WamOutput() {
         {
@@ -749,17 +774,38 @@ public:
         wam::request_volume_step(step);
     }
 
-    // foobar hands out dB, the M5 takes raw steps. The mapping is linear in
-    // amplitude because that is what the host gain it replaces did, so moving
-    // the slider keeps meaning the same thing it meant before.
+    // foobar hands out dB, the M5 takes raw steps, and the slider has to feel
+    // even across its travel.
     //
-    // Whether the M5's own steps are linear in amplitude is NOT measured. If
-    // the scale turns out to be perceptual, this needs a curve, not a constant.
+    // This was linear in amplitude first, to match the host gain it replaces.
+    // On hardware that put four fifths of the slider into silence: at -20 dB
+    // the amplitude is 0.1, which against a ceiling of 10 is step 1, and
+    // everything below it is step 0. Eighty decibels of travel on two steps.
+    //
+    // Linear in decibels instead, over the usable range. That is how a volume
+    // control is normally scaled and it spreads the ceiling across the whole
+    // slider rather than the top few dB.
+    //
+    // Whether the M5's own steps are even in dB is still NOT measured. If they
+    // turn out not to be, this needs the speaker's curve, not a different line.
     static int volume_step_for(double decibels, int ceiling) {
         if (decibels <= kSilenceDecibels) return 0;
-        const double amplitude = std::pow(10.0, decibels / 20.0);
-        const long step = std::lround(amplitude * static_cast<double>(ceiling));
-        return static_cast<int>(std::max<long>(0, std::min<long>(ceiling, step)));
+        const double span = -kSilenceDecibels;
+        const double fraction = (decibels - kSilenceDecibels) / span;
+        const long step = std::lround(fraction * static_cast<double>(ceiling));
+        // Above the silence floor the slider is asking for something audible,
+        // so it never rounds back down to a muted speaker.
+        return static_cast<int>(std::max<long>(1, std::min<long>(ceiling, step)));
+    }
+
+    // The inverse, for putting the slider where a menu action left the speaker.
+    // Step 0 is the floor rather than foobar's -100 dB: the slider only has to
+    // agree about what the speaker is doing, not reproduce its silence exactly.
+    static double decibels_for_step(int step, int ceiling) {
+        if (ceiling <= 0 || step <= 0) return kSilenceDecibels;
+        const double fraction =
+            static_cast<double>(std::min(step, ceiling)) / static_cast<double>(ceiling);
+        return kSilenceDecibels + fraction * -kSilenceDecibels;
     }
 
 private:
@@ -1675,6 +1721,20 @@ bool send_volume_over_helper(int step) {
         return false;
     }
     return true;
+}
+
+void note_speaker_step(int step) {
+    if (!g_hardwareVolume.load()) return;
+    const int ceiling = g_volumeMax.load();
+    if (step < 0 || ceiling <= 0) return;
+    // Same mapping the slider uses, run backwards, so the round trip is a
+    // fixed point: the slider position this produces maps to the same step and
+    // the two cannot chase each other.
+    main_thread_callback_manager::get()->add_callback(
+        new service_impl_t<SliderSync>(
+            WamOutput::decibels_for_step(step, ceiling)
+        )
+    );
 }
 
 }  // namespace wam

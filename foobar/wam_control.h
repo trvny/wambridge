@@ -29,4 +29,17 @@ void request_volume_step(int step);
 // the caller falls back to the process it would have spawned anyway.
 bool send_volume_over_helper(int step);
 
+// Tell the output that the speaker is now at this raw step because something
+// other than the slider moved it.
+//
+// With the slider routed there are two ways to change one level, and a menu
+// action that moved the speaker without moving the slider left them disagreeing
+// until the next drag yanked the speaker back. Reported by a listener: "volume
+// to safe level went quiet but the slider did not move". The output puts the
+// slider where the speaker actually is, so there is one visible truth again.
+//
+// Does nothing when the slider is not routed: the menu is then the only way to
+// reach the speaker's own level and foobar's slider means something else.
+void note_speaker_step(int step);
+
 }  // namespace wam

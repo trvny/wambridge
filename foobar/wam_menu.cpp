@@ -576,6 +576,31 @@ private:
             shuttingDown = m_shutdown;
         }
         if (!shuttingDown) report_result(action, exitCode, output);
+        if (exitCode == 0) {
+            // Every volume action prints where the speaker ended up. Handing
+            // that back is what keeps the slider from disagreeing with the
+            // speaker after a menu press.
+            const int step = reported_volume(output);
+            if (step >= 0) wam::note_speaker_step(step);
+        }
+    }
+
+    // "volume=<n>" out of the control helper's own output, or -1 when the
+    // action did not report one.
+    static int reported_volume(const std::string& output) {
+        const std::string key = "volume=";
+        const size_t at = output.rfind(key);
+        if (at == std::string::npos) return -1;
+        size_t index = at + key.size();
+        int value = 0;
+        bool any = false;
+        while (index < output.size() && output[index] >= '0' && output[index] <= '9') {
+            value = value * 10 + (output[index] - '0');
+            index++;
+            any = true;
+        }
+        if (!any || value > kMaximumRawVolume) return -1;
+        return value;
     }
 
     // Menu actions win over slider levels: a queued emergency stop must not
