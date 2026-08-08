@@ -110,7 +110,18 @@ class FoobarSourceTests(TestCase):
             "if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {",
             source,
         )
-        self.assertIn("m_startupVolumeApplied.store(true);", source)
+        # The flag must follow the helper reporting PLAYING, not the spawn. A
+        # helper replaced in between may never have applied a level, and its
+        # successor would then inherit a raised clamp over a speaker sitting
+        # wherever it was left.
+        playing = source.index("m_childReachedPlaying.store(true);")
+        applied = source.index("m_startupVolumeApplied.store(true);")
+        self.assertLess(playing, applied)
+        self.assertLess(
+            applied,
+            source.index("accepted = true;", playing),
+            "the flag must be set inside the PLAYING branch",
+        )
         # Without a level the helper would restore its own default clamp, which
         # still turns a listener above it down.
         self.assertIn('command += L" --max-start-volume " +', source)

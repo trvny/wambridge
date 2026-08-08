@@ -675,6 +675,13 @@ private:
                 if (playing) {
                     m_playing.store(true);
                     m_childReachedPlaying.store(true);
+                    // Not when the helper was launched: between the spawn and
+                    // this line the level has not been applied yet, so a seek
+                    // in that window would hand the replacement a raised clamp
+                    // over a speaker still sitting wherever it was left.
+                    // `WAMBRIDGE PLAYING volume=<step>` is the helper saying it
+                    // applied one.
+                    m_startupVolumeApplied.store(true);
                 }
                 accepted = true;
             }
@@ -701,14 +708,16 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
-        // Only on the first helper of a playback session. A seek or a format
-        // change restarts the helper mid-session, and passing the configured
-        // level again would overwrite whatever the listener has since set from
-        // the menu: measured on the M5 on 2026-08-08, volume walked up to 11,
-        // one seek, "Speaker volume is 11; starting PCM playback at 3". Without
-        // the argument the helper clamps the speaker's own level to the safe
-        // maximum instead of replacing it, which is the protection that was
-        // actually wanted here.
+        // Only until some helper of this session has reported PLAYING, which is
+        // the helper saying it applied a level. A seek or a format change
+        // restarts the helper mid-session, and passing the configured level
+        // again would overwrite whatever the listener has since set from the
+        // menu: measured on the M5 on 2026-08-08, volume walked up to 11, one
+        // seek, "Speaker volume is 11; starting PCM playback at 3".
+        //
+        // The flag deliberately does not follow the spawn. A helper replaced
+        // before it reached PLAYING may never have applied anything, so its
+        // successor has to start over rather than inherit a raised clamp.
         if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         } else if (m_startupVolumeApplied.load()) {
@@ -891,10 +900,6 @@ private:
             stop_child();
             return false;
         }
-
-        // The configured level has now been handed to a helper that is really
-        // running; every later helper in this session leaves the speaker alone.
-        m_startupVolumeApplied.store(true);
 
         m_protocolThread = std::thread(
             &WamOutput::protocol_loop,
