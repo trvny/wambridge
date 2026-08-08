@@ -42,9 +42,12 @@ Optional keys and overrides:
 - `WAMBRIDGE_CONTROL` for a development control helper,
 - `WAMBRIDGE_DEVICE`,
 - `WAMBRIDGE_VOLUME`,
-- `format` or `WAMBRIDGE_FORMAT`, one of `flac` (default) or `mp3`. Anything else falls
-  back to `flac`. `mp3` runs at 320 kbps against FLAC's 700-900, which is the way to find
-  out whether the speaker's roughly 7-8 s of prebuffer counts bytes or seconds,
+- `format` or `WAMBRIDGE_FORMAT`, one of `flac` (default), `wav` or `mp3`. Anything else
+  falls back to `flac`. The knob measures how the speaker's roughly 7-8 s of prebuffer is
+  bounded, and it is partly bounded by bytes: `mp3` at 320 kbps against FLAC's 700-900
+  measured *worse*, 16.9 s against 13.4 s, because a thinner stream fits more seconds into
+  the same space. `wav` is the same lever the other way, uncompressed 16-bit PCM fixed at
+  44.1 kHz, and has not played on hardware yet,
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
   `0..10000`, default `1500`. Out-of-range values fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,

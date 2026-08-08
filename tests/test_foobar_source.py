@@ -112,7 +112,11 @@ class FoobarSourceTests(TestCase):
             source,
             re.DOTALL,
         )
-        self.assertIsNotNone(declaration)
+        self.assertIsNotNone(
+            declaration,
+            "kStreamFormats is no longer a single-line constexpr array; this test "
+            "reads it as text, so update the pattern rather than the whitelist",
+        )
         accepted = set(re.findall(r'L"([^"]+)"', declaration.group(1)))
 
         self.assertEqual(accepted, set(OUTPUT_PROFILES))

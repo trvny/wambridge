@@ -9,11 +9,11 @@ from typing import BinaryIO
 
 from .stream import (
     CHUNK_SIZE,
-    STARTUP_CHUNK_SIZE,
     STARTUP_SILENCE_MS,
     AudioStreamServer,
     StreamError,
     _read_chunk,
+    _read_startup_payload,
     terminate_process,
 )
 
@@ -23,87 +23,6 @@ MIN_SAMPLE_RATE = 8000
 MAX_SAMPLE_RATE = 384000
 MIN_CHANNELS = 1
 MAX_CHANNELS = 32
-MAX_STARTUP_PAYLOAD_SIZE = 64 * 1024
-
-
-def _contains_flac_audio_frame(payload: bytes) -> bool:
-    """Return whether a native FLAC payload contains an audio frame."""
-    if not payload.startswith(b"fLaC"):
-        return False
-
-    offset = 4
-    while True:
-        if len(payload) < offset + 4:
-            return False
-        block_header = payload[offset]
-        block_size = int.from_bytes(payload[offset + 1 : offset + 4], "big")
-        offset += 4
-        if len(payload) < offset + block_size:
-            return False
-        offset += block_size
-        if block_header & 0x80:
-            break
-
-    return any(
-        payload[index] == 0xFF and payload[index + 1] & 0xFE == 0xF8
-        for index in range(offset, len(payload) - 1)
-    )
-
-
-def _contains_wav_audio_frame(payload: bytes) -> bool:
-    """Return whether a streamed WAV payload carries samples, not just a header."""
-    if not payload.startswith(b"RIFF") or payload[8:12] != b"WAVE":
-        return False
-
-    offset = 12
-    while len(payload) >= offset + 8:
-        chunk_id = payload[offset : offset + 4]
-        # Sizes are little-endian here, unlike FLAC's big-endian block headers.
-        chunk_size = int.from_bytes(payload[offset + 4 : offset + 8], "little")
-        offset += 8
-        if chunk_id == b"data":
-            # The muxer cannot seek back on a pipe, so this chunk's declared
-            # size is 0xFFFFFFFF. Never skip past it; everything after the
-            # header is audio.
-            return len(payload) > offset
-        offset += chunk_size + (chunk_size % 2)
-
-    return False
-
-
-# Containers whose first bytes are a header rather than audio. Returning that
-# header as the startup payload would fire AUDIO_STARTED, and with it the
-# transport clock's anchor, before a single sample existed.
-_AUDIO_FRAME_CHECKS = {
-    "flac": _contains_flac_audio_frame,
-    "wav": _contains_wav_audio_frame,
-}
-
-
-def _read_startup_payload(stream: BinaryIO, extension: str) -> bytes:
-    """Read until output proves that encoded audio, not only headers, exists."""
-    contains_audio = _AUDIO_FRAME_CHECKS.get(extension)
-    payload = bytearray()
-    while len(payload) < MAX_STARTUP_PAYLOAD_SIZE:
-        remaining = MAX_STARTUP_PAYLOAD_SIZE - len(payload)
-        chunk = _read_chunk(stream, min(STARTUP_CHUNK_SIZE, remaining))
-        before = len(payload)
-        payload.extend(chunk)
-        # Exit on lack of progress, not on a falsy chunk. A stream that keeps
-        # returning something truthy which adds no bytes would otherwise spin
-        # forever, and this loop has no iteration limit to fall back on.
-        if len(payload) == before:
-            break
-        if contains_audio is None or contains_audio(payload):
-            return bytes(payload)
-
-    if not payload:
-        raise StreamError("FFmpeg produced no audio")
-    if contains_audio is not None:
-        raise StreamError(
-            f"PCM input ended before FFmpeg produced a {extension.upper()} audio frame"
-        )
-    return bytes(payload)
 
 
 class PcmAudioStreamServer(AudioStreamServer):

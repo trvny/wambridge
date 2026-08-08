@@ -198,10 +198,12 @@ Each of these cost real time and each is closed by measurement, not by argument.
 3. **Try a fatter stream, not a thinner one.** The speaker's prebuffer is partly bounded by
    bytes, so raw PCM at roughly twice FLAC's bitrate should hold fewer seconds. This is the
    one remaining idea with a plausible several-second payoff. The `wav` profile now exists
-   (`format=wav`, uncompressed 16-bit PCM, resampled only above 48 kHz); nothing about it
-   has been heard on hardware yet, including whether the M5 accepts a streamed WAV header
-   whose two size fields are `0xFFFFFFFF`. Measure it against the 13.4 s FLAC baseline with
-   the same volume-change method, `hardware_volume` off.
+   (`format=wav`, uncompressed 16-bit PCM fixed at 44.1 kHz, the only rate confirmed on this
+   firmware); nothing about it has been heard on hardware yet, including whether the M5
+   accepts a streamed WAV header whose two size fields are `0xFFFFFFFF`. Measure it against
+   the 13.4 s FLAC baseline with the same volume-change method, `hardware_volume` off, and
+   through the foobar path: the file and URL paths add FFmpeg `-re` and their own fixed
+   startup silence, so numbers from them are not comparable.
 4. **Route pause onto `55001`** (`SetPlaybackControl pause`/`resume`), then stop, seek and
    skip. Same shape as the volume fix. Measure pause first, or there is no baseline. Risk to
    watch: whether a paused speaker stops pulling and the HTTP connection times out.

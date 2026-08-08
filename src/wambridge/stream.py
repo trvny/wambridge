@@ -18,6 +18,7 @@ LOGGER = logging.getLogger(__name__)
 CHUNK_SIZE = 64 * 1024
 STARTUP_CHUNK_SIZE = 4096
 STARTUP_SILENCE_MS = 1500
+MAX_STARTUP_PAYLOAD_SIZE = 64 * 1024
 _CONTINUOUS_SOURCES: ContextVar[frozenset[str]] = ContextVar(
     "wambridge_continuous_sources",
     default=frozenset(),
@@ -78,10 +79,19 @@ OUTPUT_PROFILES: dict[str, OutputProfile] = {
         # header. Both size fields in it are 0xFFFFFFFF because the muxer
         # cannot seek back on a pipe; that is the streaming-WAV convention and
         # not a faked HTTP `Content-Length`, which the M5 does punish.
+        # The rate is fixed rather than followed, unlike FLAC. WAV was confirmed
+        # on a physical M5 at 44.1 kHz / 16-bit and at no other rate, and the
+        # source rate is not always known: the file and URL paths call
+        # `args_for(None)`, so a cap expressed as a maximum would not be applied
+        # there at all and an unconfirmed 96 kHz stream would reach the speaker.
+        # A fixed rate also keeps this profile at a constant 1411 kbps, which is
+        # what makes it comparable against FLAC's variable bitrate.
         ffmpeg_args=(
             "-vn",
             "-ac",
             "2",
+            "-ar",
+            "44100",
             "-c:a",
             "pcm_s16le",
             "-fflags",
@@ -89,10 +99,6 @@ OUTPUT_PROFILES: dict[str, OutputProfile] = {
             "-f",
             "wav",
         ),
-        # WAV was confirmed on a physical M5 at 44.1 kHz / 16-bit only. Nothing
-        # measured says a higher rate survives this container, so anything
-        # above 48 kHz is resampled rather than gambled on.
-        max_sample_rate=48000,
     ),
     "mp3": OutputProfile(
         extension="mp3",
@@ -151,6 +157,90 @@ def _read_chunk(stream: BinaryIO, size: int) -> bytes:
         return read1(size)
     return stream.read(size)
 
+
+def _contains_flac_audio_frame(payload: bytes) -> bool:
+    """Return whether a native FLAC payload contains an audio frame."""
+    if not payload.startswith(b"fLaC"):
+        return False
+
+    offset = 4
+    while True:
+        if len(payload) < offset + 4:
+            return False
+        block_header = payload[offset]
+        block_size = int.from_bytes(payload[offset + 1 : offset + 4], "big")
+        offset += 4
+        if len(payload) < offset + block_size:
+            return False
+        offset += block_size
+        if block_header & 0x80:
+            break
+
+    return any(
+        payload[index] == 0xFF and payload[index + 1] & 0xFE == 0xF8
+        for index in range(offset, len(payload) - 1)
+    )
+
+
+def _contains_wav_audio_frame(payload: bytes) -> bool:
+    """Return whether a streamed WAV payload carries samples, not just a header."""
+    if not payload.startswith(b"RIFF") or payload[8:12] != b"WAVE":
+        return False
+
+    offset = 12
+    block_align = 1
+    while len(payload) >= offset + 8:
+        chunk_id = payload[offset : offset + 4]
+        # Sizes are little-endian here, unlike FLAC's big-endian block headers.
+        chunk_size = int.from_bytes(payload[offset + 4 : offset + 8], "little")
+        offset += 8
+        if chunk_id == b"fmt " and len(payload) >= offset + 14:
+            # One frame is every channel's sample. A partial one is not audio,
+            # and the FLAC check this mirrors looks for a whole frame too.
+            block_align = int.from_bytes(payload[offset + 12 : offset + 14], "little") or 1
+        elif chunk_id == b"data":
+            # The muxer cannot seek back on a pipe, so this chunk's declared
+            # size is 0xFFFFFFFF. Never skip past it; everything after the
+            # header is audio.
+            return len(payload) - offset >= block_align
+        offset += chunk_size + (chunk_size % 2)
+
+    return False
+
+
+# Containers whose first bytes are a header rather than audio. Returning that
+# header as the startup payload would fire AUDIO_STARTED, and with it the
+# transport clock's anchor, before a single sample existed.
+_AUDIO_FRAME_CHECKS = {
+    "flac": _contains_flac_audio_frame,
+    "wav": _contains_wav_audio_frame,
+}
+
+
+def _read_startup_payload(stream: BinaryIO, extension: str) -> bytes:
+    """Read until output proves that encoded audio, not only headers, exists."""
+    contains_audio = _AUDIO_FRAME_CHECKS.get(extension)
+    payload = bytearray()
+    while len(payload) < MAX_STARTUP_PAYLOAD_SIZE:
+        remaining = MAX_STARTUP_PAYLOAD_SIZE - len(payload)
+        chunk = _read_chunk(stream, min(STARTUP_CHUNK_SIZE, remaining))
+        before = len(payload)
+        payload.extend(chunk)
+        # Exit on lack of progress, not on a falsy chunk. A stream that keeps
+        # returning something truthy which adds no bytes would otherwise spin
+        # forever, and this loop has no iteration limit to fall back on.
+        if len(payload) == before:
+            break
+        if contains_audio is None or contains_audio(payload):
+            return bytes(payload)
+
+    if not payload:
+        raise StreamError("FFmpeg produced no audio")
+    if contains_audio is not None:
+        raise StreamError(
+            f"the source ended before FFmpeg produced a {extension.upper()} audio frame"
+        )
+    return bytes(payload)
 
 class AudioStreamServer:
     """Serve one tokenized real-time audio stream to a WAM speaker."""
@@ -322,10 +412,13 @@ class AudioStreamServer:
             self._process = process
 
         assert process.stdout is not None
-        first_chunk = _read_chunk(process.stdout, STARTUP_CHUNK_SIZE)
-        if not first_chunk:
+        # Same proof the PCM path requires: a container header is not audio, and
+        # `audio_started` below is what unmutes the speaker and anchors timing.
+        try:
+            first_chunk = _read_startup_payload(process.stdout, self.profile.extension)
+        except StreamError as error:
             process.wait(timeout=5)
-            raise StreamError(f"FFmpeg produced no audio (exit {process.returncode})")
+            raise StreamError(f"{error} (exit {process.returncode})") from error
 
         unexpected_eof = False
         try:

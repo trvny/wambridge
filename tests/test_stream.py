@@ -53,7 +53,12 @@ class AudioStreamServerTests(TestCase):
         _which_mock,
     ) -> None:
         process = Mock()
-        process.stdout = BytesIO(b"fLaC")
+        # A bare "fLaC" magic is a header, not audio: the startup payload now
+        # demands a real frame on this path too, so the fixture has to carry a
+        # last metadata block and a frame sync.
+        process.stdout = BytesIO(
+            b"fLaC" + bytes([0x80, 0, 0, 34]) + bytes(34) + b"\xff\xf8\x00\x00"
+        )
         process.poll.return_value = 0
         process.wait.return_value = 0
         process.returncode = 0

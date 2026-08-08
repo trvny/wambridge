@@ -177,9 +177,10 @@ Settings load_settings() {
     auto device = environment_value(L"WAMBRIDGE_DEVICE");
     if (device.empty()) device = ini_value(L"device", L"M5", path);
 
-    // FLAC unless asked otherwise. The knob exists to measure whether the
-    // speaker prebuffers bytes or seconds: at 320 kbps against FLAC's 700-900
-    // the delay either shrinks with the bitrate or does not move at all.
+    // FLAC unless asked otherwise. The prebuffer is partly bounded by bytes:
+    // mp3 at 320 kbps measured 16.9 s against FLAC's 13.4 s, because a thinner
+    // stream fits more seconds into the same space. wav pulls the same lever
+    // the other way and has not been heard on hardware yet.
     auto format = environment_value(L"WAMBRIDGE_FORMAT");
     if (format.empty()) format = ini_value(L"format", L"", path);
     bool known = false;

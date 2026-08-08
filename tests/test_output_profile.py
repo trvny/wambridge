@@ -61,13 +61,15 @@ class WavProfileTests(unittest.TestCase):
             "+bitexact",
         )
 
-    def test_confirmed_rates_are_passed_through(self) -> None:
-        self.assertNotIn("-ar", self.profile.args_for(44100))
-        self.assertNotIn("-ar", self.profile.args_for(48000))
-
-    def test_unconfirmed_high_rate_is_resampled(self) -> None:
-        # Only 44.1/16 WAV was confirmed on a physical M5.
-        self.assertEqual(self.profile.args_for(96000)[:2], ("-ar", "48000"))
+    def test_rate_is_fixed_at_the_only_confirmed_one(self) -> None:
+        # Only 44.1/16 WAV was confirmed on a physical M5. A cap expressed as a
+        # maximum would not survive the file and URL paths, which do not know
+        # the source rate and call args_for(None).
+        for rate in (None, 44100, 48000, 96000):
+            with self.subTest(rate=rate):
+                args = self.profile.args_for(rate)
+                self.assertEqual(args[args.index("-ar") + 1], "44100")
+                self.assertEqual(args.count("-ar"), 1)
 
     def test_served_as_audio_wav(self) -> None:
         self.assertEqual(self.profile.extension, "wav")
