@@ -8,7 +8,9 @@ branch or implementing another timing layer.
 ## Stable on `main`
 
 - SSDP discovery with subnet fallback and saved devices resolved by stable device ID.
-- Status, raw volume, mute, pause, play, stop and standby control.
+- Raw volume, mute, pause, play, stop and standby control. The `status` action is broken on
+  this firmware: `get_status` calls `GetPowerStatus`, which does not exist here, so it
+  always times out and reports a healthy speaker as unreachable.
 - Direct `SetUrlPlayback`, custom radio stations and native TuneIn preset playback.
 - Windows builds for bundled helpers and foobar2000 2.x x64.
 - Restricted helper handle inheritance from merged PR #2.
@@ -196,7 +198,9 @@ Each of these cost real time and each is closed by measurement, not by argument.
    watch: whether a paused speaker stops pulling and the HTTP connection times out.
 5. Log unknown INI keys to the console. Keys from an unbuilt branch are silently ignored
    today, so the file does not tell anyone what is actually active.
-6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`.
+6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
+   reports `holding=<count>` for connections still attached to the speaker, but it still
+   sends no power command, so the name remains wrong until it arms a sleep timer.
 7. Reduce and reimplement the finite share path from its measured working form.
 8. Add a proper foobar preferences page while retaining legacy INI compatibility.
 9. Add TuneIn/radio UI and a dockable panel only after output transport is stable.

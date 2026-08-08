@@ -75,6 +75,16 @@ plausible-looking assumptions.
 - Use beefweb for foobar position, the process tree for FFmpeg leaks and
   `Get-NetTCPConnection` for abandoned sockets. `ReadTransferCount` and the tested Windows
   process I/O counters do not work on this machine.
+- beefweb reports foobar's transport, not this component's path. A run can show `playing`,
+  a median 1.00x and a rising position while the audio leaves through the sound card,
+  because the selected output was not `WAM Bridge`. Before trusting any run, confirm the
+  helper and FFmpeg are actually up — `wambridge-pcm` appears about six seconds in and
+  FFmpeg about nine — and that a connection to the speaker is established. A rate of 1.00
+  is not evidence that a single byte reached the M5.
+- Do not use `wambridge-control status` as a liveness check. `get_status` calls
+  `GetPowerStatus`, which does not exist on this firmware, so the action always fails with
+  `Cannot reach Samsung WAM: timed out` and a healthy speaker looks unreachable. Probe with
+  `GetSpkName` instead.
 - Turn on `diagnostics=1` before claiming anything about pacing. Sampling beefweb once a
   second gives the rate foobar believes in; the `CLOCK` line gives every term behind it.
   One without the other is how a dropped chunk passed for a clock bug for two days.
