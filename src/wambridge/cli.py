@@ -45,6 +45,10 @@ volume_level = bounded_int("volume", minimum=MIN_VOLUME, maximum=MAX_VOLUME)
 """Parse a raw WAM volume level for argparse."""
 
 
+RECOVERY_VOLUME = 3
+"""Level used when the speaker is found silent and nobody asked for one."""
+
+
 def choose_start_volume(
     current_volume: int,
     explicit_volume: int | None,
@@ -53,6 +57,13 @@ def choose_start_volume(
     """Choose an explicit level or clamp the current volume to a safe maximum."""
     if explicit_volume is not None:
         return explicit_volume
+    if current_volume == 0:
+        # Startup mutes the speaker and restores it once audio flows, so a
+        # helper killed in between leaves it at 0. Following that reading would
+        # start the next stream silent while every other signal reports playing
+        # - the failure this project has already lost days to. Nobody asks for
+        # playback in order to hear nothing.
+        return min(RECOVERY_VOLUME, max_start_volume)
     return min(current_volume, max_start_volume)
 
 

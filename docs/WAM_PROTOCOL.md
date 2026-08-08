@@ -287,6 +287,12 @@ while still returning success. Until model-aware conversion exists:
 
 Start hardware tests at step `3` or lower.
 
+**A speaker reading `0` is not a level to obey.** Startup mutes it and restores the level
+once audio flows, so a helper killed in between leaves the speaker silent. Reading that back
+and starting the next stream at `0` produces the worst signal this device can give: audio
+flowing, `PLAYING` reported, sockets established and nothing audible. Treat `0` from
+`GetVolume` at startup as missing information rather than as a request.
+
 `SetVolume` on the shared control connection changes the speaker within about a second,
 measured while a stream was playing. A host-side gain applied to PCM on its way out reaches
 the ear about six seconds later. Volume that should feel immediate belongs on this path, and a
