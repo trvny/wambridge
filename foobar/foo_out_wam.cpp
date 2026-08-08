@@ -155,6 +155,10 @@ constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 constexpr int kDefaultStartupSilenceMs = 1500;
 constexpr int kMaximumStartupSilenceMs = 10000;
 
+// The M5's own scale. Used to disable the helper's start-volume clamp when a
+// helper is being replaced mid-session rather than starting one.
+constexpr int kMaximumRawVolume = 30;
+
 struct Settings {
     std::wstring helper;
     std::wstring device;
@@ -697,8 +701,24 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
-        if (m_settings.volume.has_value()) {
+        // Only on the first helper of a playback session. A seek or a format
+        // change restarts the helper mid-session, and passing the configured
+        // level again would overwrite whatever the listener has since set from
+        // the menu: measured on the M5 on 2026-08-08, volume walked up to 11,
+        // one seek, "Speaker volume is 11; starting PCM playback at 3". Without
+        // the argument the helper clamps the speaker's own level to the safe
+        // maximum instead of replacing it, which is the protection that was
+        // actually wanted here.
+        if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
+        } else if (m_startupVolumeApplied.load()) {
+            // The helper mutes for startup and restores afterwards, so it has to
+            // be told some level; without this it would restore the default
+            // clamp of 10 and a listener sitting at 15 would still be turned
+            // down by a seek. The safe clamp guards the start of a session, not
+            // the level the listener has just chosen during one.
+            command += L" --max-start-volume " +
+                std::to_wstring(kMaximumRawVolume);
         }
         return command;
     }
@@ -871,6 +891,10 @@ private:
             stop_child();
             return false;
         }
+
+        // The configured level has now been handed to a helper that is really
+        // running; every later helper in this session leaves the speaker alone.
+        m_startupVolumeApplied.store(true);
 
         m_protocolThread = std::thread(
             &WamOutput::protocol_loop,
@@ -1245,6 +1269,9 @@ private:
     std::atomic<bool> m_helperReady{false};
     std::atomic<bool> m_childStopping{false};
     std::atomic<bool> m_childReachedPlaying{false};
+    // Per playback session, not per helper: this object is built when playback
+    // starts and torn down when it stops, so a seek cannot clear it.
+    std::atomic<bool> m_startupVolumeApplied{false};
     std::atomic<double> m_gain{1.0};
     std::thread m_worker;
 
