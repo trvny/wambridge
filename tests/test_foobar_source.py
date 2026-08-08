@@ -123,8 +123,10 @@ class FoobarSourceTests(TestCase):
         self.assertIn("startup_silence %s is out of range", source)
         self.assertIn("volume %s is not a number in 0..100", source)
         # `#` is an ordinary character to the profile API, so a file copied from
-        # an older example arrives carrying keys called `#format` and friends.
-        self.assertIn("if (key.front() == L'#' || key.front() == L';') continue;", source)
+        # an older example arrives carrying keys called `#format`. Reported, not
+        # skipped: `#hardware_volume=1` is a setting someone believes is active.
+        self.assertIn("if (key.front() == L'#') {", source)
+        self.assertIn("Windows \"\n            \"comments start with ';'", source)
 
     def test_example_ini_comments_use_the_windows_marker(self) -> None:
         # `#startup_silence=0` is not a disabled setting to Windows; it is a key
@@ -138,6 +140,32 @@ class FoobarSourceTests(TestCase):
                 f"foobar.ini.example:{number} comments with '#', which the "
                 "Windows profile API reads as a key name",
             )
+    def test_startup_volume_is_applied_once_per_session(self) -> None:
+        # Measured on the M5 on 2026-08-08: the listener walked the speaker up to
+        # 11 from the menu, seeked once, and the restarted helper logged
+        # "Speaker volume is 11; starting PCM playback at 3" - the configured
+        # startup level went back over a level a person had just chosen.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {",
+            source,
+        )
+        # The flag must follow the helper reporting PLAYING, not the spawn. A
+        # helper replaced in between may never have applied a level, and its
+        # successor would then inherit a raised clamp over a speaker sitting
+        # wherever it was left.
+        playing = source.index("m_childReachedPlaying.store(true);")
+        applied = source.index("m_startupVolumeApplied.store(true);")
+        self.assertLess(playing, applied)
+        self.assertLess(
+            applied,
+            source.index("accepted = true;", playing),
+            "the flag must be set inside the PLAYING branch",
+        )
+        # Without a level the helper would restore its own default clamp, which
+        # still turns a listener above it down.
+        self.assertIn('command += L" --max-start-volume " +', source)
 
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.

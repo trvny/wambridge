@@ -195,16 +195,22 @@ void report_unknown_ini_keys(const std::wstring& path) {
     if (size == 0) return;
 
     std::wstring unknown;
+    std::wstring commented;
     for (DWORD index = 0; index < size;) {
         const std::wstring key(buffer.data() + index);
         index += static_cast<DWORD>(key.size()) + 1;
         if (key.empty()) continue;
-        // Windows treats `;` as the comment marker and `#` as an ordinary
-        // character, so `#format=flac` reaches this loop as a key named
-        // `#format`. Files copied from an earlier foobar.ini.example carry
-        // exactly that, and reporting a commented-out example as an ignored
-        // setting is noise indistinguishable from a real warning.
-        if (key.front() == L'#' || key.front() == L';') continue;
+        // Windows comments start with `;` and those never reach this loop,
+        // because the profile API drops them. `#` is an ordinary character to
+        // it, so `#format=flac` arrives as a key literally named `#format`.
+        // Reported separately rather than skipped: a line someone believes is
+        // disabled is exactly the confusion this function exists to remove, and
+        // `#hardware_volume=1` is a real setting nobody is applying.
+        if (key.front() == L'#') {
+            if (!commented.empty()) commented += L", ";
+            commented += key;
+            continue;
+        }
 
         // Case-insensitively: GetPrivateProfileStringW finds `Device=M5` when
         // asked for `device`, so an exact comparison would announce a setting
@@ -228,15 +234,27 @@ void report_unknown_ini_keys(const std::wstring& path) {
         if (!unknown.empty()) unknown += L", ";
         unknown += key;
     }
-    if (unknown.empty()) return;
-
     // Only %u and %s: console::printf is pfc's formatter, not the CRT one.
-    console::printf(
-        "%s: ignoring unknown setting(s) in foobar.ini: %s",
-        kComponentName,
-        narrowed(unknown).c_str()
-    );
+    if (!unknown.empty()) {
+        console::printf(
+            "%s: ignoring unknown setting(s) in foobar.ini: %s",
+            kComponentName,
+            narrowed(unknown).c_str()
+        );
+    }
+    if (!commented.empty()) {
+        console::printf(
+            "%s: foobar.ini has setting(s) starting with '#': %s. Windows "
+            "comments start with ';', so these are names, not disabled lines, "
+            "and nothing reads them",
+            kComponentName,
+            narrowed(commented).c_str()
+        );
+    }
 }
+// The M5's own scale. Used to disable the helper's start-volume clamp when a
+// helper is being replaced mid-session rather than starting one.
+constexpr int kMaximumRawVolume = 30;
 
 struct Settings {
     std::wstring helper;
@@ -783,6 +801,13 @@ private:
                 if (playing) {
                     m_playing.store(true);
                     m_childReachedPlaying.store(true);
+                    // Not when the helper was launched: between the spawn and
+                    // this line the level has not been applied yet, so a seek
+                    // in that window would hand the replacement a raised clamp
+                    // over a speaker still sitting wherever it was left.
+                    // `WAMBRIDGE PLAYING volume=<step>` is the helper saying it
+                    // applied one.
+                    m_startupVolumeApplied.store(true);
                 }
                 accepted = true;
             }
@@ -809,8 +834,26 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
-        if (m_settings.volume.has_value()) {
+        // Only until some helper of this session has reported PLAYING, which is
+        // the helper saying it applied a level. A seek or a format change
+        // restarts the helper mid-session, and passing the configured level
+        // again would overwrite whatever the listener has since set from the
+        // menu: measured on the M5 on 2026-08-08, volume walked up to 11, one
+        // seek, "Speaker volume is 11; starting PCM playback at 3".
+        //
+        // The flag deliberately does not follow the spawn. A helper replaced
+        // before it reached PLAYING may never have applied anything, so its
+        // successor has to start over rather than inherit a raised clamp.
+        if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
             command += L" --volume " + std::to_wstring(*m_settings.volume);
+        } else if (m_startupVolumeApplied.load()) {
+            // The helper mutes for startup and restores afterwards, so it has to
+            // be told some level; without this it would restore the default
+            // clamp of 10 and a listener sitting at 15 would still be turned
+            // down by a seek. The safe clamp guards the start of a session, not
+            // the level the listener has just chosen during one.
+            command += L" --max-start-volume " +
+                std::to_wstring(kMaximumRawVolume);
         }
         return command;
     }
@@ -1357,6 +1400,9 @@ private:
     std::atomic<bool> m_helperReady{false};
     std::atomic<bool> m_childStopping{false};
     std::atomic<bool> m_childReachedPlaying{false};
+    // Per playback session, not per helper: this object is built when playback
+    // starts and torn down when it stops, so a seek cannot clear it.
+    std::atomic<bool> m_startupVolumeApplied{false};
     std::atomic<double> m_gain{1.0};
     std::thread m_worker;
 
