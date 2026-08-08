@@ -103,6 +103,21 @@ def continuous_source(source: str) -> Iterator[None]:
         _CONTINUOUS_SOURCES.reset(token)
 
 
+def terminate_process(process: subprocess.Popen[bytes], *, timeout: float = 5.0) -> None:
+    """Stop a helper process, escalating to kill when it ignores terminate.
+
+    Nothing may return while an FFmpeg is still running: the physical test
+    machine has already been taken down by leaked encoders.
+    """
+    if process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=3)
+
+
 def _read_chunk(stream: BinaryIO, size: int) -> bytes:
     """Read currently available pipe data without waiting for a full buffer."""
     read1 = getattr(stream, "read1", None)
@@ -211,12 +226,7 @@ class AudioStreamServer:
         with self._process_lock:
             process = self._process
         if process and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
+            terminate_process(process, timeout=3)
         if self._started:
             self._server.shutdown()
             if self._thread.is_alive():
@@ -303,13 +313,7 @@ class AudioStreamServer:
         except (BrokenPipeError, ConnectionResetError):
             LOGGER.info("Speaker closed the stream")
         finally:
-            if process.poll() is None:
-                process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
+            terminate_process(process)
             with self._process_lock:
                 self._process = None
             if process.returncode not in {0, -15, 1}:

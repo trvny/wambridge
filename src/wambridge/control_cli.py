@@ -7,11 +7,10 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
+from .cli_common import add_target_arguments, bounded_float, bounded_int, configure_logging
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
-    DEFAULT_PORT,
     WamApiError,
     WamStatus,
     get_mute,
@@ -51,37 +50,14 @@ class Verification:
     detail: str | None = None
 
 
-def raw_volume(value: str) -> int:
-    """Parse the raw 0..30 volume scale measured on the physical M5."""
-    try:
-        level = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("volume must be an integer from 0 to 30") from error
-    if not RAW_MIN_VOLUME <= level <= RAW_MAX_VOLUME:
-        raise argparse.ArgumentTypeError("volume must be between 0 and 30")
-    return level
+raw_volume = bounded_int("volume", minimum=RAW_MIN_VOLUME, maximum=RAW_MAX_VOLUME)
+"""Parse the raw 0..30 volume scale measured on the physical M5."""
 
+positive_int = bounded_int("retries", minimum=1)
+"""Parse a positive retry count."""
 
-def positive_int(value: str) -> int:
-    """Parse a positive retry count."""
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("retries must be an integer") from error
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("retries must be at least 1")
-    return parsed
-
-
-def nonnegative_float(value: str) -> float:
-    """Parse a non-negative retry delay."""
-    try:
-        parsed = float(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("retry delay must be a number") from error
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("retry delay cannot be negative")
-    return parsed
+nonnegative_float = bounded_float("retry delay", minimum=0.0)
+"""Parse a non-negative retry delay."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,19 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
             "safe-volume",
         ),
     )
-    target = parser.add_mutually_exclusive_group()
-    target.add_argument("--speaker", help="Speaker IPv4 address")
-    target.add_argument("--device", help="Saved device alias; defaults to M5")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--config", type=Path)
-    parser.add_argument("--discovery-timeout", type=float, default=4.0)
-    parser.add_argument(
-        "--interface",
-        action="append",
-        dest="interfaces",
-        help="Local IPv4 used for discovery; may be repeated",
-    )
-    parser.add_argument("--no-scan", action="store_true")
+    add_target_arguments(parser, device_help="Saved device alias; defaults to M5")
     parser.add_argument(
         "--safe-volume",
         type=raw_volume,
@@ -393,10 +357,7 @@ def run(args: argparse.Namespace) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
+    configure_logging(args.verbose)
     try:
         for line in run(args):
             print(line)

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import os
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
+from .alias_store import CONFIG_VERSION, AliasStore, default_config_path
 from .discovery import (
     DiscoveredSpeaker,
     discover_ssdp,
@@ -18,7 +16,16 @@ from .discovery import (
 )
 from .samsung import DEFAULT_PORT, WamApiError, WamIdentity, identify, normalize_device_id
 
-CONFIG_VERSION = 1
+__all__ = [
+    "CONFIG_VERSION",
+    "DeviceProfile",
+    "ProfileError",
+    "ProfileStore",
+    "default_profile_path",
+    "remember_device",
+    "resolve_device",
+    "resolve_profile",
+]
 
 
 class ProfileError(RuntimeError):
@@ -63,103 +70,25 @@ class DeviceProfile:
 
 def default_profile_path() -> Path:
     """Return the per-user profile file used by the bridge and foobar helper."""
-    if configured := os.environ.get("WAMBRIDGE_CONFIG"):
-        return Path(configured).expanduser()
-    if local_app_data := os.environ.get("LOCALAPPDATA"):
-        return Path(local_app_data) / "WAMBridge" / "devices.json"
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return config_home / "wambridge" / "devices.json"
+    return default_config_path("WAMBRIDGE_CONFIG", "devices.json")
 
 
-def _alias_key(alias: str) -> str:
-    key = alias.strip().casefold()
-    if not key:
-        raise ProfileError("Device alias cannot be empty")
-    return key
-
-
-class ProfileStore:
+class ProfileStore(AliasStore[DeviceProfile]):
     """Read and atomically update the user's saved WAM devices."""
 
-    def __init__(self, path: Path | None = None) -> None:
-        self.path = path or default_profile_path()
+    error = ProfileError
+    collection = "devices"
+    entry_label = "WAM profile"
+    plural_label = "WAM profiles"
+    subject_label = "WAM device"
 
-    def load(self) -> dict[str, DeviceProfile]:
-        """Load profiles indexed by a case-insensitive alias."""
-        if not self.path.exists():
-            return {}
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise ProfileError(f"Cannot read WAM profiles from {self.path}: {error}") from error
-        if not isinstance(payload, dict):
-            raise ProfileError(f"Unsupported WAM profile file: {self.path}")
-        if payload.get("version") != CONFIG_VERSION or not isinstance(payload.get("devices"), list):
-            raise ProfileError(f"Unsupported WAM profile file: {self.path}")
+    @classmethod
+    def default_path(cls) -> Path:
+        return default_profile_path()
 
-        profiles: dict[str, DeviceProfile] = {}
-        for raw_profile in payload["devices"]:
-            if not isinstance(raw_profile, dict):
-                raise ProfileError(f"Invalid WAM profile entry in {self.path}")
-            profile = DeviceProfile.from_dict(raw_profile)
-            profiles[_alias_key(profile.alias)] = profile
-        return profiles
-
-    def all(self) -> list[DeviceProfile]:
-        """Return saved devices ordered by alias."""
-        return sorted(self.load().values(), key=lambda profile: profile.alias.casefold())
-
-    def get(self, alias: str) -> DeviceProfile:
-        """Return one saved device."""
-        profile = self.load().get(_alias_key(alias))
-        if profile is None:
-            raise ProfileError(f"No saved WAM device named {alias!r}")
-        return profile
-
-    def put(self, profile: DeviceProfile) -> None:
-        """Create or replace a saved device."""
-        profiles = self.load()
-        profiles[_alias_key(profile.alias)] = profile
-        self._save(profiles.values())
-
-    def remove(self, alias: str) -> DeviceProfile:
-        """Delete and return a saved device."""
-        profiles = self.load()
-        try:
-            removed = profiles.pop(_alias_key(alias))
-        except KeyError as error:
-            raise ProfileError(f"No saved WAM device named {alias!r}") from error
-        self._save(profiles.values())
-        return removed
-
-    def _save(self, profiles: Iterable[DeviceProfile]) -> None:
-        payload = {
-            "version": CONFIG_VERSION,
-            "devices": [
-                profile.to_dict()
-                for profile in sorted(profiles, key=lambda item: item.alias.casefold())
-            ],
-        }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path: Path | None = None
-        try:
-            with NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                newline="\n",
-                dir=self.path.parent,
-                prefix=f".{self.path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
-                json.dump(payload, temporary, ensure_ascii=False, indent=2)
-                temporary.write("\n")
-                temporary_path = Path(temporary.name)
-            os.replace(temporary_path, self.path)
-        except OSError as error:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
-            raise ProfileError(f"Cannot save WAM profiles to {self.path}: {error}") from error
+    @classmethod
+    def parse(cls, value: dict[str, Any]) -> DeviceProfile:
+        return DeviceProfile.from_dict(value)
 
 
 IdentifyFunc = Callable[..., WamIdentity]

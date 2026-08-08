@@ -81,14 +81,14 @@ class SelectSpeakerTests(unittest.TestCase):
         return argparse.Namespace(**defaults)
 
     def test_direct_speaker_skips_discovery(self) -> None:
-        with patch("wambridge.event_cli.discover") as discover_mock:
+        with patch("wambridge.cli_common.discover") as discover_mock:
             self.assertEqual(
                 select_speaker(self._args(speaker="10.0.0.118"), store=object()),
                 ("10.0.0.118", 55001),
             )
         discover_mock.assert_not_called()
 
-    @patch("wambridge.event_cli.resolve_device")
+    @patch("wambridge.cli_common.resolve_device")
     def test_saved_device_uses_its_own_port(self, resolve_mock) -> None:
         resolve_mock.return_value = SimpleNamespace(
             alias="M5", device_id="abc", last_ip="10.0.0.118", port=55002
@@ -102,20 +102,20 @@ class SelectSpeakerTests(unittest.TestCase):
             "M5", store=store, timeout=4.0, local_addresses=None, scan=True
         )
 
-    @patch("wambridge.event_cli.discover", return_value=[SimpleNamespace(ip="10.0.0.118")])
+    @patch("wambridge.cli_common.discover", return_value=[SimpleNamespace(ip="10.0.0.118")])
     def test_single_discovered_speaker_is_used(self, discover_mock) -> None:
         self.assertEqual(select_speaker(self._args(no_scan=True), object()), ("10.0.0.118", 55001))
         discover_mock.assert_called_once_with(
             timeout=4.0, local_addresses=None, port=55001, scan=False
         )
 
-    @patch("wambridge.event_cli.discover", return_value=[])
+    @patch("wambridge.cli_common.discover", return_value=[])
     def test_no_speaker_found(self, _discover_mock) -> None:
         with self.assertRaisesRegex(RuntimeError, "No Samsung WAM speaker found"):
             select_speaker(self._args(), object())
 
     @patch(
-        "wambridge.event_cli.discover",
+        "wambridge.cli_common.discover",
         return_value=[SimpleNamespace(ip="10.0.0.118"), SimpleNamespace(ip="10.0.0.119")],
     )
     def test_ambiguous_discovery_names_the_candidates(self, _discover_mock) -> None:
