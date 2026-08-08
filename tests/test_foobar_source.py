@@ -193,6 +193,43 @@ class FoobarSourceTests(TestCase):
         # still turns a listener above it down.
         self.assertIn('command += L" --max-start-volume " +', source)
 
+    def test_queue_capacity_is_configurable(self) -> None:
+        # Capacity is delay on this path: the queue measured 3.79-3.99 s full of
+        # a 4.0 s capacity, so everything allowed here is heard that much later.
+        # The 2 s that used to be hardcoded was chosen, never measured, and it
+        # is the largest single share of the six seconds that reach the ear.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kDefaultBufferExtraMs = 2000;", source)
+        self.assertIn('environment_value(L"WAMBRIDGE_BUFFER_EXTRA")', source)
+        self.assertIn('ini_value(L"buffer_extra", L"", path)', source)
+        self.assertIn("m_settings.bufferExtraMs / 1000.0", source)
+        # And it has to join the known-key list, or the component reports its
+        # own setting as unknown - the drift that list exists to catch.
+        self.assertIn('L"buffer_extra",', source)
+        # A typo in a knob meant for walking down during a measurement would
+        # otherwise read as "that value changed nothing".
+        self.assertIn("buffer_extra %s is not a number in 0..%u", source)
+        # The old constant must be gone, or the knob would do nothing.
+        self.assertNotIn("(m_bufferLength + 2.0)", source)
+
+    def test_no_conflict_markers_in_tracked_text(self) -> None:
+        # A resolution script that only covered the files git named left markers
+        # in the plugin guide, and they were committed and reviewed before
+        # anyone noticed.
+        root = SOURCE.parents[1]
+        for path in sorted(root.glob("docs/*.md")) + sorted(
+            root.glob("foobar/*")
+        ) + [root / "README.md", root / "AGENTS.md"]:
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue  # binary project files
+            for marker in ("<<<<<<< ", "=======\n", ">>>>>>> "):
+                self.assertNotIn(marker, text, f"{path.name} carries {marker!r}")
+
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
         # Every foobar source is checked, not just the output adapter: the
