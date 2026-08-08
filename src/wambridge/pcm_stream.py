@@ -9,11 +9,11 @@ from typing import BinaryIO
 
 from .stream import (
     CHUNK_SIZE,
-    STARTUP_CHUNK_SIZE,
     STARTUP_SILENCE_MS,
     AudioStreamServer,
     StreamError,
     _read_chunk,
+    _read_startup_payload,
     terminate_process,
 )
 
@@ -23,54 +23,6 @@ MIN_SAMPLE_RATE = 8000
 MAX_SAMPLE_RATE = 384000
 MIN_CHANNELS = 1
 MAX_CHANNELS = 32
-MAX_STARTUP_PAYLOAD_SIZE = 64 * 1024
-
-
-def _contains_flac_audio_frame(payload: bytes) -> bool:
-    """Return whether a native FLAC payload contains an audio frame."""
-    if not payload.startswith(b"fLaC"):
-        return False
-
-    offset = 4
-    while True:
-        if len(payload) < offset + 4:
-            return False
-        block_header = payload[offset]
-        block_size = int.from_bytes(payload[offset + 1 : offset + 4], "big")
-        offset += 4
-        if len(payload) < offset + block_size:
-            return False
-        offset += block_size
-        if block_header & 0x80:
-            break
-
-    return any(
-        payload[index] == 0xFF and payload[index + 1] & 0xFE == 0xF8
-        for index in range(offset, len(payload) - 1)
-    )
-
-
-def _read_startup_payload(stream: BinaryIO, extension: str) -> bytes:
-    """Read until output proves that encoded audio, not only headers, exists."""
-    payload = bytearray()
-    while len(payload) < MAX_STARTUP_PAYLOAD_SIZE:
-        remaining = MAX_STARTUP_PAYLOAD_SIZE - len(payload)
-        chunk = _read_chunk(stream, min(STARTUP_CHUNK_SIZE, remaining))
-        before = len(payload)
-        payload.extend(chunk)
-        # Exit on lack of progress, not on a falsy chunk. A stream that keeps
-        # returning something truthy which adds no bytes would otherwise spin
-        # forever, and this loop has no iteration limit to fall back on.
-        if len(payload) == before:
-            break
-        if extension != "flac" or _contains_flac_audio_frame(payload):
-            return bytes(payload)
-
-    if not payload:
-        raise StreamError("FFmpeg produced no audio")
-    if extension == "flac":
-        raise StreamError("PCM input ended before FFmpeg produced a FLAC audio frame")
-    return bytes(payload)
 
 
 class PcmAudioStreamServer(AudioStreamServer):
@@ -153,7 +105,7 @@ class PcmAudioStreamServer(AudioStreamServer):
         # See "Transport and pacing" in docs/WAM_PROTOCOL.md.
         #
         # The leading silence is pure added delay: every millisecond here is a
-        # millisecond further from the ear, on a path already about 13 s long.
+        # millisecond further from the ear, on a path about 6 s long.
         # It carries no comment anywhere and has been present since the initial
         # import, so whether it is still load-bearing is a question for the
         # hardware, not for reading. At 0 the filter is dropped entirely rather

@@ -7,15 +7,19 @@ device=M5
 volume=4
 
 ; Milliseconds of silence prepended to the stream, 0..10000, default 1500.
-; This is straight added delay on a path already about 13 s long, and it is the
-; only part of that delay the project adds to itself. It has been there since
-; the initial import with no comment explaining why, so 0 is worth trying: if
-; startup still reaches WAMBRIDGE PLAYING, that is 1.5 s back for free.
+; This is straight added delay on a path about 6 s long, and it is the only part
+; of that delay the project adds to itself. It has been there since the initial
+; import with no comment explaining why. Measured at 0 on hardware 2026-08-08:
+; startup still reaches WAMBRIDGE PLAYING, so that is 1.5 s back.
 ;startup_silence=0
 
-; Speaker-facing format, flac or mp3, default flac. Not a latency lever - mp3
-; at 320 kbps measured worse than flac, 16.9 s against 13.4 s.
-;format=flac
+; Speaker-facing format: flac, wav or mp3, default flac. Thinner is not faster -
+; mp3 at 320 kbps measured worse than flac, 16.9 s against 13.4 s, because a
+; prebuffer bounded by bytes holds more seconds of a thinner stream. wav pulls
+; the same lever the other way: measured 5.68 s against flac's 6.67 s over the
+; same source, with half the variation, because its bitrate does not ride the
+; music. The cost is depth - flac carries 24 bit here and wav is fixed at 16.
+;format=wav
 
 ; Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
 ; 240 lines. Turn it on before reporting anything about pacing.

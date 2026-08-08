@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from unittest import TestCase
 
@@ -120,7 +121,10 @@ class FoobarSourceTests(TestCase):
         self.assertNotIn("if (key == candidate) known = true;", source)
         # A rejected value is the same silence in a different place.
         self.assertIn("unknown format %s, falling back to %s", source)
-        self.assertIn("startup_silence %s is out of range", source)
+        # "out of range" also covered `startup_silence=fast`, which is not a
+        # range problem and reads as though a number was rejected.
+        self.assertIn("startup_silence %s is not a number in 0..%u", source)
+        self.assertIn("helper %s does not exist, using the bundled one", source)
         self.assertIn("volume %s is not a number in 0..100", source)
         # `#` is an ordinary character to the profile API, so a file copied from
         # an older example arrives carrying keys called `#format`. Reported, not
@@ -140,6 +144,28 @@ class FoobarSourceTests(TestCase):
                 f"foobar.ini.example:{number} comments with '#', which the "
                 "Windows profile API reads as a key name",
             )
+
+    def test_accepted_formats_match_the_helper(self) -> None:
+        # The whitelist and the helper's --format choices are edited in two
+        # separate languages. A name in only one of them is either a profile
+        # nobody can select from the INI or a command line the helper rejects.
+        from wambridge.stream import OUTPUT_PROFILES
+
+        source = SOURCE.read_text(encoding="utf-8")
+        declaration = re.search(
+            r"constexpr const wchar_t\* kStreamFormats\[\] = \{(.*?)\};",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            declaration,
+            "kStreamFormats is no longer a single-line constexpr array; this test "
+            "reads it as text, so update the pattern rather than the whitelist",
+        )
+        accepted = set(re.findall(r'L"([^"]+)"', declaration.group(1)))
+
+        self.assertEqual(accepted, set(OUTPUT_PROFILES))
+
     def test_startup_volume_is_applied_once_per_session(self) -> None:
         # Measured on the M5 on 2026-08-08: the listener walked the speaker up to
         # 11 from the menu, seeked once, and the restarted helper logged
@@ -275,9 +301,10 @@ class FoobarSourceTests(TestCase):
         self.assertIn('line.rfind("WAMBRIDGE ERROR ", 0)', source)
 
     def test_startup_silence_is_configurable(self) -> None:
-        # 1.5 s of the measured ~13.4 s delay is silence this project prepends
-        # itself. It carries no comment and has been there since the initial
-        # import, so whether it is still load-bearing is a hardware question.
+        # The default prepends 1.5 s of silence to a path measured at about 6 s.
+        # It carried no comment and had been there since the initial import;
+        # 0 was confirmed on hardware on 2026-08-08 and startup still reached
+        # WAMBRIDGE PLAYING.
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertIn("constexpr int kDefaultStartupSilenceMs = 1500;", source)

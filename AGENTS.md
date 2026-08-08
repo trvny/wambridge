@@ -65,13 +65,21 @@ and plausible-looking assumptions.
   220 s track out in 22 s while the pipe stayed at 1.0x. Block until there is
   room; stop waiting only when the stream is shutting down, flushing, or
   replaced. `process_samples_v2` reports partial writes instead.
-- Audio is delayed by **about 13 s** end to end, measured mid-stream on the M5 in
-  2026-08. `get_latency()` reports about 4 s, so it under-reports by some nine
-  seconds, and roughly 7-8 s of the total sits inside the speaker. Host
-  buffering is therefore only part of the latency.
+- Audio is delayed by **about 6.7 s** on FLAC and **5.7 s** on WAV, re-measured
+  mid-stream on the M5 on 2026-08-08 with `startup_silence=0`. The older 13.4 s
+  figure is superseded, and with it the 7-8 s once attributed to the speaker,
+  which was a subtraction remainder rather than a measurement. The host's own
+  4.0 s buffer floor is now the largest single term.
 - Anything applied where PCM leaves the queue, including the volume gain,
-  reaches the ear about 13 s later. Controls that need to feel immediate belong
-  on the `55001` control path, which answers in about a second.
+  reaches the ear about six seconds later; pause takes about 5 s to fall silent
+  and resume about 6 s to return. Controls that need to feel immediate belong on
+  the `55001` control path, which answers in about a second.
+- The prebuffer is bounded by bytes, at least partly, confirmed from both
+  directions: mp3 at 320 kbps measured 16.9 s against FLAC's 13.4 s, and `wav`
+  at a constant 1411 kbps beat FLAC on every passage of the same source while
+  halving the spread. Compare formats only over identical passages of identical
+  material - FLAC's bitrate rides the music and the delay rides with it. `wav`
+  stays opt-in until the rest of the physical checklist passes on it.
 - Foobar's `f32le -> FLAC -> M5` path passed the full physical checklist in
   2026-08: a complete track at a median 1.00x, stable seekbar, second track,
   pause/resume, seek, stop/change, radio HLS across a 44.1 to 48 kHz switch, and

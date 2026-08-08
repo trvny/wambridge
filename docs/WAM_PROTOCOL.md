@@ -115,56 +115,70 @@ burst, then stable throughput near 1.00x after roughly 25 seconds.
 The often-quoted `+21..23 s` value was measured from process start and includes discovery,
 URL handoff and helper startup. It is an upper bound on startup, not the steady-state delay.
 
-### Measured audio delay: about 13 seconds
+### Measured audio delay: about six seconds
 
-Measured 2026-08-02, mid-stream, with playback already settled. The foobar volume slider was
-moved at a recorded playback position and the listener read the seekbar when the change was
-heard. Two events in one run: sent at 12.14 s and heard at 26 s, sent at 37.16 s and heard at
-50 s. **About 13.4 s**, spread one second, of which reaction time is roughly half a second.
+Re-measured 2026-08-08 on the build of PR #41, `startup_silence=0`, mid-stream with playback
+settled. Method: the foobar volume is changed at a recorded playback position and the
+listener reads the seekbar when the change is heard, so the number does not depend on
+anyone's reaction time. Four changes per run, both formats over the same passages of the
+same 19-minute 44.1 kHz source.
 
-Attribution:
+| passage | FLAC | WAV |
+| --- | --- | --- |
+| 192 s | 7.94 s | 5.97 s |
+| 217 s | 5.91 s | 4.95 s |
+| 242 s | 6.90 s | 5.91 s |
+| 267 s | 5.91 s | 5.89 s |
+| mean | **6.67 s** | **5.68 s** |
+| spread | 2.0 s | 1.0 s |
+
+Two other methods agree in the same session: after a pause the sound stopped about 5 s
+later, and after resuming from 51.98 s it returned at 58 s, so 6.0 s.
+
+Attribution, with `startup_silence=0`:
 
 | term | share |
 | --- | --- |
 | host buffer counted by `get_latency()` | ~3.9 s |
-| `adelay=1500` startup silence in the helper | 1.5 s |
+| `adelay` startup silence in the helper | 0 s as configured, 1.5 s by default |
 | FFmpeg and the local HTTP socket | under a second |
-| **the speaker's own prebuffer** | **~7-8 s** |
+| the speaker's own prebuffer | ~2 s on FLAC, less on WAV |
 
-Two consequences for anything built on this path:
+Consequences for anything built on this path:
 
-- The M5 holds several seconds of audio that no host accounting can see. `get_latency()`
-  reports about 4 s and is therefore some nine seconds optimistic. Do not treat it as the
-  distance between a sample and the ear.
-- Anything applied host-side to PCM already on its way — a software volume gain, silence
-  written for pause — is heard 13 s later. Controls that must feel immediate belong on the
-  `55001` path, which answers in about a second.
+- **The host buffer is the largest single term now.** Its 4.0 s floor was dismissed as
+  "2-3 s of thirteen"; against six it is most of the budget and worth revisiting.
+- Anything applied host-side to PCM already on its way - a software volume gain, silence
+  written for pause - is heard about six seconds later. Controls that must feel immediate
+  still belong on the `55001` path, which answers in about a second.
 
-One of those terms is self-inflicted. The helper prepends `adelay=1500`, so 1.5 s of the
-total is silence this project adds to its own stream. It has carried no explanatory comment
-since the initial import, which is not evidence that it is useless — only that nobody
-recorded why. `startup_silence=0` turns it off; if startup still reaches
-`WAMBRIDGE PLAYING`, that is 1.5 s recovered, and if it does not, the reason finally gets
-written down.
+**The older figure of 13.4 s is superseded, not merely refined.** It came from two data
+points taken 2026-08-02 on a much older build with `startup_silence=1500`, over unrecorded
+material. The silence explains 1.5 s of the gap and nothing recorded explains the rest.
+The 7-8 s once attributed to the speaker was a subtraction remainder, never a measurement,
+and it did not survive: with the total at 6.7 s and the host holding 3.9 s of it there is no
+seven-second speaker left to point at. The owner's report that Samsung's own clients felt
+clearly faster than 13 s was the correct instinct - most of that delay was ours.
 
-A caution about the 7-8 s attributed to the speaker: it was never measured directly. It is
-what remains after subtracting the terms that can be counted, so it also absorbs every
-mistake in the others. The owner reports that Samsung's own PC and Android clients felt
-slower than instant but clearly faster than this, which is circumstantial evidence that part
-of that remainder belongs to how this project feeds the speaker rather than to the speaker
-itself. Treat the figure as an upper bound on the untouchable part, not a measurement.
+**The prebuffer is bounded by bytes, at least partly. Confirmed from both directions.**
 
-The prebuffer is not a duration. Measured 2026-08-02 by running the same test at MP3 320 kbps
-against FLAC's 700-900: the delay grew from about 13.4 s to about 16.9 s.
+Thinner is slower: measured 2026-08-02 at MP3 320 kbps against FLAC's 700-900, the delay
+grew from about 13.4 s to about 16.9 s. A buffer holding a fixed number of bytes holds
+proportionally more seconds of a smaller stream.
 
-A buffer holding a fixed number of bytes holds proportionally **more** seconds of a smaller
-stream, so a lower bitrate lengthens the delay rather than shortening it. The direction
-matches; the size does not. A pure byte count would predict roughly two and a half times,
-and the measurement shows about one and a third, so something else is bounded as well.
+Fatter is faster: measured 2026-08-08, WAV at a constant 1411 kbps beat FLAC on every
+passage of the same source. The clearest evidence is the variance rather than the mean.
+FLAC's bitrate rides the material, so on an uneven mix the delay breathes with it - 2.0 s of
+spread, with the worst reading in the quietest passage where the stream went thin. WAV's
+constant rate halved that spread.
 
-The useful conclusion is negative and firm: **lowering the bitrate makes the delay worse and
-is not a lever.** Raising it might trim two or three seconds off thirteen, which does not buy
-responsiveness. Controls that must feel immediate belong on the `55001` path regardless.
+The size still does not match a pure byte count. MP3 predicted roughly two and a half times
+and gave one and a third; WAV predicted several seconds and gave one. Something else is
+bounded as well, and it has not been identified.
+
+Practical conclusion: bitrate is a real lever worth about a second and a steadier delay, not
+a fix for responsiveness. Controls that must feel immediate belong on the `55001` path
+regardless.
 
 ### Foobar-facing accounting
 
@@ -254,6 +268,14 @@ MP4 requires Range support. FLAC does not require transcoding, including the mea
 
 Never fake a length. Use chunked or close-delimited output.
 
+The `wav` profile is the one place where a length still appears, inside the payload rather
+than the HTTP response: FFmpeg cannot seek back on a pipe, so both the RIFF and the `data`
+size fields are `0xFFFFFFFF`. **The M5 accepts it and treats the stream as endless**,
+measured 2026-08-08 over a 19-minute source through `SetUrlPlayback`: playback ran at a
+median 1.00x, crossed into the next track without a restart, survived a seek and stopped
+cleanly. The in-payload placeholder is therefore not the same trap as an oversized fake
+HTTP `Content-Length`, which this firmware does punish.
+
 ## Volume
 
 The tested firmware uses raw steps `0..30`. Values above 30 are silently clamped to maximum
@@ -267,7 +289,7 @@ Start hardware tests at step `3` or lower.
 
 `SetVolume` on the shared control connection changes the speaker within about a second,
 measured while a stream was playing. A host-side gain applied to PCM on its way out reaches
-the ear about 13 s later. Volume that should feel immediate belongs on this path, and a
+the ear about six seconds later. Volume that should feel immediate belongs on this path, and a
 matched `result="ng"` for `SetVolume` must be surfaced: startup mutes the speaker on purpose,
 so a rejected unmute leaves it silent while every other signal says it is playing.
 
@@ -318,8 +340,8 @@ without evidence from different firmware.
 - A reliable URL/PCM speaker event that always corresponds to audible start.
 - What bounds the speaker's prebuffer. It is not a duration, and it is not a plain byte
   count either; a lower bitrate lengthened the delay by less than the bitrate ratio.
-- Whether pause carries the same ~13 s delay. It writes silence into the same pipe, so it
-  probably does, but that has not been measured.
+- How small the host buffer can get. Its 4.0 s floor is the largest single term of the six
+  seconds and was chosen, not measured; nothing has tested where the pipe starts to starve.
 - Whether the M5 returns to standby by itself after a clean stop, and if so whether it arms
   a sleep timer to do it. One sample taken hours after a hard-killed session read
   `sleepoption=off` with the LED still on, which argues against self-arming but does not

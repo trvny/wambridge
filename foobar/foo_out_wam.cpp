@@ -159,12 +159,13 @@ std::wstring quoted(const std::wstring& value) {
 
 // Formats the helper accepts. Anything else would reach its CLI as a rejected
 // argument and take the whole stream down with it.
-constexpr const wchar_t* kStreamFormats[] = {L"flac", L"mp3"};
+constexpr const wchar_t* kStreamFormats[] = {L"flac", L"wav", L"mp3"};
 constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 
 // Milliseconds of silence FFmpeg prepends to the stream. Straight added delay
-// on a path already about 13 s long; kept configurable so the hardware can say
-// whether it is still load-bearing.
+// on a path about 6 s long; kept configurable so the hardware can say whether
+// it is still load-bearing. Measured at 0 on 2026-08-08: startup still reaches
+// WAMBRIDGE PLAYING.
 constexpr int kDefaultStartupSilenceMs = 1500;
 constexpr int kMaximumStartupSilenceMs = 10000;
 
@@ -271,6 +272,16 @@ Settings load_settings() {
     auto helper = environment_value(L"WAMBRIDGE_PCM");
     if (helper.empty()) {
         const auto configured = ini_value(L"helper", L"", path);
+        if (!configured.empty() && !file_exists(configured)) {
+            // Otherwise a developer measures the bundled binary while believing
+            // a custom build is under test, which makes the numbers describe
+            // something nobody chose. The artifact has to stay identifiable.
+            console::printf(
+                "%s: helper %s does not exist, using the bundled one",
+                kComponentName,
+                narrowed(configured).c_str()
+            );
+        }
         helper = configured.empty() || !file_exists(configured)
             ? bundled_helper_path()
             : configured;
@@ -279,9 +290,10 @@ Settings load_settings() {
     auto device = environment_value(L"WAMBRIDGE_DEVICE");
     if (device.empty()) device = ini_value(L"device", L"M5", path);
 
-    // FLAC unless asked otherwise. The knob exists to measure whether the
-    // speaker prebuffers bytes or seconds: at 320 kbps against FLAC's 700-900
-    // the delay either shrinks with the bitrate or does not move at all.
+    // FLAC unless asked otherwise. The prebuffer is partly bounded by bytes:
+    // mp3 at 320 kbps measured 16.9 s against FLAC's 13.4 s, because a thinner
+    // stream fits more seconds into the same space. wav pulls the same lever
+    // the other way and has not been heard on hardware yet.
     auto format = environment_value(L"WAMBRIDGE_FORMAT");
     if (format.empty()) format = ini_value(L"format", L"", path);
     bool known = false;
@@ -344,9 +356,10 @@ Settings load_settings() {
             startupSilenceMs = static_cast<int>(parsed);
         } else {
             console::printf(
-                "%s: startup_silence %s is out of range, using %u ms",
+                "%s: startup_silence %s is not a number in 0..%u, using %u ms",
                 kComponentName,
                 narrowed(rawSilence).c_str(),
+                static_cast<unsigned>(kMaximumStartupSilenceMs),
                 static_cast<unsigned>(kDefaultStartupSilenceMs)
             );
         }
