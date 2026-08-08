@@ -8,9 +8,9 @@ authors:
   - name: dependabot[bot]
   - name: actions-user
   - name: claude
+  - name: claudiusz69[bot]
   - name: codex
   - name: chatgpt
-  - name: co-tam[bot]
   - name: chatgpt-codex-connector[bot]
 identifiers:
   - type: url
