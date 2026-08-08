@@ -150,8 +150,9 @@ constexpr const wchar_t* kStreamFormats[] = {L"flac", L"wav", L"mp3"};
 constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 
 // Milliseconds of silence FFmpeg prepends to the stream. Straight added delay
-// on a path already about 13 s long; kept configurable so the hardware can say
-// whether it is still load-bearing.
+// on a path about 6 s long; kept configurable so the hardware can say whether
+// it is still load-bearing. Measured at 0 on 2026-08-08: startup still reaches
+// WAMBRIDGE PLAYING.
 constexpr int kDefaultStartupSilenceMs = 1500;
 constexpr int kMaximumStartupSilenceMs = 10000;
 

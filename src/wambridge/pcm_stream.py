@@ -105,7 +105,7 @@ class PcmAudioStreamServer(AudioStreamServer):
         # See "Transport and pacing" in docs/WAM_PROTOCOL.md.
         #
         # The leading silence is pure added delay: every millisecond here is a
-        # millisecond further from the ear, on a path already about 13 s long.
+        # millisecond further from the ear, on a path about 6 s long.
         # It carries no comment anywhere and has been present since the initial
         # import, so whether it is still load-bearing is a question for the
         # hardware, not for reading. At 0 the filter is dropped entirely rather

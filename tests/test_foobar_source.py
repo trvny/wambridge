@@ -229,9 +229,10 @@ class FoobarSourceTests(TestCase):
         self.assertIn('line.rfind("WAMBRIDGE ERROR ", 0)', source)
 
     def test_startup_silence_is_configurable(self) -> None:
-        # 1.5 s of the measured ~13.4 s delay is silence this project prepends
-        # itself. It carries no comment and has been there since the initial
-        # import, so whether it is still load-bearing is a hardware question.
+        # The default prepends 1.5 s of silence to a path measured at about 6 s.
+        # It carried no comment and had been there since the initial import;
+        # 0 was confirmed on hardware on 2026-08-08 and startup still reached
+        # WAMBRIDGE PLAYING.
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertIn("constexpr int kDefaultStartupSilenceMs = 1500;", source)
