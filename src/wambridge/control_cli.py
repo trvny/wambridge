@@ -311,9 +311,13 @@ def standby(
         # Not fatal: the mute and stop both landed, and the caller may simply
         # have asked while something else was still streaming. Saying so is the
         # point - a silent standby is how the speaker stopped sleeping before.
+        # State the reading, not a prediction. What happens to the speaker's
+        # power once these close is unmeasured, and promising sleep would send
+        # the user waiting for a transition that may never come instead of
+        # reaching for the sleep timer, which is the only known power lever.
         lines.append(
-            f"warning={held} connection(s) still attached to the speaker; "
-            "it will not sleep on its own until they close"
+            f"warning={held} local connection(s) still attached to the speaker; "
+            "standby sends no power command, so it stays awake either way"
         )
     return lines
 
