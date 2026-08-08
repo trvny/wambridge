@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          persist-credentials: false
+          ref: ci/uv-python314
 
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9
         with:
@@ -48,14 +48,17 @@ jobs:
           uv sync --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Archive generated lockfile
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: wambridge-uv-lock
-          path: uv.lock
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit lockfile
+        shell: pwsh
+        run: |
+          git add uv.lock
+          if (git diff --cached --quiet) { exit 0 }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Lock Wambridge dependencies"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:ci/uv-python314
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check Python
         shell: pwsh
