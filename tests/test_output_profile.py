@@ -76,6 +76,32 @@ class WavProfileTests(unittest.TestCase):
         self.assertEqual(self.profile.content_type, "audio/wav")
 
 
+class Wav24ProfileTests(unittest.TestCase):
+    """The same lever as wav, pulled harder, and untried on hardware."""
+
+    def setUp(self) -> None:
+        self.profile = OUTPUT_PROFILES["wav24"]
+
+    def test_serves_24_bit_pcm_at_the_confirmed_rate(self) -> None:
+        args = self.profile.args_for(None)
+        self.assertEqual(args[args.index("-c:a") + 1], "pcm_s24le")
+        self.assertEqual(args[args.index("-ar") + 1], "44100")
+
+    def test_is_fatter_than_the_16_bit_profile(self) -> None:
+        # 44100 * 3 * 2 against 44100 * 2 * 2. The whole point is the byte rate.
+        self.assertEqual(44100 * 3 * 2 * 8 // 1000, 2116)
+        self.assertEqual(OUTPUT_PROFILES["wav"].ffmpeg_args.count("pcm_s24le"), 0)
+
+    def test_shares_the_wav_container(self) -> None:
+        self.assertEqual(self.profile.extension, "wav")
+        self.assertEqual(self.profile.content_type, "audio/wav")
+
+    def test_rate_is_fixed_like_the_16_bit_profile(self) -> None:
+        for rate in (None, 44100, 96000):
+            with self.subTest(rate=rate):
+                self.assertEqual(self.profile.args_for(rate).count("-ar"), 1)
+
+
 class Mp3ProfileTests(unittest.TestCase):
     def test_lossy_profile_keeps_its_fixed_rate(self) -> None:
         # MP3 is lossy and already resamples; nothing is gained by following
