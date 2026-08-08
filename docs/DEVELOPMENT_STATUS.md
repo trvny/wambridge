@@ -114,6 +114,25 @@ older build with `startup_silence=1500`, from two data points, on unrecorded mat
 The silence accounts for 1.5 s of the difference and nothing here accounts for the rest,
 so treat the older figure as history rather than as a term to subtract from.
 
+### The `wav` profile passed the physical checklist
+
+Same session, same 19-minute source, sampled at 1 Hz with the process tree and socket table
+beside beefweb. Every criterion in `AGENTS.md` measured rather than judged:
+
+| criterion | result |
+|---|---|
+| track at wall-clock speed | 300 samples, `rate` median **0.999**, min 0.966, max 1.037, **100% within 0.9-1.1x** |
+| stable seekbar | no excursion outside that band at any point |
+| second track | index 3 to 4 seamless: 1140.69 s to 0.99 s, tempo back at once, **no restart** |
+| seek | encoder retired and replaced in **under a second** while the helper's count never dropped; tempo back within ~2 s |
+| pause/resume | 18 s paused, both sockets stayed `Established`, helper and FFmpeg alive, resumed from the same position |
+| stop | 0 FFmpeg, 0 helper, no `Established` socket left |
+| leaks | FFmpeg and helper never above 1; free RAM 2.2-2.4 GB throughout |
+
+One honest gap: nobody was listening during these runs. The transport is proven; the absence
+of audible artefacts is not. `flac` therefore stays the default and `wav` stays opt-in until
+somebody has listened to a full track on it.
+
 `get_latency()` reports about 4 s. With `startup_silence=0` the host's own share is roughly
 that, so most of the remaining two to three seconds sits past anything the host counts:
 
@@ -217,13 +236,11 @@ Each of these cost real time and each is closed by measurement, not by argument.
 2. **Revisit the 4.0 s host buffer floor.** It was dismissed as "2-3 s of thirteen" and is
    now the largest single term of six. `clamp(bufferLength, 2.0, 30.0)` plus 2.0 is a choice,
    not a measurement, and nothing has tested what the floor can be before the pipe starves.
-3. **Finish the physical checklist for `wav`.** Delay is measured and the M5 does accept a
-   streamed WAV header whose two size fields are `0xFFFFFFFF` (2026-08-08). Still unheard: a
-   complete track, seek, a second track, pause/resume and clean shutdown on this profile. It
-   stays opt-in until those pass. Compare only through the foobar path - the file and URL
-   paths add FFmpeg `-re` and their own fixed startup silence - and only over identical
-   passages of identical material, because FLAC's bitrate rides the music and the delay with
-   it.
+3. **Decide whether `startup_silence` should default to 0.** It has now run at 0 for a whole
+   session on hardware, repeatedly reaching `WAMBRIDGE PLAYING`, and it is 1.5 s of pure
+   delay on a path of six. The default is still 1500, so every stock installation pays it and
+   the measured figures above do not describe one. Nobody ever recorded what the silence was
+   for, which is the only reason it is still there.
 4. **Route pause onto `55001`** (`SetPlaybackControl pause`/`resume`), then stop, seek and
    skip. Same shape as the volume fix. Baseline measured 2026-08-08: about 5 s to fall
    silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and

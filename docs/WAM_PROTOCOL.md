@@ -270,10 +270,11 @@ Never fake a length. Use chunked or close-delimited output.
 
 The `wav` profile is the one place where a length still appears, inside the payload rather
 than the HTTP response: FFmpeg cannot seek back on a pipe, so both the RIFF and the `data`
-size fields are `0xFFFFFFFF`. That is the streaming-WAV convention, but whether this
-firmware reads it as endless or as a real 4 GiB length is **not measured**. WAV 44.1/16 is
-confirmed only through share playback of a complete file, never as a `SetUrlPlayback`
-stream.
+size fields are `0xFFFFFFFF`. **The M5 accepts it and treats the stream as endless**,
+measured 2026-08-08 over a 19-minute source through `SetUrlPlayback`: playback ran at a
+median 1.00x, crossed into the next track without a restart, survived a seek and stopped
+cleanly. The in-payload placeholder is therefore not the same trap as an oversized fake
+HTTP `Content-Length`, which this firmware does punish.
 
 ## Volume
 
