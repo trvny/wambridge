@@ -148,6 +148,20 @@ class FoobarSourceTests(TestCase):
         # still turns a listener above it down.
         self.assertIn('command += L" --max-start-volume " +', source)
 
+    def test_queue_capacity_is_configurable(self) -> None:
+        # Capacity is delay on this path: the queue measured 3.79-3.99 s full of
+        # a 4.0 s capacity, so everything allowed here is heard that much later.
+        # The 2 s that used to be hardcoded was chosen, never measured, and it
+        # is the largest single share of the six seconds that reach the ear.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kDefaultBufferExtraMs = 2000;", source)
+        self.assertIn('environment_value(L"WAMBRIDGE_BUFFER_EXTRA")', source)
+        self.assertIn('ini_value(L"buffer_extra", L"", path)', source)
+        self.assertIn("m_settings.bufferExtraMs / 1000.0", source)
+        # The old constant must be gone, or the knob would do nothing.
+        self.assertNotIn("(m_bufferLength + 2.0)", source)
+
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
         # Every foobar source is checked, not just the output adapter: the
