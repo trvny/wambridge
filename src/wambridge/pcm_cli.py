@@ -13,11 +13,14 @@ from typing import BinaryIO, TextIO
 from .cli import choose_start_volume, recovers_from_silence, volume_level
 from .cli_common import (
     DEFAULT_MAX_START_VOLUME,
+    RAW_MAX_VOLUME,
+    RAW_MIN_VOLUME,
     add_target_arguments,
     bounded_int,
     configure_logging,
     select_speaker,
 )
+from .control_channel import ControlChannel
 from .discovery import local_ip_for
 from .identity import load_client_uuid
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
@@ -535,8 +538,17 @@ def run(
                 flush=True,
             )
 
-            while not server.request_finished.wait(timeout=1):
-                watcher.raise_if_failed()
+            # Only now: before this point the startup sequence owns the volume,
+            # and a level arriving mid-handshake would fight the unmute that
+            # PLAYING depends on.
+            with ControlChannel(
+                watcher.set_volume,
+                minimum_volume=RAW_MIN_VOLUME,
+                maximum_volume=RAW_MAX_VOLUME,
+            ) as control:
+                print(control.announcement, file=output_stream, flush=True)
+                while not server.request_finished.wait(timeout=1):
+                    watcher.raise_if_failed()
             watcher.raise_if_failed()
         if server.error:
             raise StreamError(server.error)

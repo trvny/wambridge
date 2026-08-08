@@ -1,8 +1,15 @@
+// winsock2 before windows.h, or windows.h pulls in the 1.1 headers and the
+// two sets of declarations collide.
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include <windows.h>
 #include <mmsystem.h>
 #include <objidl.h>
 
 #include <foobar2000/SDK/foobar2000.h>
+
+#include "wam_control.h"
 
 #include <algorithm>
 #include <atomic>
@@ -25,6 +32,16 @@ constexpr char kComponentName[] = "WAM Bridge Output";
 constexpr char kOutputName[] = "WAM Bridge";
 constexpr char kDeviceName[] = "Samsung M5 (Wi-Fi)";
 constexpr size_t kWriteBatchFrames = 4096;
+// The M5's measured raw scale. Step 30 is its maximum and is very loud, so the
+// slider maps onto 0..volume_max rather than onto the whole range: a fresh
+// foobar sits at 0 dB, and that must not mean "as loud as the speaker goes".
+// Also used to lift the helper's start-volume clamp when a helper is being
+// replaced mid-session rather than started.
+constexpr int kMaximumRawVolume = 30;
+constexpr int kDefaultVolumeMax = 10;
+// Below this the slider is treated as silence. Amplitude at -60 dB is 0.001,
+// which rounds to step 0 for every ceiling in range anyway.
+constexpr double kSilenceDecibels = -60.0;
 // One counter line per second, long enough to cover a whole track. The clock
 // terms are the only way to tell which one runs away; a physical run measured
 // foobar advancing at a median 11x with no term ever observed.
@@ -190,6 +207,8 @@ constexpr const wchar_t* kKnownIniKeys[] = {
     L"diagnostics",
     L"startup_silence",
     L"buffer_extra",
+    L"hardware_volume",
+    L"volume_max",
 };
 
 void report_unknown_ini_keys(const std::wstring& path) {
@@ -264,9 +283,6 @@ void report_unknown_ini_keys(const std::wstring& path) {
         );
     }
 }
-// The M5's own scale. Used to disable the helper's start-volume clamp when a
-// helper is being replaced mid-session rather than starting one.
-constexpr int kMaximumRawVolume = 30;
 
 struct Settings {
     std::wstring helper;
@@ -276,7 +292,14 @@ struct Settings {
     bool diagnostics = false;
     int startupSilenceMs = kDefaultStartupSilenceMs;
     int bufferExtraMs = kDefaultBufferExtraMs;
+    bool hardwareVolume = false;
+    int volumeMax = kDefaultVolumeMax;
 };
+
+bool truthy(const std::wstring& value) {
+    return value == L"1" || value == L"true" || value == L"yes" ||
+        value == L"on";
+}
 
 Settings load_settings() {
     const auto path = config_path();
@@ -351,9 +374,28 @@ Settings load_settings() {
     if (rawDiagnostics.empty()) {
         rawDiagnostics = ini_value(L"diagnostics", L"", path);
     }
-    const bool diagnostics =
-        rawDiagnostics == L"1" || rawDiagnostics == L"true" ||
-        rawDiagnostics == L"yes" || rawDiagnostics == L"on";
+    const bool diagnostics = truthy(rawDiagnostics);
+
+    // Off unless asked for as well. The host gain is heard about thirteen
+    // seconds late, but it is also the only volume that works when the speaker
+    // is unreachable, so switching the slider over stays a deliberate choice.
+    auto rawHardware = environment_value(L"WAMBRIDGE_HARDWARE_VOLUME");
+    if (rawHardware.empty()) {
+        rawHardware = ini_value(L"hardware_volume", L"", path);
+    }
+    const bool hardwareVolume = truthy(rawHardware);
+
+    int volumeMax = kDefaultVolumeMax;
+    auto rawMax = environment_value(L"WAMBRIDGE_VOLUME_MAX");
+    if (rawMax.empty()) rawMax = ini_value(L"volume_max", L"", path);
+    if (!rawMax.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawMax.c_str(), &end, 10);
+        if (end != rawMax.c_str() && *end == L'\0' && parsed >= 1 &&
+            parsed <= kMaximumRawVolume) {
+            volumeMax = static_cast<int>(parsed);
+        }
+    }
 
     int startupSilenceMs = kDefaultStartupSilenceMs;
     auto rawSilence = environment_value(L"WAMBRIDGE_STARTUP_SILENCE");
@@ -409,7 +451,89 @@ Settings load_settings() {
         diagnostics,
         startupSilenceMs,
         bufferExtraMs,
+        hardwareVolume,
+        volumeMax,
     };
+}
+
+// The one socket the component keeps to a running helper's control listener.
+//
+// Namespace scope because the slider dispatcher lives in wam_menu.cpp, a
+// separate translation unit, and reaches it through wam_control.h. Guarded
+// rather than atomic: connecting, sending and closing must not interleave.
+std::mutex g_controlMutex;
+SOCKET g_controlSocket = INVALID_SOCKET;
+
+// Read by the menu dispatcher through wam_control.h, which is a different
+// translation unit and has no access to the output's settings.
+std::atomic<bool> g_hardwareVolume{false};
+std::atomic<int> g_volumeMax{kDefaultVolumeMax};
+
+// Moves foobar's own slider. playback_control is a main-thread interface and
+// the dispatcher runs on its own thread, so the change is handed over rather
+// than made where it was decided.
+class SliderSync : public main_thread_callback {
+public:
+    explicit SliderSync(double decibels) : m_decibels(decibels) {}
+
+    void callback_run() override {
+        playback_control::get()->set_volume(static_cast<float>(m_decibels));
+    }
+
+private:
+    double m_decibels;
+};
+
+void close_control_socket_locked() {
+    if (g_controlSocket == INVALID_SOCKET) return;
+    shutdown(g_controlSocket, SD_BOTH);
+    closesocket(g_controlSocket);
+    g_controlSocket = INVALID_SOCKET;
+}
+
+// Connect to a loopback listener the helper announced, hand over its token and
+// keep the socket. Returns quietly on failure: a slider that cannot reach the
+// helper falls back to the control process, which is what it did before.
+bool open_control_socket(unsigned short port, const std::string& token) {
+    WSADATA data{};
+    // Reference counted per process, so calling it here is safe even though
+    // foobar has certainly started Winsock already.
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return false;
+
+    SOCKET handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (handle == INVALID_SOCKET) return false;
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(handle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        closesocket(handle);
+        return false;
+    }
+
+    // A blocked send must not hold the slider thread: the level is already
+    // stale by the time anything is that slow.
+    DWORD timeout = 1000;
+    setsockopt(
+        handle,
+        SOL_SOCKET,
+        SO_SNDTIMEO,
+        reinterpret_cast<const char*>(&timeout),
+        sizeof(timeout)
+    );
+
+    const std::string greeting = token + "\n";
+    if (send(handle, greeting.c_str(), static_cast<int>(greeting.size()), 0) !=
+        static_cast<int>(greeting.size())) {
+        closesocket(handle);
+        return false;
+    }
+
+    std::lock_guard lock(g_controlMutex);
+    close_control_socket_locked();
+    g_controlSocket = handle;
+    return true;
 }
 
 void close_handle(HANDLE& handle) {
@@ -424,7 +548,12 @@ public:
     WamOutput(const GUID&, double bufferLength, bool, t_uint32)
         : m_bufferLength(std::clamp(bufferLength, 2.0, 30.0)),
           m_settings(load_settings()),
-          m_worker(&WamOutput::worker_loop, this) {}
+          m_worker(&WamOutput::worker_loop, this) {
+        // Published for the menu dispatcher, which lives in another translation
+        // unit and has to know whether moving the slider is its business.
+        g_hardwareVolume.store(m_settings.hardwareVolume);
+        g_volumeMax.store(m_settings.volumeMax);
+    }
 
     ~WamOutput() {
         {
@@ -633,7 +762,50 @@ public:
     }
 
     void volume_set(double decibels) override {
-        m_gain.store(std::pow(10.0, decibels / 20.0));
+        if (!m_settings.hardwareVolume) {
+            m_gain.store(std::pow(10.0, decibels / 20.0));
+            return;
+        }
+        // Applying both would attenuate twice. The host gain is the one that
+        // arrives about thirteen seconds late, so it is the one that goes.
+        m_gain.store(1.0);
+        const int step = volume_step_for(decibels, m_settings.volumeMax);
+        m_lastVolumeStep.store(step);
+        wam::request_volume_step(step);
+    }
+
+    // foobar hands out dB, the M5 takes raw steps, and the slider has to feel
+    // even across its travel.
+    //
+    // This was linear in amplitude first, to match the host gain it replaces.
+    // On hardware that put four fifths of the slider into silence: at -20 dB
+    // the amplitude is 0.1, which against a ceiling of 10 is step 1, and
+    // everything below it is step 0. Eighty decibels of travel on two steps.
+    //
+    // Linear in decibels instead, over the usable range. That is how a volume
+    // control is normally scaled and it spreads the ceiling across the whole
+    // slider rather than the top few dB.
+    //
+    // Whether the M5's own steps are even in dB is still NOT measured. If they
+    // turn out not to be, this needs the speaker's curve, not a different line.
+    static int volume_step_for(double decibels, int ceiling) {
+        if (decibels <= kSilenceDecibels) return 0;
+        const double span = -kSilenceDecibels;
+        const double fraction = (decibels - kSilenceDecibels) / span;
+        const long step = std::lround(fraction * static_cast<double>(ceiling));
+        // Above the silence floor the slider is asking for something audible,
+        // so it never rounds back down to a muted speaker.
+        return static_cast<int>(std::max<long>(1, std::min<long>(ceiling, step)));
+    }
+
+    // The inverse, for putting the slider where a menu action left the speaker.
+    // Step 0 is the floor rather than foobar's -100 dB: the slider only has to
+    // agree about what the speaker is doing, not reproduce its silence exactly.
+    static double decibels_for_step(int step, int ceiling) {
+        if (ceiling <= 0 || step <= 0) return kSilenceDecibels;
+        const double fraction =
+            static_cast<double>(std::min(step, ceiling)) / static_cast<double>(ceiling);
+        return kSilenceDecibels + fraction * -kSilenceDecibels;
     }
 
 private:
@@ -642,6 +814,39 @@ private:
         running,
         exited,
     };
+
+    // "<port> <token>" from WAMBRIDGE CONTROL_PORT. A helper that is no longer
+    // the current one must not take over the socket, hence the generation check.
+    void connect_control_channel(const std::string& arguments, uint64_t generation) {
+        {
+            std::lock_guard lock(m_mutex);
+            if (generation != m_generation || m_shutdown) return;
+        }
+        const size_t space = arguments.find(' ');
+        if (space == std::string::npos) return;
+
+        const std::string portText = arguments.substr(0, space);
+        const std::string token = arguments.substr(space + 1);
+        if (token.empty()) return;
+
+        unsigned long port = 0;
+        try {
+            port = std::stoul(portText);
+        } catch (const std::exception&) {
+            return;
+        }
+        if (port == 0 || port > 65535) return;
+
+        if (!open_control_socket(static_cast<unsigned short>(port), token)) {
+            // Only %u and %s: console::printf is pfc's formatter.
+            console::printf(
+                "%s: could not reach the helper's control channel on port %u; "
+                "volume falls back to a control process",
+                kComponentName,
+                static_cast<unsigned>(port)
+            );
+        }
+    }
 
     void retire_stream_locked() {
         m_queue.clear();
@@ -889,24 +1094,35 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
-        // Only until some helper of this session has reported PLAYING, which is
-        // the helper saying it applied a level. A seek or a format change
-        // restarts the helper mid-session, and passing the configured level
-        // again would overwrite whatever the listener has since set from the
-        // menu: measured on the M5 on 2026-08-08, volume walked up to 11, one
-        // seek, "Speaker volume is 11; starting PCM playback at 3".
+        // Three rules, in the order that makes them agree.
         //
-        // The flag deliberately does not follow the spawn. A helper replaced
-        // before it reached PLAYING may never have applied anything, so its
-        // successor has to start over rather than inherit a raised clamp.
-        if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
+        // With the slider routed, the slider is the answer: the helper mutes
+        // for startup and restores this level afterwards, so restoring the INI
+        // value would land the speaker somewhere the slider does not point. A
+        // physical run started the slider at maximum, the helper restored 3,
+        // and the first touch of the slider jumped the speaker to 10.
+        const int routed = m_lastVolumeStep.load();
+        if (m_settings.hardwareVolume && routed >= 0) {
+            command += L" --volume " + std::to_wstring(routed);
+        } else if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
+            // Otherwise the configured level, but only until some helper of
+            // this session has reported PLAYING - that line is the helper
+            // saying it applied one. A seek restarts the helper mid-session and
+            // passing the configured level again would overwrite whatever the
+            // listener has since set from the menu: measured on the M5 on
+            // 2026-08-08, volume walked up to 11, one seek, "Speaker volume is
+            // 11; starting PCM playback at 3".
+            //
+            // The flag deliberately does not follow the spawn. A helper
+            // replaced before it reached PLAYING may never have applied
+            // anything, so its successor starts over rather than inheriting a
+            // raised clamp.
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         } else if (m_startupVolumeApplied.load()) {
-            // The helper mutes for startup and restores afterwards, so it has to
-            // be told some level; without this it would restore the default
-            // clamp of 10 and a listener sitting at 15 would still be turned
-            // down by a seek. The safe clamp guards the start of a session, not
-            // the level the listener has just chosen during one.
+            // A replacement helper with no level still has to be told
+            // something, because it mutes for startup and restores afterwards.
+            // Without this it would restore its own default clamp of 10 and a
+            // listener sitting above that would still be turned down by a seek.
             command += L" --max-start-volume " +
                 std::to_wstring(kMaximumRawVolume);
         }
@@ -1126,6 +1342,8 @@ private:
                         false,
                         true
                     );
+                } else if (line.rfind("WAMBRIDGE CONTROL_PORT ", 0) == 0) {
+                    connect_control_channel(line.substr(23), generation);
                 } else if (line.rfind("WAMBRIDGE ERROR ", 0) == 0) {
                     set_failure_if_current(line.substr(16), generation);
                 }
@@ -1388,6 +1606,13 @@ private:
     void stop_child() {
         m_childStopping.store(true);
         m_helperReady.store(false);
+        // Before the process goes: a socket to a helper that is exiting would
+        // accept a level and drop it, and the caller would never learn to fall
+        // back to the control process.
+        {
+            std::lock_guard lock(g_controlMutex);
+            close_control_socket_locked();
+        }
         const DWORD gracefulWait = m_childReachedPlaying.load()
             ? kActiveShutdownGraceMs
             : kStartupShutdownGraceMs;
@@ -1459,6 +1684,9 @@ private:
     // starts and torn down when it stops, so a seek cannot clear it.
     std::atomic<bool> m_startupVolumeApplied{false};
     std::atomic<double> m_gain{1.0};
+    // -1 until foobar reports the slider position, which it does before the
+    // first stream starts. Only meaningful when hardwareVolume is on.
+    std::atomic<int> m_lastVolumeStep{-1};
     std::thread m_worker;
 
     mutable std::mutex m_childMutex;
@@ -1472,6 +1700,44 @@ private:
 output_factory_t<WamOutput> g_outputFactory;
 
 }  // namespace
+
+namespace wam {
+
+bool send_volume_over_helper(int step) {
+    const std::string command = "volume " + std::to_string(step) + "\n";
+    std::lock_guard lock(g_controlMutex);
+    if (g_controlSocket == INVALID_SOCKET) return false;
+    const int sent = send(
+        g_controlSocket,
+        command.c_str(),
+        static_cast<int>(command.size()),
+        0
+    );
+    if (sent != static_cast<int>(command.size())) {
+        // A half-written command would arrive as a malformed line and be
+        // ignored by the helper, so the socket is retired rather than trusted.
+        // The caller falls back to spawning the control process.
+        close_control_socket_locked();
+        return false;
+    }
+    return true;
+}
+
+void note_speaker_step(int step) {
+    if (!g_hardwareVolume.load()) return;
+    const int ceiling = g_volumeMax.load();
+    if (step < 0 || ceiling <= 0) return;
+    // Same mapping the slider uses, run backwards, so the round trip is a
+    // fixed point: the slider position this produces maps to the same step and
+    // the two cannot chase each other.
+    main_thread_callback_manager::get()->add_callback(
+        new service_impl_t<SliderSync>(
+            WamOutput::decibels_for_step(step, ceiling)
+        )
+    );
+}
+
+}  // namespace wam
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",

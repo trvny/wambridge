@@ -1,0 +1,188 @@
+"""A loopback control input for the PCM helper.
+
+The helper's stdin carries PCM and its stdout carries the protocol, so there is
+no way for the component to say anything to a running helper. That gap is why
+every volume change from the foobar UI has to spawn `wambridge-control.exe`,
+which opens a second TCP connection to port 55001 beside the persistent one
+`pcm_cli` already owns - measured on 2026-08-08 at four connections per single
+menu press, half of them re-verifying the identity of a speaker the helper is
+already talking to.
+
+This adds the missing direction: a listener bound to the loopback interface,
+announced on the existing stdout protocol, that turns short text commands into
+calls on the connection the helper already holds. Nothing new reaches the
+speaker's network port.
+"""
+
+from __future__ import annotations
+
+import logging
+import secrets
+import socket
+import threading
+from collections.abc import Callable
+
+LOGGER = logging.getLogger(__name__)
+
+MAX_COMMAND_BYTES = 256
+"""A command is a short ASCII line. Anything longer is not one of ours."""
+
+ACCEPT_TIMEOUT = 0.5
+"""How often the accept loop checks whether the session is shutting down."""
+
+
+class ControlChannel:
+    """Serve volume commands to one local client over the loopback interface."""
+
+    def __init__(
+        self,
+        set_volume: Callable[[int], None],
+        *,
+        minimum_volume: int = 0,
+        maximum_volume: int = 30,
+    ) -> None:
+        self._set_volume = set_volume
+        self._minimum_volume = minimum_volume
+        self._maximum_volume = maximum_volume
+        # Loopback only. This accepts commands that move a speaker in someone's
+        # room, so it has no business being reachable from the network, and the
+        # token keeps other local processes from driving it by guessing a port.
+        self._server = socket.create_server(("127.0.0.1", 0), backlog=1)
+        self._server.settimeout(ACCEPT_TIMEOUT)
+        self.token = secrets.token_urlsafe(18)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._client: socket.socket | None = None
+        self._client_lock = threading.Lock()
+
+    @property
+    def port(self) -> int:
+        """Return the bound loopback port."""
+        return int(self._server.getsockname()[1])
+
+    @property
+    def announcement(self) -> str:
+        """Return the stdout protocol line that tells the component where to go."""
+        return f"WAMBRIDGE CONTROL_PORT {self.port} {self.token}"
+
+    def start(self) -> None:
+        """Begin accepting the single control client."""
+        self._thread = threading.Thread(
+            target=self._accept_loop,
+            name="wambridge-control-channel",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def close(self) -> None:
+        """Stop serving and release the socket."""
+        self._stop.set()
+        with self._client_lock:
+            client = self._client
+            self._client = None
+        if client is not None:
+            _shutdown_quietly(client)
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2)
+        self._server.close()
+
+    def __enter__(self) -> ControlChannel:
+        self.start()
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def _accept_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                client, _address = self._server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return  # the socket was closed under us by close()
+            with self._client_lock:
+                previous = self._client
+                self._client = client
+            if previous is not None:
+                # One client at a time: the component reconnects when its helper
+                # is replaced, and a stale socket would keep answering.
+                _shutdown_quietly(previous)
+            # In its own thread, or accepting the replacement would have to wait
+            # for the connection it is replacing to end first.
+            threading.Thread(
+                target=self._serve,
+                args=(client,),
+                name="wambridge-control-client",
+                daemon=True,
+            ).start()
+
+    def _serve(self, client: socket.socket) -> None:
+        try:
+            client.settimeout(ACCEPT_TIMEOUT)
+            with client:
+                # One reader for the whole connection. Authenticating from a
+                # separate one dropped whatever had already arrived behind the
+                # token, and a component that sends both in the same write is
+                # exactly what this is for.
+                lines = _read_lines(client, self._stop)
+                token = next(lines, None)
+                # compare_digest, because this is a secret.
+                if token is None or not secrets.compare_digest(token, self.token):
+                    LOGGER.warning("Control client failed authentication")
+                    return
+                for line in lines:
+                    self._dispatch(line)
+        except OSError:
+            LOGGER.debug("Control client disconnected", exc_info=True)
+
+    def _dispatch(self, line: str) -> None:
+        command, _, argument = line.partition(" ")
+        if command != "volume":
+            LOGGER.warning("Ignoring unknown control command %r", command)
+            return
+        try:
+            level = int(argument)
+        except ValueError:
+            LOGGER.warning("Ignoring volume command with argument %r", argument)
+            return
+        if not self._minimum_volume <= level <= self._maximum_volume:
+            LOGGER.warning("Ignoring out-of-range volume %s", level)
+            return
+        try:
+            self._set_volume(level)
+        except Exception:  # helper boundary: a failed command is not fatal
+            # The stream matters more than the command. A rejected SetVolume
+            # must not take playback down with it.
+            LOGGER.warning("Control volume %s failed", level, exc_info=True)
+
+
+def _shutdown_quietly(client: socket.socket) -> None:
+    try:
+        client.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        client.close()
+    except OSError:
+        pass
+
+
+def _read_lines(client: socket.socket, stop: threading.Event):
+    """Yield newline-delimited commands, bounded so a peer cannot exhaust memory."""
+    buffer = b""
+    while not stop.is_set():
+        try:
+            chunk = client.recv(MAX_COMMAND_BYTES)
+        except TimeoutError:
+            continue
+        if not chunk:
+            return
+        buffer += chunk
+        while b"\n" in buffer:
+            raw, _, buffer = buffer.partition(b"\n")
+            yield raw.decode("ascii", errors="replace").strip()
+        if len(buffer) > MAX_COMMAND_BYTES:
+            # No newline in a full command's worth of bytes: not our protocol.
+            LOGGER.warning("Control client sent an oversized line")
+            return

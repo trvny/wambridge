@@ -142,8 +142,9 @@ class PcmCliTests(TestCase):
         )
 
         self.assertEqual(result, 0)
+        lines = protocol.getvalue().splitlines()
         self.assertEqual(
-            protocol.getvalue().splitlines(),
+            lines[:5],
             [
                 "WAMBRIDGE STREAM_REQUESTED",
                 "WAMBRIDGE ENCODER_STARTED",
@@ -152,6 +153,11 @@ class PcmCliTests(TestCase):
                 "WAMBRIDGE PLAYING volume=4",
             ],
         )
+        # The port and token are fresh per session, so only the shape is pinned.
+        # It has to come after PLAYING: before that the startup sequence owns
+        # the volume and a level arriving mid-handshake fights the unmute.
+        self.assertRegex(lines[5], r"^WAMBRIDGE CONTROL_PORT \d+ \S+$")
+        self.assertEqual(len(lines), 6)
         self.assertEqual(len(FakePlaybackWatcher.instances), 1)
         watcher = FakePlaybackWatcher.instances[0]
         self.assertTrue(watcher.armed)
@@ -290,8 +296,9 @@ class PcmCliTests(TestCase):
             )
 
         self.assertEqual(result, 0)
+        lines = protocol.getvalue().splitlines()
         self.assertEqual(
-            protocol.getvalue().splitlines(),
+            lines[:5],
             [
                 "WAMBRIDGE STREAM_REQUESTED",
                 "WAMBRIDGE ENCODER_STARTED",
@@ -300,6 +307,11 @@ class PcmCliTests(TestCase):
                 "WAMBRIDGE PLAYING volume=4",
             ],
         )
+        # The port and token are fresh per session, so only the shape is pinned.
+        # It has to come after PLAYING: before that the startup sequence owns
+        # the volume and a level arriving mid-handshake fights the unmute.
+        self.assertRegex(lines[5], r"^WAMBRIDGE CONTROL_PORT \d+ \S+$")
+        self.assertEqual(len(lines), 6)
 
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)

@@ -5,13 +5,17 @@
 
 #include <foobar2000/SDK/foobar2000.h>
 
+#include "wam_control.h"
+
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cwchar>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -272,8 +276,14 @@ std::string compact_output(std::string output) {
     return output;
 }
 
+// The slider is dragged, not clicked. Sending every intermediate level would
+// spawn a control helper per pixel and flood the shared 55001 port, so the
+// dispatcher keeps only the newest pending level and spaces sends out.
+constexpr auto kVolumeSendInterval = std::chrono::milliseconds(250);
+
 struct ControlAction {
     std::wstring name;
+    std::optional<int> level;
 };
 
 std::string action_label(const std::wstring& action) {
@@ -308,6 +318,17 @@ public:
         console::printf("%s: queued %s", kComponentName, label.c_str());
     }
 
+    // Replaces any level that has not been sent yet. Deliberately silent: one
+    // console line per slider position would be thousands during a drag.
+    void request_volume(int step) {
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_shutdown) return;
+            m_pendingVolume = step;
+        }
+        m_cv.notify_one();
+    }
+
     void shutdown() {
         HANDLE process = nullptr;
         {
@@ -334,6 +355,10 @@ private:
         command += quoted(configured_device());
         command += L" --safe-volume ";
         command += std::to_wstring(configured_safe_volume());
+        if (action.level.has_value()) {
+            command += L" --level ";
+            command += std::to_wstring(*action.level);
+        }
         return command;
     }
 
@@ -383,6 +408,15 @@ private:
     }
 
     void run_action(const ControlAction& action) {
+        // The helper already holds a connection to the speaker's control port.
+        // Spawning a process to open a second one is what made this whole
+        // approach unsafe during playback, so it is now the fallback for when
+        // nothing is playing rather than the mechanism.
+        if (action.level.has_value() &&
+            wam::send_volume_over_helper(*action.level)) {
+            return;
+        }
+
         SECURITY_ATTRIBUTES security{};
         security.nLength = sizeof(security);
         security.bInheritHandle = TRUE;
@@ -542,6 +576,63 @@ private:
             shuttingDown = m_shutdown;
         }
         if (!shuttingDown) report_result(action, exitCode, output);
+        if (exitCode == 0) {
+            // Every volume action prints where the speaker ended up. Handing
+            // that back is what keeps the slider from disagreeing with the
+            // speaker after a menu press.
+            const int step = reported_volume(output);
+            if (step >= 0) wam::note_speaker_step(step);
+        }
+    }
+
+    // "volume=<n>" out of the control helper's own output, or -1 when the
+    // action did not report one.
+    static int reported_volume(const std::string& output) {
+        const std::string key = "volume=";
+        const size_t at = output.rfind(key);
+        if (at == std::string::npos) return -1;
+        size_t index = at + key.size();
+        int value = 0;
+        bool any = false;
+        while (index < output.size() && output[index] >= '0' && output[index] <= '9') {
+            value = value * 10 + (output[index] - '0');
+            index++;
+            any = true;
+        }
+        if (!any || value > kMaximumRawVolume) return -1;
+        return value;
+    }
+
+    // Menu actions win over slider levels: a queued emergency stop must not
+    // wait behind a drag, and a stale level is worth dropping anyway.
+    bool next_action_locked(std::unique_lock<std::mutex>& lock, ControlAction& out) {
+        for (;;) {
+            if (m_shutdown) return false;
+            if (!m_queue.empty()) {
+                out = std::move(m_queue.front());
+                m_queue.pop_front();
+                return true;
+            }
+            if (!m_pendingVolume.has_value()) {
+                m_cv.wait(lock);
+                continue;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            const auto ready = m_lastVolumeSent + kVolumeSendInterval;
+            if (now < ready) {
+                m_cv.wait_until(lock, ready);
+                continue;
+            }
+            const int step = *m_pendingVolume;
+            m_pendingVolume.reset();
+            // The slider passes through levels that map to a step already set;
+            // re-sending them would spend the control port on nothing.
+            if (step == m_lastSentVolume) continue;
+            m_lastSentVolume = step;
+            m_lastVolumeSent = now;
+            out = ControlAction{L"set-volume", step};
+            return true;
+        }
     }
 
     void worker_loop() {
@@ -549,12 +640,7 @@ private:
             ControlAction action;
             {
                 std::unique_lock lock(m_mutex);
-                m_cv.wait(lock, [this] {
-                    return m_shutdown || !m_queue.empty();
-                });
-                if (m_shutdown) return;
-                action = std::move(m_queue.front());
-                m_queue.pop_front();
+                if (!next_action_locked(lock, action)) return;
             }
             run_action(action);
         }
@@ -563,6 +649,9 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::deque<ControlAction> m_queue;
+    std::optional<int> m_pendingVolume;
+    int m_lastSentVolume = -1;
+    std::chrono::steady_clock::time_point m_lastVolumeSent{};
     std::thread m_worker;
     HANDLE m_process = nullptr;
     bool m_shutdown = false;
@@ -632,3 +721,13 @@ mainmenu_group_popup_factory g_wamMenuGroup(
 mainmenu_commands_factory_t<WamMenuCommands> g_wamMenuCommands;
 
 }  // namespace
+
+namespace wam {
+
+void request_volume_step(int step) {
+    control_dispatcher().request_volume(
+        std::max(0, std::min(kMaximumRawVolume, step))
+    );
+}
+
+}  // namespace wam

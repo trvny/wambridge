@@ -15,6 +15,12 @@ LOGGER = logging.getLogger("wambridge")
 DEFAULT_DISCOVERY_TIMEOUT = 4.0
 DEFAULT_MAX_START_VOLUME = 10
 
+# The M5's own scale, measured: values above 30 are silently clamped while still
+# returning success. Here rather than in one CLI because it is a fact about the
+# device, and more than one entry point now has to bound a level against it.
+RAW_MIN_VOLUME = 0
+RAW_MAX_VOLUME = 30
+
 
 def _range_message(label: str, minimum: float | None, maximum: float | None) -> str:
     if minimum is not None and maximum is not None:
