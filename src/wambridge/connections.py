@@ -1,14 +1,30 @@
-"""Count local TCP connections still held against the speaker.
+"""Count local TCP sockets still attached to the speaker.
 
 A leaked ``wambridge-pcm`` helper keeps both the persistent control socket and
-the speaker's audio pull alive, and the speaker will not fall asleep on its own
-while anything is attached. The speaker itself cannot answer this: ``MusicInfo``
-was measured returning mixed and stale state, so it is not usable as proof that
-nothing is streaming. The only trustworthy view is the local socket table.
+the speaker's audio pull alive. No idle power-down exists on this firmware, so
+whether releasing everything is enough to let the speaker sleep is unmeasured;
+a session that was killed rather than stopped is only the leading suspect for
+the M5 staying lit. The speaker cannot answer this itself either: ``MusicInfo``
+was measured returning mixed and stale state, so the local socket table is the
+only trustworthy view.
+
+``ESTABLISHED`` alone would miss the case this exists for. A hard-killed helper
+has its sockets closed by the kernel at once, so they sit in ``FIN_WAIT`` or
+``CLOSE_WAIT`` and never appear as established. Everything from ``SYN_SENT``
+through ``LAST_ACK`` therefore counts as attached. ``TIME_WAIT`` does not: it is
+the normal lingering state after an orderly close and nothing is held by it.
+
+Two deliberate limits, both visible to the caller only as ``unknown`` or as a
+count:
+
+* Every local process counts, not just this component. A speaker held by the
+  official Samsung app is still held, so that is the useful answer.
+* IPv4 only. A hostname or IPv6 target cannot be matched against the table and
+  reports ``None`` rather than a wrong zero.
 
 Windows-only by construction, because that is where the component runs. Every
-other platform reports ``None`` (unknown) rather than a wrong zero, so callers
-can tell "nothing is attached" apart from "could not look".
+other platform reports ``None`` (unknown), so callers can tell "nothing is
+attached" apart from "could not look".
 """
 
 from __future__ import annotations
@@ -20,13 +36,29 @@ from ctypes import wintypes
 
 _AF_INET = 2
 _TCP_TABLE_OWNER_PID_ALL = 5
-_MIB_TCP_STATE_ESTAB = 5
 _ERROR_INSUFFICIENT_BUFFER = 122
 _NO_ERROR = 0
-# One growth retry covers the table changing size between the sizing call and
+# A few growth retries cover the table changing size between the sizing call and
 # the read; looping forever on a busy machine would be worse than reporting
 # unknown.
 _MAX_ATTEMPTS = 4
+
+# MIB_TCP_STATE values. CLOSED, LISTEN, TIME_WAIT and DELETE_TCB are absent on
+# purpose: none of them holds the peer. TIME_WAIT in particular is what an
+# orderly close leaves behind, and counting it would report a hold after every
+# clean stop.
+_ATTACHED_STATES = frozenset(
+    {
+        3,   # SYN_SENT
+        4,   # SYN_RCVD
+        5,   # ESTABLISHED
+        6,   # FIN_WAIT1
+        7,   # FIN_WAIT2
+        8,   # CLOSE_WAIT
+        9,   # CLOSING
+        10,  # LAST_ACK
+    }
+)
 
 
 class _MIB_TCPROW_OWNER_PID(ctypes.Structure):
@@ -48,11 +80,13 @@ def _packed_address(speaker_ip: str) -> int | None:
         return None
 
 
-def established_connections_to(speaker_ip: str) -> int | None:
-    """Return how many local sockets are ESTABLISHED to the speaker.
+def attached_connections_to(speaker_ip: str) -> int | None:
+    """Return how many local sockets are still attached to the speaker.
 
-    ``None`` means the socket table could not be read, which is not the same as
-    zero and must never be reported as "nothing is attached".
+    Attached means any state from ``SYN_SENT`` through ``LAST_ACK``, so a
+    half-closed socket left by a killed helper counts. ``None`` means the socket
+    table could not be read, which is not the same as zero and must never be
+    reported as "nothing is attached".
     """
     if not sys.platform.startswith("win"):
         return None
@@ -92,6 +126,6 @@ def established_connections_to(speaker_ip: str) -> int | None:
             break
         row = _MIB_TCPROW_OWNER_PID.from_buffer_copy(buffer.raw[offset : offset + row_size])
         offset += row_size
-        if row.dwState == _MIB_TCP_STATE_ESTAB and row.dwRemoteAddr == target:
+        if row.dwState in _ATTACHED_STATES and row.dwRemoteAddr == target:
             held += 1
     return held

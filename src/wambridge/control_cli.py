@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .cli_common import add_target_arguments, bounded_float, bounded_int, configure_logging
-from .connections import established_connections_to
+from .connections import attached_connections_to
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
     WamApiError,
@@ -236,10 +236,10 @@ def wait_until_released(
     not be checked is the failure this exists to prevent.
     """
     deadline = time.monotonic() + timeout
-    held = established_connections_to(speaker_ip)
+    held = attached_connections_to(speaker_ip)
     while held is not None and held > 0 and time.monotonic() < deadline:
         time.sleep(poll)
-        held = established_connections_to(speaker_ip)
+        held = attached_connections_to(speaker_ip)
     return held
 
 
@@ -248,13 +248,16 @@ def standby(
     *,
     retries: int,
     retry_delay: float,
+    release_timeout: float = STANDBY_RELEASE_TIMEOUT,
+    release_poll: float = STANDBY_RELEASE_POLL,
 ) -> list[str]:
     """Stop playback, mute, and confirm nothing is still attached.
 
     This sends no power command: the firmware is left awake and simply quiet.
-    What it does guarantee is that nothing of ours is holding the speaker, so
-    the speaker's own idle timer can take it to sleep. A leaked helper keeps the
-    control socket and the audio pull open and silently prevents exactly that.
+    What it does guarantee is that nothing of ours is holding the speaker. No
+    idle power-down was found on this firmware, so whether release alone lets it
+    sleep is unmeasured; a leaked helper keeping the control socket and the
+    audio pull open is the leading suspect for the speaker staying lit.
     """
     stop_result = _attempt(
         "standby stop",
@@ -291,7 +294,11 @@ def standby(
             f"power-cycle the speaker. Last detail: "
             f"{verification.detail or mute_result[1] or stop_result[1]}"
         )
-    held = wait_until_released(target.ip)
+    held = wait_until_released(
+        target.ip,
+        timeout=release_timeout,
+        poll=release_poll,
+    )
     lines = [
         "action=standby",
         "muted=on",
