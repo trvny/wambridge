@@ -50,8 +50,39 @@ def _contains_flac_audio_frame(payload: bytes) -> bool:
     )
 
 
+def _contains_wav_audio_frame(payload: bytes) -> bool:
+    """Return whether a streamed WAV payload carries samples, not just a header."""
+    if not payload.startswith(b"RIFF") or payload[8:12] != b"WAVE":
+        return False
+
+    offset = 12
+    while len(payload) >= offset + 8:
+        chunk_id = payload[offset : offset + 4]
+        # Sizes are little-endian here, unlike FLAC's big-endian block headers.
+        chunk_size = int.from_bytes(payload[offset + 4 : offset + 8], "little")
+        offset += 8
+        if chunk_id == b"data":
+            # The muxer cannot seek back on a pipe, so this chunk's declared
+            # size is 0xFFFFFFFF. Never skip past it; everything after the
+            # header is audio.
+            return len(payload) > offset
+        offset += chunk_size + (chunk_size % 2)
+
+    return False
+
+
+# Containers whose first bytes are a header rather than audio. Returning that
+# header as the startup payload would fire AUDIO_STARTED, and with it the
+# transport clock's anchor, before a single sample existed.
+_AUDIO_FRAME_CHECKS = {
+    "flac": _contains_flac_audio_frame,
+    "wav": _contains_wav_audio_frame,
+}
+
+
 def _read_startup_payload(stream: BinaryIO, extension: str) -> bytes:
     """Read until output proves that encoded audio, not only headers, exists."""
+    contains_audio = _AUDIO_FRAME_CHECKS.get(extension)
     payload = bytearray()
     while len(payload) < MAX_STARTUP_PAYLOAD_SIZE:
         remaining = MAX_STARTUP_PAYLOAD_SIZE - len(payload)
@@ -63,13 +94,15 @@ def _read_startup_payload(stream: BinaryIO, extension: str) -> bytes:
         # forever, and this loop has no iteration limit to fall back on.
         if len(payload) == before:
             break
-        if extension != "flac" or _contains_flac_audio_frame(payload):
+        if contains_audio is None or contains_audio(payload):
             return bytes(payload)
 
     if not payload:
         raise StreamError("FFmpeg produced no audio")
-    if extension == "flac":
-        raise StreamError("PCM input ended before FFmpeg produced a FLAC audio frame")
+    if contains_audio is not None:
+        raise StreamError(
+            f"PCM input ended before FFmpeg produced a {extension.upper()} audio frame"
+        )
     return bytes(payload)
 
 

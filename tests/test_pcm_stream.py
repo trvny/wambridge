@@ -7,6 +7,22 @@ from wambridge.pcm_stream import PcmAudioStreamServer, _read_startup_payload
 from wambridge.stream import StreamError
 
 
+def _wav_header(extra_chunks: bytes = b"") -> bytes:
+    """Build a streamed WAV header, sizes unknown exactly as FFmpeg leaves them."""
+    unknown = b"\xff\xff\xff\xff"
+    fmt = (
+        b"fmt "
+        + (16).to_bytes(4, "little")
+        + (1).to_bytes(2, "little")  # PCM
+        + (2).to_bytes(2, "little")  # channels
+        + (44100).to_bytes(4, "little")
+        + (176400).to_bytes(4, "little")
+        + (4).to_bytes(2, "little")
+        + (16).to_bytes(2, "little")
+    )
+    return b"RIFF" + unknown + b"WAVE" + fmt + extra_chunks + b"data" + unknown
+
+
 class PcmAudioStreamServerTests(TestCase):
     @patch("wambridge.stream.shutil.which", return_value="C:/ffmpeg/bin/ffmpeg.exe")
     def test_builds_raw_pcm_input_arguments(self, _which_mock) -> None:
@@ -234,6 +250,23 @@ class StartupPayloadProgressTests(TestCase):
 
     def test_non_flac_payload_is_returned(self) -> None:
         self.assertEqual(_read_startup_payload(BytesIO(b"abc"), "mp3"), b"abc")
+
+    def test_wav_header_alone_is_not_audio(self) -> None:
+        # A bare header would otherwise fire AUDIO_STARTED, anchoring the
+        # transport clock before a single sample was encoded.
+        with self.assertRaisesRegex(StreamError, "WAV audio frame"):
+            _read_startup_payload(BytesIO(_wav_header()), "wav")
+
+    def test_wav_payload_with_samples_is_returned(self) -> None:
+        payload = _wav_header() + b"\x01\x02\x03\x04"
+        self.assertEqual(_read_startup_payload(BytesIO(payload), "wav"), payload)
+
+    def test_wav_skips_chunks_before_the_data_chunk(self) -> None:
+        # FFmpeg writes a LIST/INFO chunk unless asked for a bit-exact header,
+        # and an odd-sized chunk is followed by a pad byte.
+        extra = b"LIST" + (5).to_bytes(4, "little") + b"INFOx" + b"\x00"
+        payload = _wav_header(extra_chunks=extra) + b"\x01\x02"
+        self.assertEqual(_read_startup_payload(BytesIO(payload), "wav"), payload)
 
 
 class StartupSilenceTests(TestCase):
