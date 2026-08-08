@@ -146,12 +146,13 @@ std::wstring quoted(const std::wstring& value) {
 
 // Formats the helper accepts. Anything else would reach its CLI as a rejected
 // argument and take the whole stream down with it.
-constexpr const wchar_t* kStreamFormats[] = {L"flac", L"mp3"};
+constexpr const wchar_t* kStreamFormats[] = {L"flac", L"wav", L"mp3"};
 constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 
 // Milliseconds of silence FFmpeg prepends to the stream. Straight added delay
-// on a path already about 13 s long; kept configurable so the hardware can say
-// whether it is still load-bearing.
+// on a path about 6 s long; kept configurable so the hardware can say whether
+// it is still load-bearing. Measured at 0 on 2026-08-08: startup still reaches
+// WAMBRIDGE PLAYING.
 constexpr int kDefaultStartupSilenceMs = 1500;
 constexpr int kMaximumStartupSilenceMs = 10000;
 
@@ -181,9 +182,10 @@ Settings load_settings() {
     auto device = environment_value(L"WAMBRIDGE_DEVICE");
     if (device.empty()) device = ini_value(L"device", L"M5", path);
 
-    // FLAC unless asked otherwise. The knob exists to measure whether the
-    // speaker prebuffers bytes or seconds: at 320 kbps against FLAC's 700-900
-    // the delay either shrinks with the bitrate or does not move at all.
+    // FLAC unless asked otherwise. The prebuffer is partly bounded by bytes:
+    // mp3 at 320 kbps measured 16.9 s against FLAC's 13.4 s, because a thinner
+    // stream fits more seconds into the same space. wav pulls the same lever
+    // the other way and has not been heard on hardware yet.
     auto format = environment_value(L"WAMBRIDGE_FORMAT");
     if (format.empty()) format = ini_value(L"format", L"", path);
     bool known = false;

@@ -7,6 +7,22 @@ from wambridge.pcm_stream import PcmAudioStreamServer, _read_startup_payload
 from wambridge.stream import StreamError
 
 
+def _wav_header(extra_chunks: bytes = b"") -> bytes:
+    """Build a streamed WAV header, sizes unknown exactly as FFmpeg leaves them."""
+    unknown = b"\xff\xff\xff\xff"
+    fmt = (
+        b"fmt "
+        + (16).to_bytes(4, "little")
+        + (1).to_bytes(2, "little")  # PCM
+        + (2).to_bytes(2, "little")  # channels
+        + (44100).to_bytes(4, "little")
+        + (176400).to_bytes(4, "little")
+        + (4).to_bytes(2, "little")
+        + (16).to_bytes(2, "little")
+    )
+    return b"RIFF" + unknown + b"WAVE" + fmt + extra_chunks + b"data" + unknown
+
+
 class PcmAudioStreamServerTests(TestCase):
     @patch("wambridge.stream.shutil.which", return_value="C:/ffmpeg/bin/ffmpeg.exe")
     def test_builds_raw_pcm_input_arguments(self, _which_mock) -> None:
@@ -50,19 +66,16 @@ class PcmAudioStreamServerTests(TestCase):
                 sample_format="u8",
             )
 
-    @patch("wambridge.pcm_stream._read_chunk")
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
     def test_applies_realtime_clock_before_pcm_input(
         self,
         _which_mock,
         popen_mock,
-        read_mock,
     ) -> None:
         metadata = b"fLaC" + bytes([0x80, 0, 0, 34]) + bytes(34)
-        read_mock.side_effect = [metadata + b"\xff\xf8\x00\x00", b""]
         process = SimpleNamespace(
-            stdout=BytesIO(),
+            stdout=BytesIO(metadata + b"\xff\xf8\x00\x00"),
             returncode=0,
             poll=lambda: None,
             wait=lambda timeout: 0,
@@ -85,19 +98,16 @@ class PcmAudioStreamServerTests(TestCase):
         finally:
             server.close()
 
-    @patch("wambridge.pcm_stream._read_chunk")
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
     def test_rejects_header_only_flac_while_process_is_alive(
         self,
         _which_mock,
         popen_mock,
-        read_mock,
     ) -> None:
         metadata_only = b"fLaC" + bytes([0x80, 0, 0, 34]) + bytes(34)
-        read_mock.side_effect = [metadata_only, b""]
         process = SimpleNamespace(
-            stdout=BytesIO(),
+            stdout=BytesIO(metadata_only),
             returncode=0,
             poll=lambda: None,
             wait=lambda timeout: 0,
@@ -118,14 +128,12 @@ class PcmAudioStreamServerTests(TestCase):
         finally:
             server.close()
 
-    @patch("wambridge.pcm_stream._read_chunk")
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
     def test_second_request_is_refused_while_one_encoder_serves(
         self,
         _which_mock,
         popen_mock,
-        read_mock,
     ) -> None:
         # Every encoder inherits the same stdin, so only one may run. The speaker
         # issues a second request right after the first while the first is still
@@ -141,7 +149,6 @@ class PcmAudioStreamServerTests(TestCase):
             kill=lambda: terminated.append("killed"),
         )
         popen_mock.side_effect = AssertionError("must not start a second encoder")
-        read_mock.side_effect = [b""]
 
         server = PcmAudioStreamServer(
             BytesIO(),
@@ -157,20 +164,17 @@ class PcmAudioStreamServerTests(TestCase):
         finally:
             server.close()
 
-    @patch("wambridge.pcm_stream._read_chunk")
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
     def test_accepts_flac_after_metadata_and_frame_sync(
         self,
         _which_mock,
         popen_mock,
-        read_mock,
     ) -> None:
         metadata = b"fLaC" + bytes([0x80, 0, 0, 34]) + bytes(34)
         frame = b"\xff\xf8\x00\x00"
-        read_mock.side_effect = [metadata, frame, b""]
         process = SimpleNamespace(
-            stdout=BytesIO(),
+            stdout=BytesIO(metadata + frame),
             returncode=0,
             poll=lambda: None,
             wait=lambda timeout: 0,
@@ -234,6 +238,28 @@ class StartupPayloadProgressTests(TestCase):
 
     def test_non_flac_payload_is_returned(self) -> None:
         self.assertEqual(_read_startup_payload(BytesIO(b"abc"), "mp3"), b"abc")
+
+    def test_wav_header_alone_is_not_audio(self) -> None:
+        # A bare header would otherwise fire AUDIO_STARTED, anchoring the
+        # transport clock before a single sample was encoded.
+        with self.assertRaisesRegex(StreamError, "WAV audio frame"):
+            _read_startup_payload(BytesIO(_wav_header()), "wav")
+
+    def test_wav_payload_with_samples_is_returned(self) -> None:
+        payload = _wav_header() + b"\x01\x02\x03\x04"
+        self.assertEqual(_read_startup_payload(BytesIO(payload), "wav"), payload)
+
+    def test_wav_partial_frame_is_not_audio(self) -> None:
+        # 16-bit stereo is four bytes per frame; three of them are not a sample.
+        with self.assertRaisesRegex(StreamError, "WAV audio frame"):
+            _read_startup_payload(BytesIO(_wav_header() + b"\x01\x02\x03"), "wav")
+
+    def test_wav_skips_chunks_before_the_data_chunk(self) -> None:
+        # FFmpeg writes a LIST/INFO chunk unless asked for a bit-exact header,
+        # and an odd-sized chunk is followed by a pad byte.
+        extra = b"LIST" + (5).to_bytes(4, "little") + b"INFOx" + b"\x00"
+        payload = _wav_header(extra_chunks=extra) + b"\x01\x02\x03\x04"
+        self.assertEqual(_read_startup_payload(BytesIO(payload), "wav"), payload)
 
 
 class StartupSilenceTests(TestCase):

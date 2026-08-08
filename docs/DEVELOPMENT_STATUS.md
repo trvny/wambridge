@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-02.
+Last reviewed: 2026-08-08.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -21,6 +21,8 @@ branch or implementing another timing layer.
   encoder owns stdin.
 - `cp` is documented as normal for the URL path; no URL startup gate or power-cycle advice
   may depend on that submode.
+- Speaker-facing output profiles `flac` (default), `wav` and `mp3`, selected by `format` in
+  the INI or `--format` on the helper. Only `flac` has played a full track on hardware.
 
 The stable universal transport is local HTTP started through `SetUrlPlayback`. The speaker
 paces the HTTP side through TCP backpressure. Finite share/DLNA playback is proven as a
@@ -80,37 +82,84 @@ Physical measurements behind the design:
 - the audibly playing URL path did not emit a matching start event before the old timeout,
 - `NETWORK_TIMEOUT_ERROR` disappeared after stream starvation was fixed.
 
-## Measured: about thirteen seconds of audio delay
+## Measured: about six seconds of audio delay
 
-Measured 2026-08-02 on the physical M5, mid-stream, with playback already settled. The
-foobar volume slider was moved through beefweb while the playback position at the moment
-of the change was recorded; the listener read the position off the seekbar when the change
-was heard. Two events in one run: 12.14 s heard at 26 s, and 37.16 s heard at 50 s.
+Re-measured 2026-08-08 on the physical M5 from the build of PR #41 (`78da8b2`, installed
+and verified 69/69 by hash), with `startup_silence=0`. Method unchanged: the foobar volume
+is changed through beefweb, the playback position at the moment of the change is recorded,
+and the listener reads the position off the seekbar when the change is heard. Four changes
+per run instead of two, over the same passages of the same 19-minute 44.1 kHz source, so
+the two formats are compared on identical material.
 
-**End-to-end delay is about 13.4 s**, spread one second. Reaction time inflates it by
-roughly half a second.
+| passage | FLAC | WAV |
+|---|---|---|
+| 192 s | 7.94 s | 5.97 s |
+| 217 s | 5.91 s | 4.95 s |
+| 242 s | 6.90 s | 5.91 s |
+| 267 s | 5.91 s | 5.89 s |
+| mean | **6.67 s** | **5.68 s** |
+| spread | 2.0 s | 1.0 s |
 
-`get_latency()` reports about 4 s. It under-reports by some nine seconds, and the missing
-part is downstream of anything the host counts:
+**End-to-end delay is about 6.7 s on FLAC and 5.7 s on WAV.** The listener reads whole
+seconds off the seekbar, so a single pair carries about a second of quantisation; the mean
+difference of 1.0 s is at that limit and rests on the pattern - four passages out of four
+in the same direction, and half the spread - rather than on the average alone.
+
+Pause and resume agree from two other directions, same session: after a pause the sound
+stopped about 5 s later, and after resuming from 51.98 s it came back at 58 s, so 6.0 s.
+Three methods, one answer.
+
+**The previously recorded 13.4 s is superseded.** It was measured 2026-08-02 on a much
+older build with `startup_silence=1500`, from two data points, on unrecorded material.
+The silence accounts for 1.5 s of the difference and nothing here accounts for the rest,
+so treat the older figure as history rather than as a term to subtract from.
+
+### The `wav` profile passed the physical checklist
+
+Same session, same 19-minute source, sampled at 1 Hz with the process tree and socket table
+beside beefweb. Every criterion in `AGENTS.md` measured rather than judged:
+
+| criterion | result |
+|---|---|
+| track at wall-clock speed | 300 samples, `rate` median **0.999**, min 0.966, max 1.037, **100% within 0.9-1.1x** |
+| stable seekbar | no excursion outside that band at any point |
+| second track | index 3 to 4 seamless: 1140.69 s to 0.99 s, tempo back at once, **no restart** |
+| seek | encoder retired and replaced in **under a second** while the helper's count never dropped; tempo back within ~2 s |
+| pause/resume | 18 s paused, both sockets stayed `Established`, helper and FFmpeg alive, resumed from the same position |
+| stop | 0 FFmpeg, 0 helper, no `Established` socket left |
+| leaks | FFmpeg and helper never above 1; free RAM 2.2-2.4 GB throughout |
+
+One honest gap: nobody was listening during these runs. The transport is proven; the absence
+of audible artefacts is not. `flac` therefore stays the default and `wav` stays opt-in until
+somebody has listened to a full track on it.
+
+`get_latency()` reports about 4 s. With `startup_silence=0` the host's own share is roughly
+that, so most of the remaining two to three seconds sits past anything the host counts:
 
 | term | share | ours to change |
 |---|---|---|
 | host `buffered` | ~3.9 s | floored at 4.0 s by `clamp(bufferLength, 2.0, 30.0)` plus 2.0 |
-| `adelay=1500` startup silence | 1.5 s | yes |
+| `adelay` startup silence | 0 s as configured, 1.5 s by default | yes |
 | FFmpeg and the HTTP socket | under a second | barely |
-| the speaker itself | ~7-8 s | no |
+| the speaker itself | ~2 s on FLAC, less on WAV | partly, through bitrate |
 
 Consequences, none of them optional to know:
 
-- Lowering the host buffer floor buys 2-3 s of thirteen. It is not the fix for anything.
+- The host buffer is now the **largest single term**, not a rounding error next to the
+  speaker. Its 4.0 s floor is worth revisiting, which was not true when the total was 13 s.
 - The volume slider applies a gain where PCM leaves the queue, and `queued` is 0-61 ms.
   Everything else is already past that point, so the slider cannot be responsive by
   construction. Route it to the speaker's own volume, which answers in about 1.3 s.
-- Pause writes silence into the same pipe, so it very likely has the same delay. Not
-  measured yet.
-- Whether the speaker prebuffers bytes or seconds is unknown. If bytes, a lower bitrate
-  shortens everything proportionally, and the `mp3` profile at 320 kbps against FLAC's
-  700-900 kbps is a cheap way to find out.
+- Pause takes about 5 s to fall silent and resume about 6 s to come back, measured
+  2026-08-08. Both are far above the 1.3 s a `55001` command costs, so routing them is still
+  worth it - the prize is just five seconds rather than thirteen.
+- **The prebuffer is partly bounded by bytes, confirmed twice.** A thinner stream is slower:
+  `mp3` at 320 kbps measured 16.9 s against FLAC's 13.4 s on the old build. A fatter one is
+  faster: `wav` at a constant 1411 kbps beat FLAC on every passage of the same source and
+  halved the spread. The variance is the tell - FLAC's bitrate rides the material, so on an
+  uneven mix the delay breathes with it, while WAV's constant rate does not. The gain is
+  about a second, not the several the bitrate ratio alone would predict, which agrees with
+  the mp3 ratio of 1.26x where 2.4x was expected: something else is bounded too.
 
 ## Closed investigations retained as evidence
 
@@ -173,7 +222,7 @@ Each of these cost real time and each is closed by measurement, not by argument.
 | Question | Answer | Where |
 |---|---|---|
 | What caused the runaway start | `process_samples` returns void; taking `min(free, chunk)` binned ~9/10 of every chunk | this file, above |
-| Does a lower bitrate shorten the delay | **No, it lengthens it.** MP3 320k = 16.9 s against FLAC's 13.4 s | `WAM_PROTOCOL.md` |
+| Does a lower bitrate shorten the delay | **No, it lengthens it.** MP3 320k = 16.9 s against FLAC's 13.4 s; and a fatter WAV beat FLAC on every passage | `WAM_PROTOCOL.md` |
 | Is `cp` submode a fault | No. It is the normal submode for `SetUrlPlayback` and also the idle one | `WAM_PROTOCOL.md` |
 | Does the SDK offer a hardware volume interface | `output_entry_v2::get_volume_control` exists but no public component implements it; not a foundation to build on | PR #30 |
 | Does `flag_needs_shims` affect volume | No. It means regular `update()` calls and end-of-stream padding | SDK `output.h` |
@@ -184,20 +233,19 @@ Each of these cost real time and each is closed by measurement, not by argument.
 
 1. **Physical checklist for PR #30** (routed volume slider). It changes `volume_set` and the
    helper's startup volume, so the full gate applies before merging.
-2. **Measure the delay again with `startup_silence=0`.** Expected saving is about 1 s, not
-   1.5: with the silence gone `AUDIO_STARTED` arrives about six pipe writes later, because
-   the prepended silence used to supply the first FLAC audio frame immediately. That is
-   close to the method's own spread, so it needs four or five volume changes in one run,
-   not two. **`hardware_volume` must be off for this** — with the slider routed to `55001`
-   it no longer travels the delayed path, and the measuring instrument is gone.
-3. **Try a fatter stream, not a thinner one.** The speaker's prebuffer is partly bounded by
-   bytes, so raw PCM at roughly twice FLAC's bitrate should hold fewer seconds. This is the
-   one remaining idea with a plausible several-second payoff. Needs a `wav` output profile.
+2. **Revisit the 4.0 s host buffer floor.** It was dismissed as "2-3 s of thirteen" and is
+   now the largest single term of six. `clamp(bufferLength, 2.0, 30.0)` plus 2.0 is a choice,
+   not a measurement, and nothing has tested what the floor can be before the pipe starves.
+3. **Decide whether `startup_silence` should default to 0.** It has now run at 0 for a whole
+   session on hardware, repeatedly reaching `WAMBRIDGE PLAYING`, and it is 1.5 s of pure
+   delay on a path of six. The default is still 1500, so every stock installation pays it and
+   the measured figures above do not describe one. Nobody ever recorded what the silence was
+   for, which is the only reason it is still there.
 4. **Route pause onto `55001`** (`SetPlaybackControl pause`/`resume`), then stop, seek and
-   skip. Same shape as the volume fix. Measure pause first, or there is no baseline. Risk to
-   watch: whether a paused speaker stops pulling and the HTTP connection times out.
-5. Log unknown INI keys to the console. Keys from an unbuilt branch are silently ignored
-   today, so the file does not tell anyone what is actually active.
+   skip. Same shape as the volume fix. Baseline measured 2026-08-08: about 5 s to fall
+   silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and
+   the HTTP connection times out - a 30 s pause did not disturb either socket or restart any
+   process.
 6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer.
@@ -205,13 +253,17 @@ Each of these cost real time and each is closed by measurement, not by argument.
 8. Add a proper foobar preferences page while retaining legacy INI compatibility.
 9. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
 
-## What the 7-8 s speaker figure actually is
+## What the 7-8 s speaker figure was
 
-A subtraction remainder, not a measurement: total delay minus the terms that can be counted.
-It therefore absorbs every error in the others. The owner reports Samsung's own PC and
-Android clients felt slower than instant but clearly faster than 13 s on this same speaker,
-which is circumstantial evidence that part of that remainder belongs to how this project
-feeds the speaker. Treat it as an upper bound on the untouchable part.
+A subtraction remainder, not a measurement: total delay minus the terms that could be
+counted, so it absorbed every error in the others. The 2026-08-08 re-measurement retired it.
+With the whole path down to 6.7 s and the host's own buffer accounting for about 3.9 s of
+that, there is no seven-second speaker to point at.
+
+The owner's report that Samsung's own PC and Android clients felt clearly faster than 13 s
+on this same speaker turned out to be the right instinct: most of the difference was ours,
+not the speaker's. Do not reintroduce a large fixed speaker term into any budget without
+measuring it directly.
 
 ## Rules for continuing
 

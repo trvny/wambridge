@@ -35,19 +35,21 @@ What works:
 
 ### The one limitation worth knowing before you install
 
-**Audio reaches the speaker about 13 seconds after foobar plays it.** This is
-measured, not estimated. Roughly 7-8 s of it sits inside the speaker's own
-prebuffer, where no amount of host-side accounting can reach; the rest is host
-buffering and a 1.5 s leading silence that can be turned off with
-`startup_silence=0`.
+**Audio reaches the speaker about 6 seconds after foobar plays it.** This is
+measured, not estimated: 6.7 s on the default FLAC profile and 5.7 s on the
+optional `wav` one, both **with `startup_silence=0` in the INI**. The shipped
+default prepends 1.5 s of silence on top of that, so a stock installation is
+nearer 8 s until you turn it off. The largest single share is this project's own
+4 s output buffer, not the speaker. An earlier figure of 13 s, most of it blamed
+on the speaker's prebuffer, did not survive being measured again.
 
 Playback itself is unaffected — the stream runs at wall-clock speed and the
 seekbar is honest. What suffers is **control latency**: pause, stop, skip and
-the volume slider all act on audio the speaker will not play for another
-thirteen seconds. Lowering the bitrate makes it worse, not better, which was
-measured too. The fix is to route each control onto the speaker's own `55001`
-command path rather than to shorten the audio path, and that work is in
-progress.
+the volume slider all act on audio the speaker will not play for another few
+seconds. Lowering the bitrate makes it worse rather than better, and raising it
+helps by about a second, both measured. The fix is to route each control onto
+the speaker's own `55001` command path, which answers in about a second, rather
+than to keep shortening the audio path; that work is in progress.
 
 Everything else is documented honestly, including the approaches that failed:
 

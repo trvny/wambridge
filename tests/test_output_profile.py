@@ -1,8 +1,10 @@
-"""The FLAC profile must follow the source instead of imposing 48000/s16.
+"""What each speaker-facing output profile is for.
 
-FLAC is lossless, so a fixed rate resampled every 44.1 kHz track for nothing and
-a fixed sample format discarded anything above CD depth. A physical M5 plays
-FLAC up to 96 kHz / 24-bit.
+FLAC must follow the source instead of imposing 48000/s16: it is lossless, so a
+fixed rate resampled every 44.1 kHz track for nothing and a fixed sample format
+discarded anything above CD depth. A physical M5 plays FLAC up to 96 kHz /
+24-bit. WAV exists for the opposite reason - it is deliberately fatter, to test
+whether the speaker's partly byte-bounded prebuffer then holds fewer seconds.
 """
 
 from __future__ import annotations
@@ -38,6 +40,40 @@ class FlacProfileTests(unittest.TestCase):
     def test_still_encodes_flac(self) -> None:
         args = self.profile.args_for(44100)
         self.assertEqual(args[args.index("-c:a") + 1], "flac")
+
+
+class WavProfileTests(unittest.TestCase):
+    """The WAV profile exists to be fatter than FLAC, not better sounding."""
+
+    def setUp(self) -> None:
+        self.profile = OUTPUT_PROFILES["wav"]
+
+    def test_serves_uncompressed_pcm(self) -> None:
+        args = self.profile.args_for(44100)
+        self.assertEqual(args[args.index("-c:a") + 1], "pcm_s16le")
+        self.assertEqual(args[args.index("-f") + 1], "wav")
+
+    def test_header_stays_bit_exact(self) -> None:
+        # FFmpeg's LIST/INFO chunk carries the encoder version and would move
+        # the audio start around between FFmpeg builds for no gain.
+        self.assertEqual(
+            self.profile.ffmpeg_args[self.profile.ffmpeg_args.index("-fflags") + 1],
+            "+bitexact",
+        )
+
+    def test_rate_is_fixed_at_the_only_confirmed_one(self) -> None:
+        # Only 44.1/16 WAV was confirmed on a physical M5. A cap expressed as a
+        # maximum would not survive the file and URL paths, which do not know
+        # the source rate and call args_for(None).
+        for rate in (None, 44100, 48000, 96000):
+            with self.subTest(rate=rate):
+                args = self.profile.args_for(rate)
+                self.assertEqual(args[args.index("-ar") + 1], "44100")
+                self.assertEqual(args.count("-ar"), 1)
+
+    def test_served_as_audio_wav(self) -> None:
+        self.assertEqual(self.profile.extension, "wav")
+        self.assertEqual(self.profile.content_type, "audio/wav")
 
 
 class Mp3ProfileTests(unittest.TestCase):

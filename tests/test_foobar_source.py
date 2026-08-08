@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from unittest import TestCase
 
@@ -98,6 +99,27 @@ class FoobarSourceTests(TestCase):
         self.assertIn('constexpr const wchar_t* kDefaultStreamFormat = L"flac";', source)
         self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
         self.assertNotIn("--format flac --startup-timeout", source)
+
+    def test_accepted_formats_match_the_helper(self) -> None:
+        # The whitelist and the helper's --format choices are edited in two
+        # separate languages. A name in only one of them is either a profile
+        # nobody can select from the INI or a command line the helper rejects.
+        from wambridge.stream import OUTPUT_PROFILES
+
+        source = SOURCE.read_text(encoding="utf-8")
+        declaration = re.search(
+            r"constexpr const wchar_t\* kStreamFormats\[\] = \{(.*?)\};",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            declaration,
+            "kStreamFormats is no longer a single-line constexpr array; this test "
+            "reads it as text, so update the pattern rather than the whitelist",
+        )
+        accepted = set(re.findall(r'L"([^"]+)"', declaration.group(1)))
+
+        self.assertEqual(accepted, set(OUTPUT_PROFILES))
 
     def test_startup_volume_is_applied_once_per_session(self) -> None:
         # Measured on the M5 on 2026-08-08: the listener walked the speaker up to
@@ -234,9 +256,10 @@ class FoobarSourceTests(TestCase):
         self.assertIn('line.rfind("WAMBRIDGE ERROR ", 0)', source)
 
     def test_startup_silence_is_configurable(self) -> None:
-        # 1.5 s of the measured ~13.4 s delay is silence this project prepends
-        # itself. It carries no comment and has been there since the initial
-        # import, so whether it is still load-bearing is a hardware question.
+        # The default prepends 1.5 s of silence to a path measured at about 6 s.
+        # It carried no comment and had been there since the initial import;
+        # 0 was confirmed on hardware on 2026-08-08 and startup still reached
+        # WAMBRIDGE PLAYING.
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertIn("constexpr int kDefaultStartupSilenceMs = 1500;", source)
