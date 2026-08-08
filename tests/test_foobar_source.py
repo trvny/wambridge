@@ -99,6 +99,33 @@ class FoobarSourceTests(TestCase):
         self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
         self.assertNotIn("--format flac --startup-timeout", source)
 
+    def test_startup_volume_is_applied_once_per_session(self) -> None:
+        # Measured on the M5 on 2026-08-08: the listener walked the speaker up to
+        # 11 from the menu, seeked once, and the restarted helper logged
+        # "Speaker volume is 11; starting PCM playback at 3" - the configured
+        # startup level went back over a level a person had just chosen.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {",
+            source,
+        )
+        # The flag must follow the helper reporting PLAYING, not the spawn. A
+        # helper replaced in between may never have applied a level, and its
+        # successor would then inherit a raised clamp over a speaker sitting
+        # wherever it was left.
+        playing = source.index("m_childReachedPlaying.store(true);")
+        applied = source.index("m_startupVolumeApplied.store(true);")
+        self.assertLess(playing, applied)
+        self.assertLess(
+            applied,
+            source.index("accepted = true;", playing),
+            "the flag must be set inside the PLAYING branch",
+        )
+        # Without a level the helper would restore its own default clamp, which
+        # still turns a listener above it down.
+        self.assertIn('command += L" --max-start-volume " +', source)
+
     def test_console_format_avoids_length_modifiers(self) -> None:
         # console::printf is pfc's formatter: %lu and %llu print literally.
         # Every foobar source is checked, not just the output adapter: the
