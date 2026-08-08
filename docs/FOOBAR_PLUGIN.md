@@ -47,9 +47,12 @@ Optional keys and overrides:
   directions: `mp3` at 320 kbps against FLAC's 700-900 measured *worse*, 16.9 s against
   13.4 s, because a thinner stream fits more seconds into the same space; `wav`, which is
   uncompressed 16-bit PCM fixed at 44.1 kHz, measured *better* than FLAC on every passage
-  of the same source, 5.68 s against 6.67 s, and halved the spread. It costs depth: FLAC
-  carries 24 bit through this path and `wav` is fixed at 16, which is why `flac` stays the
-  default,
+  of the same source, 5.68 s against 6.67 s, and halved the spread. **`wav` stays opt-in.**
+  Its transport passed the physical checklist on 2026-08-08 - complete track at a median
+  1.00x, seamless track change, seek, pause/resume, clean shutdown, no leaks - but every one
+  of those was read off instruments while nobody was listening, so the absence of audible
+  artefacts is still unverified. It also costs depth: FLAC carries 24 bit through this path
+  and `wav` is fixed at 16,
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
   `0..10000`, default `1500`. Values outside that fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,

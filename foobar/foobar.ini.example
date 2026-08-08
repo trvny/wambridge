@@ -18,8 +18,10 @@ volume=4
 ; prebuffer bounded by bytes holds more seconds of a thinner stream. wav pulls
 ; the same lever the other way: measured 5.68 s against flac's 6.67 s over the
 ; same source, with half the variation, because its bitrate does not ride the
-; music. The cost is depth - flac carries 24 bit here and wav is fixed at 16.
-;format=wav
+; music. The cost is depth - flac carries 24 bit here and wav is fixed at 16, and
+; its transport passed the checklist on instruments with nobody listening, so it
+; stays opt-in. flac is the default and this line only shows the syntax.
+;format=flac
 
 ; Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
 ; 240 lines. Turn it on before reporting anything about pacing.
