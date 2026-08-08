@@ -8,7 +8,14 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .cli_common import add_target_arguments, bounded_float, bounded_int, configure_logging
+from .cli_common import (
+    RAW_MAX_VOLUME,
+    RAW_MIN_VOLUME,
+    add_target_arguments,
+    bounded_float,
+    bounded_int,
+    configure_logging,
+)
 from .connections import attached_connections_to
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
@@ -23,8 +30,6 @@ from .samsung import (
 )
 
 LOGGER = logging.getLogger("wambridge")
-RAW_MIN_VOLUME = 0
-RAW_MAX_VOLUME = 30
 DEFAULT_SAFE_VOLUME = 3
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.35
