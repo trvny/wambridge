@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .cli_common import add_target_arguments, bounded_float, bounded_int, configure_logging
+from .connections import established_connections_to
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
     WamApiError,
@@ -27,6 +28,10 @@ RAW_MAX_VOLUME = 30
 DEFAULT_SAFE_VOLUME = 3
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.35
+# A helper that is shutting down needs a moment to drop its sockets, so a single
+# reading right after the stop would report a hold that is about to clear.
+STANDBY_RELEASE_TIMEOUT = 5.0
+STANDBY_RELEASE_POLL = 0.5
 
 
 class ControlError(RuntimeError):
@@ -218,13 +223,39 @@ def emergency_stop(
     return lines
 
 
+def wait_until_released(
+    speaker_ip: str,
+    *,
+    timeout: float = STANDBY_RELEASE_TIMEOUT,
+    poll: float = STANDBY_RELEASE_POLL,
+) -> int | None:
+    """Wait for local sockets against the speaker to drop, and report the count.
+
+    Returns ``None`` when the socket table could not be read. That is reported
+    as unknown rather than as zero: claiming nothing is attached when it could
+    not be checked is the failure this exists to prevent.
+    """
+    deadline = time.monotonic() + timeout
+    held = established_connections_to(speaker_ip)
+    while held is not None and held > 0 and time.monotonic() < deadline:
+        time.sleep(poll)
+        held = established_connections_to(speaker_ip)
+    return held
+
+
 def standby(
     target: Target,
     *,
     retries: int,
     retry_delay: float,
 ) -> list[str]:
-    """Stop playback and leave the speaker muted for standby."""
+    """Stop playback, mute, and confirm nothing is still attached.
+
+    This sends no power command: the firmware is left awake and simply quiet.
+    What it does guarantee is that nothing of ours is holding the speaker, so
+    the speaker's own idle timer can take it to sleep. A leaked helper keeps the
+    control socket and the audio pull open and silently prevents exactly that.
+    """
     stop_result = _attempt(
         "standby stop",
         lambda: stop_playback(
@@ -260,13 +291,23 @@ def standby(
             f"power-cycle the speaker. Last detail: "
             f"{verification.detail or mute_result[1] or stop_result[1]}"
         )
+    held = wait_until_released(target.ip)
     lines = [
         "action=standby",
         "muted=on",
         f"verified={'yes' if verification.confirmed else 'no'}",
+        f"holding={'unknown' if held is None else held}",
     ]
     if not verification.available and verification.detail:
         lines.append(f"warning={verification.detail}")
+    if held:
+        # Not fatal: the mute and stop both landed, and the caller may simply
+        # have asked while something else was still streaming. Saying so is the
+        # point - a silent standby is how the speaker stopped sleeping before.
+        lines.append(
+            f"warning={held} connection(s) still attached to the speaker; "
+            "it will not sleep on its own until they close"
+        )
     return lines
 
 

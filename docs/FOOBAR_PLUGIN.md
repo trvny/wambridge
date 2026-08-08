@@ -85,6 +85,18 @@ The state a user recognises as the speaker sleeping comes only from `SetSleepTim
 switching it to a short sleep timer is open work; see the standby section of
 `docs/WAM_PROTOCOL.md`.
 
+What standby does now guarantee is that nothing local is still attached. After the stop and
+the mute it waits up to `STANDBY_RELEASE_TIMEOUT` for established TCP connections to the
+speaker to drop, and reports `holding=<count>`, or `holding=unknown` when the socket table
+could not be read. A remaining hold adds a `warning=` line rather than failing the action:
+the mute and the stop did land, and the caller may have asked while something else was
+streaming. This targets the documented case of a hard-killed session leaving the M5 lit for
+hours — a leaked helper keeps both the control socket and the audio pull open. It is the
+best lead available, not a proven cause.
+
+`holding=unknown` is deliberately not `holding=0`. Reporting a speaker as released when it
+was never checked is the failure this exists to prevent.
+
 Do not restore the old `cp` warning. `cp` is normal for `SetUrlPlayback`; it is not evidence
 that emergency stop should request a speaker power cycle.
 

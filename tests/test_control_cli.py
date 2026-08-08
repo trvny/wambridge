@@ -12,6 +12,7 @@ from wambridge.control_cli import (
     resolve_target,
     set_safe_volume,
     standby,
+    wait_until_released,
 )
 from wambridge.samsung import WamApiError
 
@@ -145,6 +146,62 @@ class EmergencyControlTests(TestCase):
             port=55001,
             timeout=3.0,
         )
+
+
+class StandbyReleaseTests(TestCase):
+    """Standby must say whether anything is still holding the speaker.
+
+    A silent standby is how the speaker stopped falling asleep on its own: the
+    commands landed, nothing complained, and a leaked helper kept streaming.
+    """
+
+    @patch("wambridge.control_cli.established_connections_to", return_value=0)
+    @patch("wambridge.control_cli.get_mute", return_value=True)
+    @patch("wambridge.control_cli.set_mute")
+    @patch("wambridge.control_cli.stop_playback")
+    def test_reports_nothing_attached(self, _stop, _set_mute, _get_mute, _held) -> None:
+        lines = standby(Target("10.0.0.118", 55001), retries=1, retry_delay=0)
+
+        self.assertIn("holding=0", lines)
+        self.assertFalse([line for line in lines if line.startswith("warning=")])
+
+    @patch("wambridge.control_cli.established_connections_to", return_value=2)
+    @patch("wambridge.control_cli.get_mute", return_value=True)
+    @patch("wambridge.control_cli.set_mute")
+    @patch("wambridge.control_cli.stop_playback")
+    def test_warns_when_connections_remain(self, _stop, _set_mute, _get_mute, _held) -> None:
+        lines = standby(Target("10.0.0.118", 55001), retries=1, retry_delay=0)
+
+        self.assertIn("holding=2", lines)
+        self.assertTrue(
+            any("still attached" in line for line in lines),
+            f"expected a warning naming the hold, got {lines}",
+        )
+        # The mute and the stop both landed, so this is information, not failure.
+        self.assertIn("verified=yes", lines)
+
+    @patch("wambridge.control_cli.established_connections_to", return_value=None)
+    @patch("wambridge.control_cli.get_mute", return_value=True)
+    @patch("wambridge.control_cli.set_mute")
+    @patch("wambridge.control_cli.stop_playback")
+    def test_unreadable_table_is_unknown_not_zero(
+        self, _stop, _set_mute, _get_mute, _held
+    ) -> None:
+        lines = standby(Target("10.0.0.118", 55001), retries=1, retry_delay=0)
+
+        self.assertIn("holding=unknown", lines)
+        self.assertNotIn("holding=0", lines)
+
+    @patch("wambridge.control_cli.time.sleep")
+    @patch("wambridge.control_cli.established_connections_to", side_effect=[2, 1, 0])
+    def test_waits_for_a_tearing_down_helper_to_let_go(self, held_mock, _sleep) -> None:
+        self.assertEqual(wait_until_released("10.0.0.118", timeout=5, poll=0), 0)
+        self.assertEqual(held_mock.call_count, 3)
+
+    @patch("wambridge.control_cli.time.sleep")
+    @patch("wambridge.control_cli.established_connections_to", return_value=1)
+    def test_gives_up_and_reports_the_hold(self, _held_mock, _sleep) -> None:
+        self.assertEqual(wait_until_released("10.0.0.118", timeout=0, poll=0), 1)
 
 
 class VolumeControlTests(TestCase):

@@ -296,7 +296,10 @@ recognises as the speaker having gone to sleep.
 
 Something about a hard-killed session keeps the speaker awake. After a run whose helper and
 FFmpeg were killed by hand instead of stopped over the protocol, the M5 was still lit some
-hours later. `submode` was `cp`, but `cp` is not the cause: the sleep timer put the speaker
+hours later. The standby action now measures the leading suspect rather than assuming it:
+it waits for established TCP connections to the speaker to drop and reports
+`holding=<count>`. That turns "something was still attached" from a guess into a reading,
+but it has not yet caught the case in the act, so the cause remains open. `submode` was `cp`, but `cp` is not the cause: the sleep timer put the speaker
 into standby while it stayed in `cp`, and the speaker returns to `cp` on its own while idle.
 A `SetPlaybackControl stop` on the CPM API was accepted and reported `playstatus=stop`
 without clearing `cp`. The likelier explanation is a half-open HTTP pull the speaker never
