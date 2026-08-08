@@ -77,6 +77,16 @@ log correlated starts and surface real failures.
 Only one control connection and one FFmpeg may own a session. A second TCP listener can
 compete with playback; a second FFmpeg splits the shared stdin.
 
+## Startup volume is per session, not per helper
+
+The configured `volume` is handed to the first helper of a playback session only. A seek or
+a format change restarts the helper mid-session, and repeating the argument there overwrote
+whatever the listener had set from the menu: measured on the M5 on 2026-08-08, the speaker
+was walked up to `11`, one seek followed, and the new helper logged `Speaker volume is 11;
+starting PCM playback at 3`. Replacement helpers are launched with the clamp raised to the
+speaker's own maximum instead, so they leave the level alone. The safe clamp protects the
+start of a session; it has no business overriding a level a person chose during one.
+
 ## Menu behavior
 
 Emergency stop and standby stop foobar before invoking the control helper. Commands are
