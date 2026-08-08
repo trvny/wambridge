@@ -452,12 +452,18 @@ def run(
     startup_complete = False
     try:
         current_volume = get_volume(speaker_ip, port=speaker_port)
-        restore_volume = current_volume
         start_volume = choose_start_volume(
             current_volume,
             args.volume,
             args.max_start_volume,
         )
+        # Only where the recovery above actually fired. Restoring a 0 that was
+        # found rather than chosen would put the speaker back into the silence
+        # this startup just took it out of, and the abort path is exactly when
+        # nobody is watching. With an explicit level the 0 was not recovered
+        # from, so leaving no trace remains the right contract.
+        recovered_from_silence = current_volume == 0 and args.volume is None
+        restore_volume = start_volume if recovered_from_silence else current_volume
         LOGGER.info(
             "Speaker volume is %s; starting PCM playback at %s",
             current_volume,
