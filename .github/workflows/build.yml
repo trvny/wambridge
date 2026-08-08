@@ -6,6 +6,7 @@ on:
       - ".github/workflows/build.yml"
       - "foobar/**"
       - "pyproject.toml"
+      - "uv.lock"
       - "src/**"
       - "tests/**"
       - "tools/**"
@@ -16,6 +17,7 @@ on:
       - ".github/workflows/build.yml"
       - "foobar/**"
       - "pyproject.toml"
+      - "uv.lock"
       - "src/**"
       - "tests/**"
       - "tools/**"
@@ -32,38 +34,51 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9
         with:
-          python-version: "3.13"
+          python-version: "3.14"
+          enable-cache: true
+          cache-python: true
+
+      - name: Resolve dependencies
+        shell: pwsh
+        run: |
+          uv lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv sync --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Archive generated lockfile
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wambridge-uv-lock
+          path: uv.lock
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Check Python
         shell: pwsh
         run: |
-          python -m pip install "ruff>=0.12,<1"
+          uv run ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m compileall -q src tests foobar/wambridge_pcm_entry.py tools
+          uv run python -m compileall -q src tests foobar/wambridge_pcm_entry.py tools
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test Python package
         shell: pwsh
         run: |
-          python -m pip install -e .
+          uv run python -m unittest discover -s tests -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m unittest discover -s tests -v
+          uv run wambridge-control --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          wambridge-control --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          wambridge-events --help | Out-Null
+          uv run wambridge-events --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build standalone helper
         shell: pwsh
         run: |
-          python -m pip install pyinstaller
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m PyInstaller `
+          uv run python -m PyInstaller `
             --noconfirm `
             --clean `
             --onedir `
@@ -81,7 +96,7 @@ jobs:
       - name: Build standalone control helper
         shell: pwsh
         run: |
-          python -m PyInstaller `
+          uv run python -m PyInstaller `
             --noconfirm `
             --clean `
             --onefile `
@@ -99,7 +114,7 @@ jobs:
       - name: Build standalone event listener
         shell: pwsh
         run: |
-          python -m PyInstaller `
+          uv run python -m PyInstaller `
             --noconfirm `
             --clean `
             --onefile `
