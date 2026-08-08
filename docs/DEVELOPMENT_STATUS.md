@@ -233,9 +233,15 @@ Each of these cost real time and each is closed by measurement, not by argument.
 
 1. **Physical checklist for PR #30** (routed volume slider). It changes `volume_set` and the
    helper's startup volume, so the full gate applies before merging.
-2. **Revisit the 4.0 s host buffer floor.** It was dismissed as "2-3 s of thirteen" and is
-   now the largest single term of six. `clamp(bufferLength, 2.0, 30.0)` plus 2.0 is a choice,
-   not a measurement, and nothing has tested what the floor can be before the pipe starves.
+2. **Find how small the host buffer can get.** It was dismissed as "2-3 s of thirteen" and is
+   now the largest single term of six. `clamp(bufferLength, 2.0, 30.0)` plus a pad is a
+   choice, not a measurement, and nothing has tested where the pipe starts to starve.
+   The pad is now `buffer_extra` in the INI, milliseconds, default `2000` so nothing moves
+   until it is measured. Capacity is delay here almost one for one: the queue was measured
+   running 3.79-3.99 s full of its 4.0 s capacity. Walk it down - 1500, 1000, 500, 0 - and
+   watch for the pipe starving, which shows up as `free` climbing in the `CLOCK` line and
+   audible dropouts, not as a lower number. Below `buffer_extra=0` the remaining 2.0 s is
+   the clamp floor and needs its own change.
 3. **Decide whether `startup_silence` should default to 0.** It has now run at 0 for a whole
    session on hardware, repeatedly reaching `WAMBRIDGE PLAYING`, and it is 1.5 s of pure
    delay on a path of six. The default is still 1500, so every stock installation pays it and

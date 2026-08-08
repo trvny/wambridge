@@ -17,6 +17,14 @@ volume=4
 # played on hardware, so it is not what you want unless you are measuring it.
 #format=flac
 
+# Milliseconds of queue kept on top of foobar's own buffer length, 0..10000,
+# default 2000. Capacity is delay here almost one for one: the queue was measured
+# running 3.79-3.99 s full of its 4.0 s capacity, which makes this the largest
+# single share of the delay and the one nobody ever measured. Lower it to find
+# where the pipe starves - starving shows as free climbing in the CLOCK line and
+# as audible dropouts, not as a better number.
+#buffer_extra=1000
+
 # Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
 # 240 lines. Turn it on before reporting anything about pacing.
 #diagnostics=1

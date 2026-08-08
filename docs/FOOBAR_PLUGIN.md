@@ -52,6 +52,12 @@ Optional keys and overrides:
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
   `0..10000`, default `1500`. Out-of-range values fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,
+- `buffer_extra` or `WAMBRIDGE_BUFFER_EXTRA`, milliseconds of queue kept on top of foobar's
+  own buffer length, `0..10000`, default `2000`. Capacity is delay on this path almost one
+  for one - the queue measured 3.79-3.99 s full of a 4.0 s capacity - so this is the largest
+  single share of the roughly six seconds that reach the ear, and it was chosen rather than
+  measured. Lower it to find where the pipe starves; starving shows up as `free` climbing in
+  the `CLOCK` line and as audible dropouts,
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on

@@ -156,6 +156,16 @@ constexpr const wchar_t* kDefaultStreamFormat = L"flac";
 constexpr int kDefaultStartupSilenceMs = 1500;
 constexpr int kMaximumStartupSilenceMs = 10000;
 
+// Milliseconds of queue this output keeps on top of foobar's own buffer length.
+// Measured 2026-08-08: the queue runs almost exactly full - 3.79 to 3.99 s of a
+// 4.0 s capacity - so every millisecond of capacity is a millisecond of delay,
+// and this term plus the 2 s clamp floor below it is the largest single share
+// of the roughly six seconds that reach the ear. It was chosen, never measured.
+// Configurable so the hardware can say where the pipe starts to starve; the
+// default deliberately keeps today's behaviour until it has.
+constexpr int kDefaultBufferExtraMs = 2000;
+constexpr int kMaximumBufferExtraMs = 10000;
+
 // The M5's own scale. Used to disable the helper's start-volume clamp when a
 // helper is being replaced mid-session rather than starting one.
 constexpr int kMaximumRawVolume = 30;
@@ -167,6 +177,7 @@ struct Settings {
     std::optional<int> volume;
     bool diagnostics = false;
     int startupSilenceMs = kDefaultStartupSilenceMs;
+    int bufferExtraMs = kDefaultBufferExtraMs;
 };
 
 Settings load_settings() {
@@ -228,6 +239,20 @@ Settings load_settings() {
         }
     }
 
+    int bufferExtraMs = kDefaultBufferExtraMs;
+    auto rawBufferExtra = environment_value(L"WAMBRIDGE_BUFFER_EXTRA");
+    if (rawBufferExtra.empty()) {
+        rawBufferExtra = ini_value(L"buffer_extra", L"", path);
+    }
+    if (!rawBufferExtra.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawBufferExtra.c_str(), &end, 10);
+        if (end != rawBufferExtra.c_str() && *end == L'\0' && parsed >= 0 &&
+            parsed <= kMaximumBufferExtraMs) {
+            bufferExtraMs = static_cast<int>(parsed);
+        }
+    }
+
     return {
         std::move(helper),
         std::move(device),
@@ -235,6 +260,7 @@ Settings load_settings() {
         volume,
         diagnostics,
         startupSilenceMs,
+        bufferExtraMs,
     };
 }
 
@@ -349,8 +375,13 @@ public:
             reset_clock_locked();
             m_sampleRate = sampleRate;
             m_channels = channels;
+            // Capacity is delay: the queue measured 3.79-3.99 s full of a 4.0 s
+            // capacity, so whatever is allowed here is heard that much later.
             m_capacityFrames = static_cast<size_t>(
-                std::ceil((m_bufferLength + 2.0) * static_cast<double>(m_sampleRate))
+                std::ceil(
+                    (m_bufferLength + m_settings.bufferExtraMs / 1000.0) *
+                    static_cast<double>(m_sampleRate)
+                )
             );
             m_flushing = false;
             ++m_generation;
