@@ -49,7 +49,16 @@ constexpr unsigned kMaxCounterLines = 240;
 constexpr std::chrono::milliseconds kCounterInterval{1000};
 constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
-constexpr DWORD kActiveShutdownGraceMs = 2000;
+// A ceiling, not a delay: the wait returns the moment the helper exits, so this
+// only ever costs time when one is genuinely stuck. It has to outlast the
+// helper's own teardown - stopping playback on the speaker, optionally arming a
+// sleep timer, and reading the socket table once its own sockets are gone -
+// because terminating it half way through leaves exactly the state that
+// teardown exists to prevent: a speaker still holding a dead playback session.
+constexpr DWORD kActiveShutdownGraceMs = 6000;
+// Only for terminating a helper that never reached playing, where nothing has
+// to be released before it goes.
+constexpr DWORD kTerminatedShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
 
 // {B768F82C-A6B7-436F-965D-6C8D1B21B91D}
@@ -196,6 +205,16 @@ constexpr int kMaximumStartupSilenceMs = 10000;
 constexpr int kDefaultBufferExtraMs = 2000;
 constexpr int kMaximumBufferExtraMs = 10000;
 
+// Seconds of sleep timer the helper arms once a stream ends. Off by default,
+// because it powers the speaker down and that has to be asked for.
+//
+// This firmware has no idle power-down at all: `GetPowerSaving` and
+// `GetAutoPowerDown` do not exist, and `SetSleepTimer` is the only power lever
+// it answers. Stopping playback therefore leaves the M5 lit indefinitely, which
+// is how it once stayed on overnight.
+constexpr int kDefaultSleepAfterStopSeconds = 0;
+constexpr int kMaximumSleepAfterStopSeconds = 86400;
+
 // Every key this component reads. A file may legitimately outlive the build that
 // understood it -- `hardware_volume` exists only on an unmerged branch -- and an
 // ignored key is indistinguishable from a working one from the outside.
@@ -209,6 +228,7 @@ constexpr const wchar_t* kKnownIniKeys[] = {
     L"buffer_extra",
     L"hardware_volume",
     L"volume_max",
+    L"sleep_after_stop",
 };
 
 void report_unknown_ini_keys(const std::wstring& path) {
@@ -294,6 +314,7 @@ struct Settings {
     int bufferExtraMs = kDefaultBufferExtraMs;
     bool hardwareVolume = false;
     int volumeMax = kDefaultVolumeMax;
+    int sleepAfterStopSeconds = kDefaultSleepAfterStopSeconds;
 };
 
 bool truthy(const std::wstring& value) {
@@ -443,6 +464,30 @@ Settings load_settings() {
         }
     }
 
+    int sleepAfterStopSeconds = kDefaultSleepAfterStopSeconds;
+    auto rawSleep = environment_value(L"WAMBRIDGE_SLEEP_AFTER_STOP");
+    if (rawSleep.empty()) {
+        rawSleep = ini_value(L"sleep_after_stop", L"", path);
+    }
+    if (!rawSleep.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawSleep.c_str(), &end, 10);
+        if (end != rawSleep.c_str() && *end == L'\0' && parsed >= 0 &&
+            parsed <= kMaximumSleepAfterStopSeconds) {
+            sleepAfterStopSeconds = static_cast<int>(parsed);
+        } else {
+            // Silence here would read as "the speaker still will not sleep",
+            // which is exactly the symptom this setting exists to end.
+            console::printf(
+                "%s: sleep_after_stop %s is not a number of seconds in 0..%u, "
+                "arming no sleep timer",
+                kComponentName,
+                narrowed(rawSleep).c_str(),
+                static_cast<unsigned>(kMaximumSleepAfterStopSeconds)
+            );
+        }
+    }
+
     return {
         std::move(helper),
         std::move(device),
@@ -453,6 +498,7 @@ Settings load_settings() {
         bufferExtraMs,
         hardwareVolume,
         volumeMax,
+        sleepAfterStopSeconds,
     };
 }
 
@@ -1094,6 +1140,10 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
+        if (m_settings.sleepAfterStopSeconds > 0) {
+            command += L" --sleep-after-stop " +
+                std::to_wstring(m_settings.sleepAfterStopSeconds);
+        }
         // Three rules, in the order that makes them agree.
         //
         // With the slider routed, the slider is the answer: the helper mutes
@@ -1625,7 +1675,7 @@ private:
         if (process != nullptr &&
             WaitForSingleObject(process, gracefulWait) == WAIT_TIMEOUT) {
             TerminateProcess(process, 1);
-            WaitForSingleObject(process, kActiveShutdownGraceMs);
+            WaitForSingleObject(process, kTerminatedShutdownGraceMs);
         }
         if (m_protocolThread.joinable()) m_protocolThread.join();
         m_helperReady.store(false);

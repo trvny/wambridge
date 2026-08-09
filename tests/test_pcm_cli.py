@@ -4,10 +4,10 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import call, patch
 
-from wambridge.pcm_cli import PlaybackWatcher, build_parser, run
+from wambridge.pcm_cli import PlaybackWatcher, _stopped_line, build_parser, run
 from wambridge.samsung import WamApiError
 from wambridge.stream import StreamError
-from wambridge.wam_events import WamEvent
+from wambridge.wam_events import WamEvent, WamEventError
 
 
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
@@ -43,7 +43,7 @@ class FakePlaybackWatcher:
     instances: list["FakePlaybackWatcher"] = []
     forced_rejection: str | None = None
 
-    def __init__(self, *_args, **_kwargs) -> None:
+    def __init__(self, *_args, **kwargs) -> None:
         self.armed = False
         self.stream_active = False
         self.startup_complete = False
@@ -51,13 +51,23 @@ class FakePlaybackWatcher:
         self.failure_checks = 0
         self.offered: list[str] = []
         self.volumes: list[int] = []
+        self.released = False
+        self.sleep_timer_cancellations = 0
+        self.sleep_after_stop = kwargs.get("sleep_after_stop", 0)
+        self.release_summary = "stop=sent sleep=off"
         self.__class__.instances.append(self)
 
     def __enter__(self):
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        return None
+        self.release()
+
+    def release(self) -> None:
+        self.released = True
+
+    def cancel_sleep_timer(self) -> None:
+        self.sleep_timer_cancellations += 1
 
     def arm(self) -> None:
         self.armed = True
@@ -86,6 +96,36 @@ class FakePlaybackWatcher:
         return None
 
 
+class FakeControlConnection:
+    """Stand in for the persistent 55001 connection the listener thread owns."""
+
+    def __init__(
+        self,
+        watcher: PlaybackWatcher,
+        *,
+        rejection: str | None = None,
+        failing: bool = False,
+    ) -> None:
+        self._watcher = watcher
+        self._rejection = rejection
+        self._failing = failing
+        self.sent: list[tuple[str, list | None, bool]] = []
+
+    def send(
+        self,
+        *,
+        method: str,
+        arguments: list | None = None,
+        api_type: str = "UIC",
+        power_on: bool = False,
+    ) -> None:
+        if self._failing:
+            raise WamEventError("Samsung WAM closed the persistent connection")
+        self.sent.append((method, arguments, power_on))
+        # What the listener thread would have recorded, without the thread.
+        self._watcher._results[method] = self._rejection or ""
+
+
 class PcmCliTests(TestCase):
     def setUp(self) -> None:
         FakePlaybackWatcher.instances.clear()
@@ -102,6 +142,14 @@ class PcmCliTests(TestCase):
         )
         uuid_patcher.start()
         self.addCleanup(uuid_patcher.stop)
+        # The real reading depends on the host's socket table, and on a machine
+        # that has no speaker it is neither zero nor stable.
+        released_patcher = patch(
+            "wambridge.pcm_cli.wait_until_released",
+            return_value=0,
+        )
+        released_patcher.start()
+        self.addCleanup(released_patcher.stop)
 
     def _args(self, *extra: str):
         return build_parser().parse_args(
@@ -157,9 +205,14 @@ class PcmCliTests(TestCase):
         # It has to come after PLAYING: before that the startup sequence owns
         # the volume and a level arriving mid-handshake fights the unmute.
         self.assertRegex(lines[5], r"^WAMBRIDGE CONTROL_PORT \d+ \S+$")
-        self.assertEqual(len(lines), 6)
+        # Last, and only after the server and the control socket are gone: this
+        # line is what a morning-after console read has to be able to answer
+        # "was anything still holding the speaker" from.
+        self.assertEqual(lines[6], "WAMBRIDGE STOPPED stop=sent sleep=off holding=0")
+        self.assertEqual(len(lines), 7)
         self.assertEqual(len(FakePlaybackWatcher.instances), 1)
         watcher = FakePlaybackWatcher.instances[0]
+        self.assertTrue(watcher.released)
         self.assertTrue(watcher.armed)
         self.assertTrue(watcher.stream_active)
         self.assertTrue(watcher.startup_complete)
@@ -311,7 +364,8 @@ class PcmCliTests(TestCase):
         # It has to come after PLAYING: before that the startup sequence owns
         # the volume and a level arriving mid-handshake fights the unmute.
         self.assertRegex(lines[5], r"^WAMBRIDGE CONTROL_PORT \d+ \S+$")
-        self.assertEqual(len(lines), 6)
+        self.assertEqual(lines[6], "WAMBRIDGE STOPPED stop=sent sleep=off holding=0")
+        self.assertEqual(len(lines), 7)
 
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
@@ -472,7 +526,163 @@ class PcmCliTests(TestCase):
                     protocol_output=StringIO(),
                 )
 
+    @patch("wambridge.pcm_cli.set_volume")
+    @patch("wambridge.pcm_cli.get_volume", return_value=7)
+    @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
+    @patch(
+        "wambridge.pcm_cli.probe",
+        return_value=SimpleNamespace(method="SpkName"),
+    )
+    @patch("wambridge.pcm_cli.select_speaker", return_value=("10.0.0.118", 55001))
+    def test_reports_the_teardown_of_a_session_that_failed(
+        self,
+        _select_mock,
+        _probe_mock,
+        _local_ip_mock,
+        _get_volume_mock,
+        _volume_mock,
+    ) -> None:
+        # A run that ends badly is exactly the one that used to walk away from a
+        # speaker still holding a playback session, so its teardown has to be
+        # reported too, not only a clean stop's.
+        class SilentServer(FakePcmServer):
+            def start(self) -> None:
+                pass
+
+        args = self._args()
+        args.startup_timeout = 0.01
+        protocol = StringIO()
+
+        with patch("wambridge.pcm_cli.PcmAudioStreamServer", SilentServer):
+            with self.assertRaises(StreamError):
+                run(args, pcm_input=BytesIO(), protocol_output=protocol)
+
+        lines = protocol.getvalue().splitlines()
+        self.assertTrue(FakePlaybackWatcher.instances[0].released)
+        self.assertEqual(lines[-1], "WAMBRIDGE STOPPED stop=sent sleep=off holding=0")
+
+    @patch("wambridge.pcm_cli.wait_until_released", return_value=None)
+    def test_unreadable_socket_table_is_unknown_not_zero(self, _released_mock) -> None:
         self.assertEqual(
-            volume_mock.call_args_list,
-            [call("10.0.0.118", 0, port=55001, timeout=1.0)],
+            _stopped_line(None, "10.0.0.118"),
+            "WAMBRIDGE STOPPED stop=skipped holding=unknown",
         )
+
+    def _connected_watcher(
+        self,
+        *,
+        sleep_after_stop: int = 0,
+        rejection: str | None = None,
+        failing: bool = False,
+    ) -> tuple[PlaybackWatcher, FakeControlConnection]:
+        watcher = PlaybackWatcher(
+            "10.0.0.118",
+            CLIENT_UUID,
+            port=55001,
+            sleep_after_stop=sleep_after_stop,
+        )
+        connection = FakeControlConnection(
+            watcher,
+            rejection=rejection,
+            failing=failing,
+        )
+        watcher._connection = connection
+        return watcher, connection
+
+    def test_release_stops_playback_over_the_connection_already_open(self) -> None:
+        watcher, connection = self._connected_watcher()
+        watcher.arm()
+
+        watcher.release()
+
+        # UIC pause, because that is what this firmware answers on the URL path,
+        # and no mute: a mute would hand the speaker back silent to whoever
+        # picks it up next. No `pwron`, which would wake what this is releasing.
+        self.assertEqual(
+            connection.sent,
+            [("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False)],
+        )
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=off")
+
+    def test_release_arms_the_sleep_timer_only_when_asked(self) -> None:
+        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+        watcher.arm()
+
+        watcher.release()
+
+        self.assertEqual(
+            connection.sent[1],
+            (
+                "SetSleepTimer",
+                [("option", "start", "str"), ("sleeptime", 120, "dec")],
+                False,
+            ),
+        )
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=120s")
+
+    def test_release_sends_nothing_when_no_stream_was_offered(self) -> None:
+        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+
+        watcher.release()
+
+        # Never armed means no playback session of ours exists to end, and a
+        # stop would reach past this helper into whatever else is playing.
+        self.assertEqual(connection.sent, [])
+        self.assertEqual(watcher.release_summary, "stop=skipped")
+
+    def test_release_happens_once_per_session(self) -> None:
+        watcher, connection = self._connected_watcher()
+        watcher.arm()
+
+        watcher.release()
+        watcher.release()
+
+        self.assertEqual(len(connection.sent), 1)
+
+    def test_release_records_a_rejection_without_raising(self) -> None:
+        watcher, _connection = self._connected_watcher(
+            sleep_after_stop=120,
+            rejection="Speaker rejected SetPlaybackControl (error 3)",
+        )
+        watcher.arm()
+
+        watcher.release()
+
+        self.assertEqual(watcher.release_summary, "stop=rejected sleep=120s")
+
+    def test_release_survives_a_speaker_that_has_gone_away(self) -> None:
+        watcher, _connection = self._connected_watcher(failing=True)
+        watcher.arm()
+
+        # Teardown runs when something has already gone wrong. Turning that into
+        # a second exception would lose the first one.
+        watcher.release()
+
+        self.assertEqual(watcher.release_summary, "stop=unreachable")
+
+    def test_a_pending_sleep_timer_is_cleared_before_the_next_stream(self) -> None:
+        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+
+        watcher.cancel_sleep_timer()
+
+        # A seek stops one helper and starts another. Without this the timer the
+        # first one armed would put the speaker into standby mid-track.
+        self.assertEqual(
+            connection.sent,
+            [
+                (
+                    "SetSleepTimer",
+                    [("option", "off", "str"), ("sleeptime", 0, "dec")],
+                    False,
+                )
+            ],
+        )
+
+    def test_no_sleep_timer_configured_leaves_the_speakers_own_timer_alone(
+        self,
+    ) -> None:
+        watcher, connection = self._connected_watcher()
+
+        watcher.cancel_sleep_timer()
+
+        self.assertEqual(connection.sent, [])

@@ -94,6 +94,35 @@ log correlated starts and surface real failures.
 Only one control connection and one FFmpeg may own a session. A second TCP listener can
 compete with playback; a second FFmpeg splits the shared stdin.
 
+## Ending a stream is a command, not just a close
+
+Closing the local HTTP server does not end anything as far as the speaker is concerned. It
+was told to play a URL and it keeps that session, with no idle power-down on this firmware to
+recover from a source that stopped answering: a normal `Shutting down...` with a stream still
+up left the M5 lit all night on 2026-08-08.
+
+The helper therefore releases the speaker on its way out, over the persistent `55001`
+connection it already owns rather than a second one. Three rules hold it together:
+
+- It runs from `PlaybackWatcher.__exit__`, so failed sessions release too. Those are the ones
+  that used to walk away from a speaker still holding a session.
+- It is best effort. Teardown usually runs because something already went wrong, and a second
+  exception there would bury the first. What happened is reported instead.
+- It sends no mute and no `pwron`. A mute would hand the speaker back silent to whoever picks
+  it up next, and `pwron` would wake what is being released.
+
+Every session then ends with one line: `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|
+skipped> sleep=<off|Ns> holding=<count>`. Before it there was nothing at all in the console
+at the end of a stream, which is why the morning after a speaker that stayed lit there was
+nothing to read.
+
+`sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
+default. It is the only lever this firmware answers, and it is opt-in because powering the
+speaker down is the listener's decision. A seek restarts the helper mid-session, so a
+configured session also clears any pending timer before the next stream — otherwise the timer
+armed on the way out would put the speaker into standby mid-track. Sessions that arm nothing
+clear nothing, leaving a timer set from the Samsung app alone.
+
 ## Startup volume is per session, not per helper
 
 The configured `volume` is handed to the first helper of a playback session only. A seek or
@@ -112,9 +141,9 @@ commands operate in raw M5 steps.
 
 Standby is misnamed. It stops and mutes, which leaves the speaker lit and fully powered.
 The state a user recognises as the speaker sleeping comes only from `SetSleepTimer`, whose
-`sleeptime` is in seconds and which clears itself after firing. Renaming the item or
-switching it to a short sleep timer is open work; see the standby section of
-`docs/WAM_PROTOCOL.md`.
+`sleeptime` is in seconds and which clears itself after firing. The stream path now offers
+that through `sleep_after_stop`; renaming this menu item or pointing it at the same timer is
+still open work. See the standby section of `docs/WAM_PROTOCOL.md`.
 
 What standby does now guarantee is that nothing local is still attached. After the stop and
 the mute it waits up to `STANDBY_RELEASE_TIMEOUT` for established TCP connections to the

@@ -20,12 +20,20 @@ from .cli_common import (
     configure_logging,
     select_speaker,
 )
+from .connections import wait_until_released
 from .control_channel import ControlChannel
 from .discovery import local_ip_for
 from .identity import load_client_uuid
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
-from .samsung import WamApiError, get_volume, methods_agree, probe, set_volume
+from .samsung import (
+    WamApiError,
+    get_volume,
+    methods_agree,
+    probe,
+    set_volume,
+    sleep_timer_arguments,
+)
 from .stream import OUTPUT_PROFILES, STARTUP_SILENCE_MS, StreamError
 from .wam_events import WamEvent, WamEventConnection, WamEventError
 
@@ -37,6 +45,15 @@ _PUBLIC_IDENTIFIER = "public"
 _PLAYBACK_COMMAND = "SetUrlPlayback"
 _VOLUME_COMMAND = "SetVolume"
 _VOLUME_ACK_TIMEOUT = 1.0
+_STOP_COMMAND = "SetPlaybackControl"
+_SLEEP_COMMAND = "SetSleepTimer"
+_STOP_ACK_TIMEOUT = 1.0
+# Long enough for an orderly close to leave the table, short enough that the
+# component's shutdown grace does not expire and terminate the helper mid-release
+# - which is the very shape of teardown that leaves the speaker lit.
+_RELEASE_TIMEOUT = 1.5
+_RELEASE_POLL = 0.25
+MAXIMUM_SLEEP_AFTER_STOP_SECONDS = 86400
 
 
 sample_rate = bounded_int("sample rate", minimum=1)
@@ -47,6 +64,13 @@ channel_count = bounded_int("channels", minimum=1)
 
 startup_silence = bounded_int("startup silence in ms", minimum=0, maximum=10000)
 """Parse the leading silence in milliseconds."""
+
+sleep_after_stop = bounded_int(
+    "sleep timer in seconds",
+    minimum=0,
+    maximum=MAXIMUM_SLEEP_AFTER_STOP_SECONDS,
+)
+"""Parse the sleep timer armed when a stream ends; 0 arms nothing."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -102,6 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Milliseconds of silence prepended to the stream; 0 disables the "
             "filter entirely. Every millisecond here is a millisecond of delay"
+        ),
+    )
+    parser.add_argument(
+        "--sleep-after-stop",
+        type=sleep_after_stop,
+        default=0,
+        help=(
+            "Seconds of sleep timer to arm once the stream ends; 0 arms "
+            "nothing. This firmware has no idle power-down, so nothing else "
+            "ever turns the speaker off"
         ),
     )
     parser.add_argument("--verbose", action="store_true")
@@ -207,10 +241,20 @@ def _wait_for_stream_event(
 class PlaybackWatcher:
     """Send playback and wait for its speaker events on one TCP connection."""
 
-    def __init__(self, speaker_ip: str, client_uuid: str, *, port: int) -> None:
+    def __init__(
+        self,
+        speaker_ip: str,
+        client_uuid: str,
+        *,
+        port: int,
+        sleep_after_stop: int = 0,
+    ) -> None:
         self._speaker_ip = speaker_ip
         self._client_uuid = client_uuid.casefold()
         self._port = port
+        self._sleep_after_stop = sleep_after_stop
+        self._released = False
+        self.release_summary = "stop=skipped"
         self._armed = threading.Event()
         self._stream_active = threading.Event()
         self._started = threading.Event()
@@ -237,9 +281,93 @@ class PlaybackWatcher:
         return self
 
     def __exit__(self, *_exc: object) -> None:
+        # Before the stop flag, not after: the listener thread owns the socket
+        # this releases the speaker over, and every exit path arrives here -
+        # including the ones that failed, which are exactly the sessions that
+        # used to walk away from a speaker still holding a playback session.
+        self.release()
         self._stop.set()
         if self._thread is not None:
             self._thread.join()
+
+    def release(self) -> None:
+        """Tell the speaker the stream is over, on the connection already open.
+
+        Nothing else does. Teardown closes the local HTTP server and this
+        socket, which leaves the M5 holding a URL playback session whose source
+        simply vanished, and this firmware has no idle power-down to fall back
+        on: after a session that ended this way on 2026-08-08 the speaker was
+        still lit the next morning.
+
+        Best effort by construction. This runs while a session is being torn
+        down, often because something already went wrong, so a speaker that has
+        gone away must not turn a stop into a second failure. What happened is
+        recorded in ``release_summary`` for the protocol line instead.
+        """
+        if self._released:
+            return
+        self._released = True
+        if not self._armed.is_set():
+            # No URL was ever offered, so there is no playback session of ours
+            # to end. Sending a stop anyway would reach past this helper into
+            # whatever else the speaker is doing.
+            return
+
+        # `pause` rather than `stop`: measured on this firmware, the URL and DLNA
+        # path answers UIC pause, while `stop` belongs to the native CP API. The
+        # mute that `stop_playback` pairs with it is deliberately left out - it
+        # would hand the speaker back silent to whoever picks it up next.
+        try:
+            self._send_command(
+                method=_STOP_COMMAND,
+                arguments=[("playbackcontrol", "pause", "str")],
+            )
+        except (StreamError, WamApiError) as error:
+            self.release_summary = "stop=unreachable"
+            LOGGER.warning("Could not stop speaker playback: %s", error)
+            return
+        rejection = self.wait_for_response(
+            _STOP_COMMAND,
+            timeout=_STOP_ACK_TIMEOUT,
+        )
+        self.release_summary = "stop=rejected" if rejection else "stop=sent"
+        if rejection:
+            LOGGER.warning("%s while releasing the speaker", rejection)
+
+        if self._sleep_after_stop <= 0:
+            self.release_summary += " sleep=off"
+            return
+        try:
+            self._send_command(
+                method=_SLEEP_COMMAND,
+                arguments=sleep_timer_arguments(self._sleep_after_stop),
+            )
+        except (StreamError, WamApiError) as error:
+            self.release_summary += " sleep=unreachable"
+            LOGGER.warning("Could not arm the sleep timer: %s", error)
+            return
+        self.release_summary += f" sleep={self._sleep_after_stop}s"
+
+    def cancel_sleep_timer(self) -> None:
+        """Clear a timer an earlier helper of this session armed on its way out.
+
+        A seek stops one helper and starts another, so the timer armed by the
+        one that left survives into the stream that replaced it and would put
+        the speaker into standby mid-track. Only a session that arms timers
+        clears them: a timer the listener set from the Samsung app is theirs,
+        not this component's to throw away.
+        """
+        if self._sleep_after_stop <= 0:
+            return
+        try:
+            self._send_command(
+                method=_SLEEP_COMMAND,
+                arguments=sleep_timer_arguments(0),
+            )
+        except (StreamError, WamApiError) as error:
+            # Not fatal: the worst case is the speaker sleeping early, which is
+            # visible and recoverable, while refusing to play over it is not.
+            LOGGER.warning("Could not clear a pending sleep timer: %s", error)
 
     def arm(self) -> None:
         """Accept playback events only after this attempt sends its command."""
@@ -419,6 +547,27 @@ class PlaybackWatcher:
                 self._connection = None
 
 
+def _stopped_line(watcher: PlaybackWatcher | None, speaker_ip: str) -> str:
+    """Describe how this session let the speaker go.
+
+    Every session used to end with silence in the console, so the morning after
+    a speaker that stayed lit there was nothing to read. ``holding`` counts
+    every local socket still attached, not only this helper's: something else
+    holding the speaker is the same problem seen from the other side. It is
+    ``unknown`` when the table could not be read, never a comforting zero.
+    """
+    summary = watcher.release_summary if watcher is not None else "stop=skipped"
+    held = wait_until_released(
+        speaker_ip,
+        timeout=_RELEASE_TIMEOUT,
+        poll=_RELEASE_POLL,
+    )
+    return (
+        f"WAMBRIDGE STOPPED {summary} "
+        f"holding={'unknown' if held is None else held}"
+    )
+
+
 def run(
     args: argparse.Namespace,
     *,
@@ -453,6 +602,7 @@ def run(
     restore_volume: int | None = None
     volume_changed = False
     startup_complete = False
+    watcher: PlaybackWatcher | None = None
     try:
         current_volume = get_volume(speaker_ip, port=speaker_port)
         start_volume = choose_start_volume(
@@ -483,12 +633,17 @@ def run(
 
         server.start()
         stream_url = server.url(host_ip)
-        with PlaybackWatcher(
+        # Bound before the `with`, so the teardown line can still report what
+        # the release did when the body leaves by exception.
+        watcher = PlaybackWatcher(
             speaker_ip,
             client_uuid,
             port=speaker_port,
-        ) as watcher:
+            sleep_after_stop=args.sleep_after_stop,
+        )
+        with watcher:
             LOGGER.info("Offering %s to %s", stream_url, speaker_ip)
+            watcher.cancel_sleep_timer()
             watcher.arm()
             watcher.offer_stream(stream_url)
             _raise_if_pcm_input_closed(input_stream)
@@ -578,6 +733,14 @@ def run(
                     )
         finally:
             server.close()
+            # After the server and the control socket are gone, never before:
+            # the count is only meaningful once this helper has let go of
+            # everything it held.
+            print(
+                _stopped_line(watcher, speaker_ip),
+                file=output_stream,
+                flush=True,
+            )
 
 
 def main(argv: list[str] | None = None) -> int:

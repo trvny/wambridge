@@ -137,8 +137,15 @@ class PlaybackWatcherErrorTests(TestCase):
                 watcher.wait_for_start(timeout=0.1)
                 watcher.set_volume(7)
 
-            connection.send.assert_called_with(
+            connection.send.assert_any_call(
                 method="SetVolume",
                 arguments=[("volume", 7, "dec")],
                 power_on=True,
+            )
+            # Leaving the block releases the speaker over this same connection,
+            # so the volume command is no longer the last thing sent.
+            connection.send.assert_called_with(
+                method="SetPlaybackControl",
+                arguments=[("playbackcontrol", "pause", "str")],
+                power_on=False,
             )

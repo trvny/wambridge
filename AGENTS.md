@@ -45,6 +45,14 @@ and plausible-looking assumptions.
 - Command timeouts are not automatically failures. Match responses and events
   to the command or stream attempt; unmatched `ErrorEvent` values are
   diagnostics.
+- **Ending a stream is a command, not a close.** Closing the local HTTP server
+  leaves the speaker holding a URL playback session whose source vanished, and
+  this firmware has no idle power-down to recover from that; it stayed lit
+  overnight after an ordinary shutdown. The helper releases it from
+  `PlaybackWatcher.__exit__` with `SetPlaybackControl pause` over the connection
+  it already holds - no second socket, no mute, no `pwron` - and reports
+  `WAMBRIDGE STOPPED stop=... sleep=... holding=...`. Keep that release on every
+  exit path, best effort: teardown runs when something has already failed.
 - Route remote URLs through FFmpeg and the local HTTP server before
   `SetUrlPlayback`.
 

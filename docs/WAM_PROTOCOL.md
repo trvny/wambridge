@@ -333,6 +333,22 @@ A `SetPlaybackControl stop` on the CPM API was accepted and reported `playstatus
 without clearing `cp`. The likelier explanation is a half-open HTTP pull the speaker never
 gave up on, since it cannot tell a dead local server from a slow one.
 
+A second reading on 2026-08-09 narrowed it. The M5 was lit all night after a session that
+was **not** hard-killed: foobar's console shows a normal `Shutting down...` with the stream
+still up and no error. Reading the PCM path settled why. Nothing on it ever told the speaker
+anything about the end of a stream: `stop_playback` was reachable only from the menu and
+`cli.py`, while the helper's teardown closed the local HTTP server and the control socket and
+exited. Every session, clean or not, left the M5 holding a URL playback session whose source
+had simply vanished — and this firmware has no idle power-down to recover from that.
+
+The helper now releases the speaker before it goes, over the persistent `55001` connection it
+already holds: `SetPlaybackControl pause` on the UIC API, the same command `stop_playback`
+uses on this path, without the mute that would hand the speaker back silent, and without
+`pwron`. It then reports `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|skipped>
+sleep=<off|Ns> holding=<count>` once its own sockets are gone. Whether releasing cleanly is
+enough for the M5 to go dark by itself is still unmeasured, which is what `sleep_after_stop`
+is for.
+
 ## No AVTransport renderer
 
 The tested M5 exposes no standard UPnP MediaRenderer or AVTransport service. Ports `7676`,
@@ -352,7 +368,12 @@ without evidence from different firmware.
   a sleep timer to do it. One sample taken hours after a hard-killed session read
   `sleepoption=off` with the LED still on, which argues against self-arming but does not
   settle it: a fired timer reads the same as one that never existed, so only a countdown
-  observed while the speaker is idle and still lit would prove the mechanism.
+  observed while the speaker is idle and still lit would prove the mechanism. Now testable:
+  a session that ends with `stop=sent holding=0` is the clean stop this question needs, and
+  the answer is whatever the LED does overnight with `sleep_after_stop` left at 0.
+- Whether `SetPlaybackControl pause` releases the speaker's HTTP pull, or only stops the
+  transport while it keeps the connection. `holding=<count>` reads the local end of that,
+  which is the same socket seen from this side, but the speaker's own view is unmeasured.
 
 ## Safety and acceptance
 

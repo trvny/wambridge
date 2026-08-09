@@ -31,6 +31,15 @@ volume=4
 ; as audible dropouts, not as a better number.
 ;buffer_extra=1000
 
+; Seconds of sleep timer armed once a stream ends, 0..86400, default 0 (off).
+; This firmware has no idle power-down at all - GetPowerSaving and
+; GetAutoPowerDown do not exist - so stopping playback leaves the M5 lit until
+; something asks it to sleep, and SetSleepTimer is the only thing it answers.
+; The timer clears itself once it fires and is cleared again when the next
+; stream starts, so nothing stays configured on the speaker. Off by default,
+; because powering the speaker down is not this component's decision to make.
+;sleep_after_stop=120
+
 ; Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
 ; 240 lines. Turn it on before reporting anything about pacing.
 ;diagnostics=1

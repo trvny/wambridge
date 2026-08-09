@@ -16,7 +16,11 @@ from .cli_common import (
     bounded_int,
     configure_logging,
 )
-from .connections import attached_connections_to
+from .connections import (
+    STANDBY_RELEASE_POLL,
+    STANDBY_RELEASE_TIMEOUT,
+    wait_until_released,
+)
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
     WamApiError,
@@ -33,10 +37,6 @@ LOGGER = logging.getLogger("wambridge")
 DEFAULT_SAFE_VOLUME = 3
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.35
-# A helper that is shutting down needs a moment to drop its sockets, so a single
-# reading right after the stop would report a hold that is about to clear.
-STANDBY_RELEASE_TIMEOUT = 5.0
-STANDBY_RELEASE_POLL = 0.5
 
 
 class ControlError(RuntimeError):
@@ -232,26 +232,6 @@ def emergency_stop(
     if not verification.available and verification.detail:
         lines.append(f"warning={verification.detail}")
     return lines
-
-
-def wait_until_released(
-    speaker_ip: str,
-    *,
-    timeout: float = STANDBY_RELEASE_TIMEOUT,
-    poll: float = STANDBY_RELEASE_POLL,
-) -> int | None:
-    """Wait for local sockets against the speaker to drop, and report the count.
-
-    Returns ``None`` when the socket table could not be read. That is reported
-    as unknown rather than as zero: claiming nothing is attached when it could
-    not be checked is the failure this exists to prevent.
-    """
-    deadline = time.monotonic() + timeout
-    held = attached_connections_to(speaker_ip)
-    while held is not None and held > 0 and time.monotonic() < deadline:
-        time.sleep(poll)
-        held = attached_connections_to(speaker_ip)
-    return held
 
 
 def standby(

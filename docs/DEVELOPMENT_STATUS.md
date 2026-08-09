@@ -228,6 +228,7 @@ Each of these cost real time and each is closed by measurement, not by argument.
 | Does `flag_needs_shims` affect volume | No. It means regular `update()` calls and end-of-stream padding | SDK `output.h` |
 | Can a command clear `cp` | Not observed. `SetPlaybackControl stop` is accepted and does not clear it | `WAM_PROTOCOL.md` |
 | Does the M5 auto-power-down | No configurable one exists. `SetSleepTimer` in **seconds** is the only lever | `WAM_PROTOCOL.md` |
+| Does closing the stream end playback for the speaker | No. Nothing on the PCM path ever told it anything; every session left a URL session whose source vanished | `WAM_PROTOCOL.md` |
 
 ## Open, in the order that makes sense
 
@@ -254,9 +255,17 @@ Each of these cost real time and each is closed by measurement, not by argument.
    process.
 5. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
    reports `holding=<count>` for connections still attached to the speaker, but it still
-   sends no power command, so the name remains wrong until it arms a sleep timer.
-6. Reduce and reimplement the finite share path from its measured working form.
-7. Add a proper foobar preferences page while retaining legacy INI compatibility.
+   sends no power command, so the name remains wrong until it arms a sleep timer. The stream
+   path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
+6. **Confirm on hardware that a released speaker goes dark by itself.** The helper now ends
+   every session with `SetPlaybackControl pause` over its own `55001` connection and reports
+   `WAMBRIDGE STOPPED stop=... sleep=... holding=...`. What that changes for the LED is
+   unmeasured: leave `sleep_after_stop` at `0`, stop playback, and read the console line and
+   the speaker the next morning. `stop=sent holding=0` and a lit LED would mean releasing
+   cleanly is not enough and the timer is the answer; a dark LED closes the question that has
+   been open since 2026-08-02.
+7. Reduce and reimplement the finite share path from its measured working form.
+8. Add a proper foobar preferences page while retaining legacy INI compatibility.
 8. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
 
 ## What the 7-8 s speaker figure was
