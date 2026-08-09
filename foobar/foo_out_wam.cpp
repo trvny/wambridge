@@ -50,11 +50,20 @@ constexpr std::chrono::milliseconds kCounterInterval{1000};
 constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
 // A ceiling, not a delay: the wait returns the moment the helper exits, so this
-// only ever costs time when one is genuinely stuck. It has to outlast the
-// helper's own teardown - stopping playback on the speaker, optionally arming a
-// sleep timer, and reading the socket table once its own sockets are gone -
-// because terminating it half way through leaves exactly the state that
-// teardown exists to prevent: a speaker still holding a dead playback session.
+// only ever costs time when one is genuinely stuck. It covers the part that
+// matters - stopping playback on the speaker and optionally arming a sleep
+// timer, which the helper does first and which takes about a second - because
+// terminating it half way through leaves exactly the state teardown exists to
+// prevent: a speaker still holding a dead playback session.
+//
+// It does not cover the whole teardown. Closing the local server can spend up
+// to 3 s terminating FFmpeg and 3 s joining the HTTP thread, then the socket
+// table read waits up to 1.5 s more, so a stuck encoder can still be killed
+// before the `WAMBRIDGE STOPPED` line is printed. What is lost then is the
+// diagnostic, not the release. Worse, if FFmpeg never exits, `request_finished`
+// never fires and the helper never leaves the block that releases at all: the
+// release needs a path that does not depend on the encoder before this ceiling
+// can be called sufficient.
 constexpr DWORD kActiveShutdownGraceMs = 6000;
 // Only for terminating a helper that never reached playing, where nothing has
 // to be released before it goes.

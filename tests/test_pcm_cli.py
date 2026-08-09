@@ -526,6 +526,13 @@ class PcmCliTests(TestCase):
                     protocol_output=StringIO(),
                 )
 
+        # A speaker found at 0 was muted on purpose, and the startup that failed
+        # here is the one that would have undone it. The 0 goes back.
+        self.assertEqual(
+            volume_mock.call_args_list,
+            [call("10.0.0.118", 0, port=55001, timeout=1.0)],
+        )
+
     @patch("wambridge.pcm_cli.set_volume")
     @patch("wambridge.pcm_cli.get_volume", return_value=7)
     @patch("wambridge.pcm_cli.local_ip_for", return_value="10.0.0.103")
@@ -628,7 +635,10 @@ class PcmCliTests(TestCase):
         # Never armed means no playback session of ours exists to end, and a
         # stop would reach past this helper into whatever else is playing.
         self.assertEqual(connection.sent, [])
-        self.assertEqual(watcher.release_summary, "stop=skipped")
+        # Both fields on every teardown line, whatever happened. `skipped`
+        # rather than `off`, because a timer was configured and this session
+        # simply had nothing to arm it after.
+        self.assertEqual(watcher.release_summary, "stop=skipped sleep=skipped")
 
     def test_release_happens_once_per_session(self) -> None:
         watcher, connection = self._connected_watcher()
@@ -658,7 +668,7 @@ class PcmCliTests(TestCase):
         # a second exception would lose the first one.
         watcher.release()
 
-        self.assertEqual(watcher.release_summary, "stop=unreachable")
+        self.assertEqual(watcher.release_summary, "stop=unreachable sleep=off")
 
     def test_a_pending_sleep_timer_is_cleared_before_the_next_stream(self) -> None:
         watcher, connection = self._connected_watcher(sleep_after_stop=120)

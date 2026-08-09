@@ -290,6 +290,17 @@ class PlaybackWatcher:
         if self._thread is not None:
             self._thread.join()
 
+    def _unarmed_sleep_field(self) -> str:
+        """Report why no timer was armed, without claiming none was configured.
+
+        Both fields appear on every teardown line: one that changes shape by
+        case is one more thing to work out at the moment it is being read to
+        explain something that has already gone wrong. `off` means nobody asked
+        for a timer; `skipped` means one was configured and this session had
+        nothing to arm it after.
+        """
+        return "sleep=off" if self._sleep_after_stop <= 0 else "sleep=skipped"
+
     def release(self) -> None:
         """Tell the speaker the stream is over, on the connection already open.
 
@@ -311,6 +322,7 @@ class PlaybackWatcher:
             # No URL was ever offered, so there is no playback session of ours
             # to end. Sending a stop anyway would reach past this helper into
             # whatever else the speaker is doing.
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
             return
 
         # `pause` rather than `stop`: measured on this firmware, the URL and DLNA
@@ -323,7 +335,7 @@ class PlaybackWatcher:
                 arguments=[("playbackcontrol", "pause", "str")],
             )
         except (StreamError, WamApiError) as error:
-            self.release_summary = "stop=unreachable"
+            self.release_summary = f"stop=unreachable {self._unarmed_sleep_field()}"
             LOGGER.warning("Could not stop speaker playback: %s", error)
             return
         rejection = self.wait_for_response(
@@ -353,9 +365,16 @@ class PlaybackWatcher:
 
         A seek stops one helper and starts another, so the timer armed by the
         one that left survives into the stream that replaced it and would put
-        the speaker into standby mid-track. Only a session that arms timers
-        clears them: a timer the listener set from the Samsung app is theirs,
-        not this component's to throw away.
+        the speaker into standby mid-track.
+
+        Two limits, both real. This clears **any** pending timer, including one
+        the listener set from the Samsung app, because the speaker does not say
+        who armed it - so only a configuration that arms timers clears them, and
+        a default install never touches it. And it is a race, not a guarantee:
+        the replacement only gets here after discovery, probing and the server
+        coming up, so a short enough timer can fire first. Closing that needs the
+        component to say whether a helper is being replaced or the session is
+        ending, which it knows and the helper does not.
         """
         if self._sleep_after_stop <= 0:
             return

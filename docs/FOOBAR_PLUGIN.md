@@ -118,10 +118,19 @@ nothing to read.
 
 `sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
 default. It is the only lever this firmware answers, and it is opt-in because powering the
-speaker down is the listener's decision. A seek restarts the helper mid-session, so a
-configured session also clears any pending timer before the next stream — otherwise the timer
-armed on the way out would put the speaker into standby mid-track. Sessions that arm nothing
-clear nothing, leaving a timer set from the Samsung app alone.
+speaker down is the listener's decision.
+
+It is **not finished**, and the gap is in the seek path. A seek restarts the helper
+mid-session, so the departing helper arms a timer that the stream replacing it never asked
+for. The replacement clears any pending timer before offering its stream, which closes the
+common case but is a race, not a guarantee: it only gets there after discovery, probing and
+its own server coming up, so a short enough timer fires first and the speaker goes into
+standby mid-track. Closing that properly needs the component to tell the helper whether it is
+being replaced or the session is ending — it knows, and the helper does not. Two consequences
+worth stating while it stands: the clear removes **any** pending timer, including one set from
+the Samsung app, because the speaker does not say who armed it; and a configured install that
+goes back to `0` leaves the last timer armed with nothing left to clear it. A default install
+never sends either command.
 
 ## Startup volume is per session, not per helper
 
