@@ -1,8 +1,10 @@
 # AGENTS.md
 
-For playback work, start with `docs/WAM_PROTOCOL.md` and
-`docs/DEVELOPMENT_STATUS.md`. They hold the measured M5 behavior and current
-implementation state; this file keeps only easy-to-miss traps.
+For playback or protocol work, read `docs/WAM_PROTOCOL.md` and
+`docs/DEVELOPMENT_STATUS.md` first. They are living lab notes from repeated tests
+on the physical M5, including failed approaches and measurements that have
+superseded earlier assumptions. Prefer the newest measured result over an older
+plausible explanation. This file keeps only easy-to-miss traps.
 
 ## Expensive traps
 
