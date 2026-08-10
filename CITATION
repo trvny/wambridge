@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+title: "WAM Bridge"
+message: "If you use this software or its protocol research in your work, please cite it using the metadata below."
+type: software
+authors:
+  - name: trvny
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.21877543"
+    description: "Zenodo concept DOI for all archived versions."
+repository-code: "https://github.com/trvny/wambridge"
+url: "https://github.com/trvny/wambridge"
+license: ISC
