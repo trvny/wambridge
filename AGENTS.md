@@ -32,6 +32,5 @@ stop/change, and clean process shutdown pass on the physical M5.
 
 ## GitHub
 
-When available, use `gptomek[bot]` for GitHub side effects, but open pull
-requests as `trvny` so automatic reviews run. Prefer one logical change per PR;
-trivial low-risk fixes can go directly to `main`.
+Prefer one logical change per PR; trivial low-risk fixes can go directly to
+`main`.
