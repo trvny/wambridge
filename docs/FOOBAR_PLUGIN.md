@@ -127,10 +127,31 @@ after the start, and moving it reaches the speaker in about a second over the he
 connection. The cap lifts as soon as a helper reports `PLAYING`, so a seek cannot turn down
 a level chosen mid-session.
 
+**It applies only with `hardware_volume=1`.** That promise above — the slider governs
+everything after the start — is the whole reason a capped start is tolerable, and with
+routing off the slider is a host-side gain that never reaches the speaker. Capping there
+would leave a quiet speaker raisable only one raw step per menu press. A configured `volume`
+in the INI is left uncapped for the same reason from the other direction: it is a level
+somebody chose, where a slider position is leftover state from last time.
+
+Turning the cap off restores exactly what the helper did before it existed — the argument is
+omitted rather than set to the speaker's maximum, so `wambridge-pcm` keeps its own default
+clamp of `10`. Passing `30` there would have made disabling a safety limit *raise* the
+ceiling.
+
 The component also moves the slider to whatever level the helper reports in
 `WAMBRIDGE PLAYING volume=<step>`. Without that the capped start leaves the slider pointing
 at a level the speaker is not playing, and the first pixel of movement jumps straight to it
 — the same surprise the cap removes, only deferred.
+
+That sync is applied on the `CONTROL_PORT` line rather than on `PLAYING`, and only when
+three things hold. The control socket must be up, because moving the slider sends the level
+back out and without the socket that means launching a control process — a second connection
+to `55001` while audio is streaming, which this project has already watched starve a stream.
+The generation must still be current, or a `PLAYING` left in a retired helper's pipe moves
+the slider on behalf of a helper being killed. And the reported step must not exceed
+`volume_max`, because the inverse mapping clamps to that ceiling, so syncing a higher level
+would write the ceiling back and quietly turn the speaker *down*.
 
 **The mapping was never the problem.** Measured by ear on the M5 on 2026-08-15, slider onto
 `0..10`: `1` inaudible, `2` barely there, `3` a little more, `4` clearly louder, `5`

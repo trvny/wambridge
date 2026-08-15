@@ -892,25 +892,29 @@ private:
 
     // "<port> <token>" from WAMBRIDGE CONTROL_PORT. A helper that is no longer
     // the current one must not take over the socket, hence the generation check.
-    void connect_control_channel(const std::string& arguments, uint64_t generation) {
+    // Reports whether the socket is actually up. Callers that would otherwise
+    // send a level need to know: without the socket the send falls back to
+    // launching a control process, and a second connection to 55001 during
+    // playback is the thing AGENTS.md says has starved a live stream.
+    bool connect_control_channel(const std::string& arguments, uint64_t generation) {
         {
             std::lock_guard lock(m_mutex);
-            if (generation != m_generation || m_shutdown) return;
+            if (generation != m_generation || m_shutdown) return false;
         }
         const size_t space = arguments.find(' ');
-        if (space == std::string::npos) return;
+        if (space == std::string::npos) return false;
 
         const std::string portText = arguments.substr(0, space);
         const std::string token = arguments.substr(space + 1);
-        if (token.empty()) return;
+        if (token.empty()) return false;
 
         unsigned long port = 0;
         try {
             port = std::stoul(portText);
         } catch (const std::exception&) {
-            return;
+            return false;
         }
-        if (port == 0 || port > 65535) return;
+        if (port == 0 || port > 65535) return false;
 
         if (!open_control_socket(static_cast<unsigned short>(port), token)) {
             // Only %u and %s: console::printf is pfc's formatter.
@@ -920,7 +924,9 @@ private:
                 kComponentName,
                 static_cast<unsigned>(port)
             );
+            return false;
         }
+        return true;
     }
 
     void retire_stream_locked() {
@@ -1247,19 +1253,25 @@ private:
             // listener sitting above that would still be turned down by a seek.
             command += L" --max-start-volume " +
                 std::to_wstring(kMaximumRawVolume);
-        } else {
+        } else if (m_settings.hardwareVolume && m_settings.startVolumeMax > 0) {
             // First helper of a session with no level from anywhere: the slider
-            // is routed but foobar has not reported it yet, or routing is off
-            // and no volume is configured. Nothing above caps this path, so the
-            // helper followed whatever the speaker had been left at, held only
-            // by its own default clamp of 10 - which is the loud start this
-            // setting exists to stop, arriving through the one branch that had
-            // nothing watching it.
+            // is routed but foobar has not reported it yet. Nothing above caps
+            // this path, so the helper followed whatever the speaker had been
+            // left at, held only by its own default clamp of 10 - the loud
+            // start this setting exists to stop, arriving through the one
+            // branch with nothing watching it.
+            //
+            // Two conditions, both learned the hard way. Only with routing on,
+            // because the promise attached to this cap is "the slider governs
+            // everything after the start", and with routing off the slider is a
+            // host-side gain that never reaches the speaker - capping there
+            // would leave a quiet speaker raisable only one menu press at a
+            // time. And only when the cap is enabled, because passing the
+            // speaker's maximum for a disabled cap would *raise* the clamp from
+            // the helper's own default of 10, which is the opposite of what
+            // turning a safety limit off should do.
             command += L" --max-start-volume " +
-                std::to_wstring(
-                    m_settings.startVolumeMax > 0 ? m_settings.startVolumeMax
-                                                  : kMaximumRawVolume
-                );
+                std::to_wstring(m_settings.startVolumeMax);
         }
         return command;
     }
@@ -1485,18 +1497,26 @@ private:
                     // AGENTS.md calls out as able to starve the stream.
                     m_reportedStep = parsed_volume_step(line);
                 } else if (line.rfind("WAMBRIDGE CONTROL_PORT ", 0) == 0) {
-                    connect_control_channel(line.substr(23), generation);
-                    // Now there is a socket, so this goes over the connection
-                    // the helper already holds. Put the slider where the
-                    // speaker actually ended up: the first helper of a session
-                    // starts capped, and a slider still pointing at last
-                    // night's level would jump there on the first pixel of
-                    // movement - the surprise the cap removes, only deferred.
+                    const bool connected =
+                        connect_control_channel(line.substr(23), generation);
+                    // Put the slider where the speaker actually ended up: the
+                    // first helper of a session starts capped, and a slider
+                    // still pointing at last night's level would jump there on
+                    // the first pixel of movement - the surprise the cap
+                    // removes, only deferred.
                     //
-                    // Generation-checked like the state update above it, or a
-                    // PLAYING still sitting in a retired helper's pipe would
-                    // move the slider on behalf of a helper being killed.
-                    if (m_reportedStep >= 0 && generation_is_current(generation)) {
+                    // Three conditions, each for its own failure. Only with the
+                    // socket up, because moving the slider sends the level back
+                    // out and without it that means launching a process - a
+                    // second connection to 55001 mid-stream. Generation-checked
+                    // like the state update, or a PLAYING left in a retired
+                    // helper's pipe moves the slider for a helper being killed.
+                    // And not above volume_max, because the inverse mapping
+                    // clamps to the ceiling, so syncing a higher level would
+                    // write the ceiling back and quietly turn the speaker down.
+                    if (connected && m_reportedStep >= 0 &&
+                        m_reportedStep <= m_settings.volumeMax &&
+                        generation_is_current(generation)) {
                         wam::note_speaker_step(m_reportedStep);
                     }
                     m_reportedStep = -1;

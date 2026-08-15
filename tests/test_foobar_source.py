@@ -454,14 +454,25 @@ class FoobarSourceTests(TestCase):
         self.assertIn("if (*start < '0' || *start > '9') return -1;", source)
         self.assertIn("value < 0 || value > kMaximumRawVolume", source)
 
-    def test_every_start_path_carries_a_clamp(self) -> None:
+    def test_the_unrouted_start_path_carries_a_clamp(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
         # The branch that reaches neither the slider nor a configured volume was
         # the one with nothing watching it: the helper followed whatever the
         # speaker had been left at, held only by its own default of 10.
         self.assertIn(
-            "m_settings.startVolumeMax > 0 ? m_settings.startVolumeMax",
+            "} else if (m_settings.hardwareVolume && "
+            "m_settings.startVolumeMax > 0) {",
+            source,
+        )
+        # Gated on routing, because the promise attached to the cap - "the
+        # slider governs everything after the start" - is only true when the
+        # slider reaches the speaker at all. And gated on the cap being on:
+        # passing the speaker maximum for a disabled cap would raise the clamp
+        # above the helper's own default of 10, the opposite of disabling it.
+        self.assertIn(
+            'command += L" --max-start-volume " +\n'
+            "                std::to_wstring(m_settings.startVolumeMax);",
             source,
         )
         # A configured INI volume is a deliberate choice and stays uncapped.
@@ -469,3 +480,14 @@ class FoobarSourceTests(TestCase):
             'command += L" --volume " + std::to_wstring(*m_settings.volume);',
             source,
         )
+
+    def test_the_slider_sync_needs_a_socket_and_a_level_in_range(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # Without the socket the send falls back to launching a process, which
+        # is a second connection to 55001 while audio streams.
+        self.assertIn("bool connect_control_channel(", source)
+        self.assertIn("if (connected && m_reportedStep >= 0 &&", source)
+        # decibels_for_step clamps to the ceiling, so syncing a level above
+        # volume_max would write the ceiling back and turn the speaker down.
+        self.assertIn("m_reportedStep <= m_settings.volumeMax &&", source)
