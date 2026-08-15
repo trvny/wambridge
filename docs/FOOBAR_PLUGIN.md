@@ -172,9 +172,13 @@ still open work. See the standby section of `docs/WAM_PROTOCOL.md`.
 What standby does now guarantee is that nothing local is still attached. After the stop and
 the mute it waits up to `STANDBY_RELEASE_TIMEOUT` for established TCP connections to the
 speaker to drop, and reports `holding=<count>`, or `holding=unknown` when the socket table
-could not be read. Sockets owned by the action's own process are excluded; its stop, mute and
-verification each opened one, and waiting those out would report the action's own requests as
-a hold. A remaining hold adds a `warning=` line rather than failing the action: the mute and
+could not be read. What the action excludes is narrower than its own process: only sockets it
+owns that are *already closing* — `FIN_WAIT1`, `FIN_WAIT2`, `CLOSING`, `LAST_ACK`. Its stop,
+mute and verification each opened one, and waiting out that lingering kernel bookkeeping would
+report the action's own finished requests as a hold. A socket the action still holds open
+counts like anyone else's, deliberately: excluding the whole process would hide this
+component's own leaks behind a reassuring `holding=0`. A remaining hold adds a `warning=` line
+rather than failing the action: the mute and
 the stop did land, and the caller may have asked while something else was streaming.
 
 This is not the explanation for a speaker that stays lit, and it should not be read as one.
