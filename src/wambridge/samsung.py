@@ -600,15 +600,21 @@ def _best_effort_power_status(
     and sent its owner to the wall socket at 02:40 for nothing. Optional detail
     is dropped the way ``get_playback_status`` already drops provider metadata.
 
-    The caller's ``timeout`` is deliberately **not** passed on. It belongs to
-    the fields the speaker actually answers; this one is left on the short
-    default, because a command that answers on this port answers fast -
-    measured on the M5, ``GetSpkName`` takes 0.14 s and ``get_volume`` 0.12 s,
-    while this one takes whatever it is given, every time. Forwarding a
-    generous timeout here would spend it entirely on silence.
+    The caller's ``timeout`` is a budget here, not an instruction: whichever of
+    it and the silent-command default is shorter wins. A generous one must not
+    be spent entirely on silence - measured on the M5, ``GetSpkName`` answers in
+    0.14 s and ``get_volume`` in 0.12 s while this one takes whatever it is
+    given, every time - and a tight one must still be honoured, or a snapshot
+    asked for in 0.1 s would sit here for a second. The public
+    ``get_power_status`` keeps its own timeout exactly as written; only this
+    path, which is assembling a snapshot out of several reads, trims it.
     """
     try:
-        return get_power_status(speaker_ip, port=port)
+        return get_power_status(
+            speaker_ip,
+            port=port,
+            timeout=min(timeout, SILENT_COMMAND_TIMEOUT),
+        )
     except WamApiError as error:
         LOGGER.debug("Speaker did not report power status: %s", error)
         return None

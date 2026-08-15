@@ -288,9 +288,34 @@ class SamsungCommandTests(TestCase):
         self.assertEqual(status.power_status, "1")
         self.assertEqual(volume_mock.call_args.kwargs["timeout"], 30.0)
         self.assertEqual(mute_mock.call_args.kwargs["timeout"], 30.0)
-        # The silent one is not offered it. A generous timeout here would be
-        # spent entirely on silence, so it keeps the short default instead.
-        self.assertNotIn("timeout", power_mock.call_args.kwargs)
+        # The silent one is trimmed: a generous budget must not be spent
+        # entirely on a command that is never going to answer.
+        self.assertEqual(
+            power_mock.call_args.kwargs["timeout"],
+            SILENT_COMMAND_TIMEOUT,
+        )
+
+    @patch("wambridge.samsung.get_power_status")
+    @patch("wambridge.samsung.get_mute")
+    @patch("wambridge.samsung.get_volume")
+    @patch("wambridge.samsung.get_playback_status")
+    def test_status_does_not_overrun_a_tighter_timeout_on_the_silent_field(
+        self,
+        playback_mock,
+        volume_mock,
+        mute_mock,
+        power_mock,
+    ) -> None:
+        # A snapshot asked for in 0.1 s must not sit for a second on the one
+        # field that never answers. The default is a ceiling, not a floor.
+        playback_mock.return_value = WamPlaybackStatus(function="wifi")
+        volume_mock.return_value = 7
+        mute_mock.return_value = False
+        power_mock.return_value = None
+
+        get_status("10.0.0.118", timeout=0.1)
+
+        self.assertEqual(power_mock.call_args.kwargs["timeout"], 0.1)
 
     @patch("wambridge.samsung.request")
     def test_silent_command_defaults_to_a_short_wait(self, request_mock) -> None:
