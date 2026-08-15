@@ -491,3 +491,9 @@ class FoobarSourceTests(TestCase):
         # decibels_for_step clamps to the ceiling, so syncing a level above
         # volume_max would write the ceiling back and turn the speaker down.
         self.assertIn("m_reportedStep <= m_settings.volumeMax &&", source)
+        # Reset per helper. One that reaches PLAYING and dies before announcing
+        # its control channel would otherwise leave its level for the next
+        # helper, which the generation check cannot catch - by then the
+        # generation is legitimately current.
+        reset = source.index("m_childReachedPlaying.store(false);")
+        self.assertLess(reset, source.index("m_reportedStep = -1;", reset))

@@ -1130,8 +1130,12 @@ private:
         }
     }
 
-    // The same test set_protocol_state_if_current applies, for callers that act
-    // on a protocol line without changing protocol state.
+    // For callers that act on a protocol line without changing protocol state.
+    // Deliberately not the whole test set_protocol_state_if_current applies: it
+    // also rejects a flush, which it must, because accepting state then would
+    // restart a clock for a stream being torn down. A slider position is not
+    // clock state and a flush does not make the level wrong, so it is left out
+    // rather than copied for symmetry.
     bool generation_is_current(uint64_t generation) {
         std::lock_guard lock(m_mutex);
         return !m_shutdown && !m_restart && generation == m_generation &&
@@ -1293,6 +1297,12 @@ private:
         m_childStopping.store(false);
         m_helperReady.store(false);
         m_childReachedPlaying.store(false);
+        // Belongs to the helper that reported it. A helper that reaches PLAYING
+        // and dies before announcing its control channel would otherwise leave
+        // its level here for the next helper to apply on its own CONTROL_PORT
+        // line - and the generation check cannot catch that, because by then
+        // the generation is legitimately current.
+        m_reportedStep = -1;
         {
             std::lock_guard lock(m_mutex);
             m_childExited = false;
