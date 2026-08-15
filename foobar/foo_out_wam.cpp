@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cwchar>
 #include <deque>
 #include <mutex>
@@ -39,6 +40,22 @@ constexpr size_t kWriteBatchFrames = 4096;
 // replaced mid-session rather than started.
 constexpr int kMaximumRawVolume = 30;
 constexpr int kDefaultVolumeMax = 10;
+// The highest raw step the first helper of a playback session may start at,
+// however high the slider is sitting. The slider governs everything after it.
+//
+// The curve itself is fine, which is why this is a cap and not a different
+// mapping. Measured by ear on the M5 on 2026-08-15 over a slider mapped onto
+// 0..10: 1 inaudible, 2 barely there, 3 a little more, 4 clearly louder, 5
+// distinct, 6 enough to cut through conversation in the room, 7 comfortable
+// listening. No cliff anywhere in it.
+//
+// What made the owner jump was never the mapping. Arriving at 7 by dragging the
+// slider sounds fine; arriving at 7 cold, on a track whose loudness nobody knows
+// yet, does not - and a slider left there after an evening of listening is
+// exactly what the next session started from. So the start is capped and the
+// listener raises it, which is the shape they asked for: "not a global limit,
+// just don't scare me every single time".
+constexpr int kDefaultStartVolumeMax = 3;
 // Below this the slider is treated as silence. Amplitude at -60 dB is 0.001,
 // which rounds to step 0 for every ceiling in range anyway.
 constexpr double kSilenceDecibels = -60.0;
@@ -230,6 +247,7 @@ constexpr const wchar_t* kKnownIniKeys[] = {
     L"buffer_extra",
     L"hardware_volume",
     L"volume_max",
+    L"start_volume_max",
 };
 
 void report_unknown_ini_keys(const std::wstring& path) {
@@ -315,6 +333,7 @@ struct Settings {
     int bufferExtraMs = kDefaultBufferExtraMs;
     bool hardwareVolume = false;
     int volumeMax = kDefaultVolumeMax;
+    int startVolumeMax = kDefaultStartVolumeMax;
 };
 
 bool truthy(const std::wstring& value) {
@@ -415,6 +434,40 @@ Settings load_settings() {
         if (end != rawMax.c_str() && *end == L'\0' && parsed >= 1 &&
             parsed <= kMaximumRawVolume) {
             volumeMax = static_cast<int>(parsed);
+        } else {
+            // "Nothing here is ignored quietly any more" was not true of this
+            // one: it was the last key that fell back without saying so.
+            console::printf(
+                "%s: volume_max %s is not a raw step in 1..%u, keeping %u",
+                kComponentName,
+                narrowed(rawMax).c_str(),
+                static_cast<unsigned>(kMaximumRawVolume),
+                static_cast<unsigned>(volumeMax)
+            );
+        }
+    }
+
+    int startVolumeMax = kDefaultStartVolumeMax;
+    auto rawStartMax = environment_value(L"WAMBRIDGE_START_VOLUME_MAX");
+    if (rawStartMax.empty()) {
+        rawStartMax = ini_value(L"start_volume_max", L"", path);
+    }
+    if (!rawStartMax.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawStartMax.c_str(), &end, 10);
+        // Zero is a real answer here and means "no cap, start where the slider
+        // points", so the range starts at 0 rather than 1.
+        if (end != rawStartMax.c_str() && *end == L'\0' && parsed >= 0 &&
+            parsed <= kMaximumRawVolume) {
+            startVolumeMax = static_cast<int>(parsed);
+        } else {
+            console::printf(
+                "%s: start_volume_max %s is not a raw step in 0..%u, keeping %u",
+                kComponentName,
+                narrowed(rawStartMax).c_str(),
+                static_cast<unsigned>(kMaximumRawVolume),
+                static_cast<unsigned>(startVolumeMax)
+            );
         }
     }
 
@@ -474,6 +527,7 @@ Settings load_settings() {
         bufferExtraMs,
         hardwareVolume,
         volumeMax,
+        startVolumeMax,
     };
 }
 
@@ -838,25 +892,29 @@ private:
 
     // "<port> <token>" from WAMBRIDGE CONTROL_PORT. A helper that is no longer
     // the current one must not take over the socket, hence the generation check.
-    void connect_control_channel(const std::string& arguments, uint64_t generation) {
+    // Reports whether the socket is actually up. Callers that would otherwise
+    // send a level need to know: without the socket the send falls back to
+    // launching a control process, and a second connection to 55001 during
+    // playback is the thing AGENTS.md says has starved a live stream.
+    bool connect_control_channel(const std::string& arguments, uint64_t generation) {
         {
             std::lock_guard lock(m_mutex);
-            if (generation != m_generation || m_shutdown) return;
+            if (generation != m_generation || m_shutdown) return false;
         }
         const size_t space = arguments.find(' ');
-        if (space == std::string::npos) return;
+        if (space == std::string::npos) return false;
 
         const std::string portText = arguments.substr(0, space);
         const std::string token = arguments.substr(space + 1);
-        if (token.empty()) return;
+        if (token.empty()) return false;
 
         unsigned long port = 0;
         try {
             port = std::stoul(portText);
         } catch (const std::exception&) {
-            return;
+            return false;
         }
-        if (port == 0 || port > 65535) return;
+        if (port == 0 || port > 65535) return false;
 
         if (!open_control_socket(static_cast<unsigned short>(port), token)) {
             // Only %u and %s: console::printf is pfc's formatter.
@@ -866,7 +924,9 @@ private:
                 kComponentName,
                 static_cast<unsigned>(port)
             );
+            return false;
         }
+        return true;
     }
 
     void retire_stream_locked() {
@@ -1070,6 +1130,32 @@ private:
         }
     }
 
+    // For callers that act on a protocol line without changing protocol state.
+    // Deliberately not the whole test set_protocol_state_if_current applies: it
+    // also rejects a flush, which it must, because accepting state then would
+    // restart a clock for a stream being torn down. A slider position is not
+    // clock state and a flush does not make the level wrong, so it is left out
+    // rather than copied for symmetry.
+    bool generation_is_current(uint64_t generation) {
+        std::lock_guard lock(m_mutex);
+        return !m_shutdown && !m_restart && generation == m_generation &&
+            !m_childStopping.load();
+    }
+
+    // -1 for anything this cannot read as a step. strtol would hand back 0 for
+    // a malformed payload, and 0 is a level: it would silence the speaker. The
+    // menu path validates its parse the same way.
+    static int parsed_volume_step(const std::string& line) {
+        const auto marker = line.find("volume=");
+        if (marker == std::string::npos) return -1;
+        const char* start = line.c_str() + marker + 7;
+        if (*start < '0' || *start > '9') return -1;
+        char* end = nullptr;
+        const long value = std::strtol(start, &end, 10);
+        if (end == start || value < 0 || value > kMaximumRawVolume) return -1;
+        return static_cast<int>(value);
+    }
+
     void set_protocol_state_if_current(
         uint64_t generation,
         bool ready,
@@ -1116,7 +1202,7 @@ private:
             channels == m_channels;
     }
 
-    std::wstring command_line(unsigned sampleRate, unsigned channels) const {
+    std::wstring command_line(unsigned sampleRate, unsigned channels) {
         std::wstring command = quoted(m_settings.helper);
         command += L" --device " + quoted(m_settings.device);
         command += L" --sample-rate " + std::to_wstring(sampleRate);
@@ -1134,7 +1220,25 @@ private:
         // and the first touch of the slider jumped the speaker to 10.
         const int routed = m_lastVolumeStep.load();
         if (m_settings.hardwareVolume && routed >= 0) {
-            command += L" --volume " + std::to_wstring(routed);
+            // Capped for the first helper of a session only, and not at all
+            // once one has reported PLAYING: after that the listener is at the
+            // controls and a seek must not turn them down. The helper's own
+            // --max-start-volume cannot do this job, because an explicit level
+            // wins over that clamp outright - which is how routing the slider
+            // silently disabled the safe start it looks like it respects.
+            const int level = m_startupVolumeApplied.load() ||
+                    m_settings.startVolumeMax <= 0
+                ? routed
+                : (std::min)(routed, m_settings.startVolumeMax);
+            // Remember what was actually asked for, not what the slider said.
+            // A seek launches a replacement, which reads this and passes it
+            // straight through - so without this the capped start survived
+            // exactly until the first seek, which handed the speaker the old
+            // slider level and undid it. The slider sync cannot carry this on
+            // its own: it is conditional on a socket and on volume_max, and
+            // this must hold whether or not it ran.
+            m_lastVolumeStep.store(level);
+            command += L" --volume " + std::to_wstring(level);
         } else if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
             // Otherwise the configured level, but only until some helper of
             // this session has reported PLAYING - that line is the helper
@@ -1148,6 +1252,11 @@ private:
             // replaced before it reached PLAYING may never have applied
             // anything, so its successor starts over rather than inheriting a
             // raised clamp.
+            //
+            // Deliberately NOT capped by start_volume_max. A level written into
+            // the INI is a choice somebody made about where playback should
+            // start; the slider's position is leftover state from last time.
+            // Only the second needs protecting from itself.
             command += L" --volume " + std::to_wstring(*m_settings.volume);
         } else if (m_startupVolumeApplied.load()) {
             // A replacement helper with no level still has to be told
@@ -1156,6 +1265,25 @@ private:
             // listener sitting above that would still be turned down by a seek.
             command += L" --max-start-volume " +
                 std::to_wstring(kMaximumRawVolume);
+        } else if (m_settings.hardwareVolume && m_settings.startVolumeMax > 0) {
+            // First helper of a session with no level from anywhere: the slider
+            // is routed but foobar has not reported it yet. Nothing above caps
+            // this path, so the helper followed whatever the speaker had been
+            // left at, held only by its own default clamp of 10 - the loud
+            // start this setting exists to stop, arriving through the one
+            // branch with nothing watching it.
+            //
+            // Two conditions, both learned the hard way. Only with routing on,
+            // because the promise attached to this cap is "the slider governs
+            // everything after the start", and with routing off the slider is a
+            // host-side gain that never reaches the speaker - capping there
+            // would leave a quiet speaker raisable only one menu press at a
+            // time. And only when the cap is enabled, because passing the
+            // speaker's maximum for a disabled cap would *raise* the clamp from
+            // the helper's own default of 10, which is the opposite of what
+            // turning a safety limit off should do.
+            command += L" --max-start-volume " +
+                std::to_wstring(m_settings.startVolumeMax);
         }
         return command;
     }
@@ -1177,6 +1305,12 @@ private:
         m_childStopping.store(false);
         m_helperReady.store(false);
         m_childReachedPlaying.store(false);
+        // Belongs to the helper that reported it. A helper that reaches PLAYING
+        // and dies before announcing its control channel would otherwise leave
+        // its level here for the next helper to apply on its own CONTROL_PORT
+        // line - and the generation check cannot catch that, because by then
+        // the generation is legitimately current.
+        m_reportedStep = -1;
         {
             std::lock_guard lock(m_mutex);
             m_childExited = false;
@@ -1373,8 +1507,37 @@ private:
                         false,
                         true
                     );
+                    // Remembered rather than applied. Moving the slider sends
+                    // the level back out, and the control channel is announced
+                    // on the *next* line, so acting here would find no socket
+                    // and fall back to launching a process - a second
+                    // connection to `55001` while audio is streaming, which
+                    // AGENTS.md calls out as able to starve the stream.
+                    m_reportedStep = parsed_volume_step(line);
                 } else if (line.rfind("WAMBRIDGE CONTROL_PORT ", 0) == 0) {
-                    connect_control_channel(line.substr(23), generation);
+                    const bool connected =
+                        connect_control_channel(line.substr(23), generation);
+                    // Put the slider where the speaker actually ended up: the
+                    // first helper of a session starts capped, and a slider
+                    // still pointing at last night's level would jump there on
+                    // the first pixel of movement - the surprise the cap
+                    // removes, only deferred.
+                    //
+                    // Three conditions, each for its own failure. Only with the
+                    // socket up, because moving the slider sends the level back
+                    // out and without it that means launching a process - a
+                    // second connection to 55001 mid-stream. Generation-checked
+                    // like the state update, or a PLAYING left in a retired
+                    // helper's pipe moves the slider for a helper being killed.
+                    // And not above volume_max, because the inverse mapping
+                    // clamps to the ceiling, so syncing a higher level would
+                    // write the ceiling back and quietly turn the speaker down.
+                    if (connected && m_reportedStep >= 0 &&
+                        m_reportedStep <= m_settings.volumeMax &&
+                        generation_is_current(generation)) {
+                        wam::note_speaker_step(m_reportedStep);
+                    }
+                    m_reportedStep = -1;
                 } else if (line.rfind("WAMBRIDGE ERROR ", 0) == 0) {
                     set_failure_if_current(line.substr(16), generation);
                 }
@@ -1714,6 +1877,13 @@ private:
     // Per playback session, not per helper: this object is built when playback
     // starts and torn down when it stops, so a seek cannot clear it.
     std::atomic<bool> m_startupVolumeApplied{false};
+    // Level the current helper reported at PLAYING, held until its control
+    // channel is announced on the following line. -1 means nothing to apply.
+    //
+    // Written by the pipe-reading thread and cleared in start_child, which runs
+    // after that thread has been joined for the outgoing helper and before the
+    // next one exists - so the two never overlap and it needs no atomic.
+    int m_reportedStep = -1;
     std::atomic<double> m_gain{1.0};
     // -1 until foobar reports the slider position, which it does before the
     // first stream starts. Only meaningful when hardwareVolume is on.
