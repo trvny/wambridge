@@ -257,16 +257,33 @@ Each of these cost real time and each is closed by measurement, not by argument.
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer. The stream
    path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
-6. **Confirm on hardware that a released speaker goes dark by itself.** The helper now ends
+6. **Offer the sleep timer as a menu command, not only as an automatic fallback.** This
+   component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
+   only power lever the firmware answers a client with — yet the only way to reach it is
+   `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
+   speaker asleep in twenty minutes cannot say so from foobar. Command shape is measured and
+   in `WAM_PROTOCOL.md`: `("option","start","str")` plus `("sleeptime", <seconds>, "dec")`,
+   seconds, self-clearing once it fires. Two constraints it has to respect: a configured
+   session clears pending timers before offering a stream, so starting playback must not
+   silently wipe a timer set from the menu; and the speaker never says who armed a timer, so
+   clearing one always risks removing one set from the Samsung app.
+7. **Move release onto the helper's control channel.** The component knows whether it is
+   replacing a helper (seek, format change) or ending a session; the helper does not, and
+   four separate review findings all reduce to that. A `release` command over the
+   `WAMBRIDGE CONTROL_PORT` channel from PR #47 would arm the sleep timer only on a real
+   stop, would survive an encoder that never exits, and would let a replacement skip the
+   teardown work it does not need.
+8. **Confirm on hardware that a released speaker goes dark by itself.** The helper now ends
    every session with `SetPlaybackControl pause` over its own `55001` connection and reports
    `WAMBRIDGE STOPPED stop=... sleep=... holding=...`. What that changes for the LED is
    unmeasured: leave `sleep_after_stop` at `0`, stop playback, and read the console line and
    the speaker the next morning. `stop=sent holding=0` and a lit LED would mean releasing
    cleanly is not enough and the timer is the answer; a dark LED closes the question that has
-   been open since 2026-08-02.
-7. Reduce and reimplement the finite share path from its measured working form.
-8. Add a proper foobar preferences page while retaining legacy INI compatibility.
-8. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+   been open since 2026-08-02. The prior is now that it will go dark — normal use does, once
+   every program lets go — so a lit LED is the surprising outcome and the interesting one.
+9. Reduce and reimplement the finite share path from its measured working form.
+10. Add a proper foobar preferences page while retaining legacy INI compatibility.
+11. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
 
 ## What the 7-8 s speaker figure was
 
