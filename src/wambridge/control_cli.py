@@ -157,7 +157,11 @@ def _status_lines(status: WamStatus) -> list[str]:
         f"title={playback.title or ''}",
         f"volume={status.volume}",
         f"muted={'on' if status.muted else 'off'}",
-        f"power={status.power_status or ''}",
+        # `unknown`, matching `cli.py`, not an empty value: this firmware never
+        # answers `GetPowerStatus`, so the field is always absent here and a
+        # bare `power=` reads like a speaker that reported nothing rather than
+        # a command that was never going to be answered.
+        f"power={status.power_status or 'unknown'}",
     ]
 
 

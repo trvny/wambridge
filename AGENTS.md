@@ -18,9 +18,19 @@ plausible explanation. This file keeps only easy-to-miss traps.
   the value here; use `%u` and `%s`.
 - Model `Popen().stdout` with a real `BytesIO` in tests rather than a bare
   `MagicMock`.
-- For M5 liveness, use `GetSpkName` rather than `wambridge-control status`.
-  This firmware lacks `GetPowerStatus`, so the status action times out on a
-  healthy speaker.
+- This firmware answers unimplemented commands with silence, not a refusal, so
+  every such call costs a full timeout. Measured on the M5 against a speaker
+  answering everything else in 0.02-0.2 s: `GetPowerStatus`, `GetLedStatus`,
+  `GetStandbyMode`, `GetFeature`, `GetPowerSaving`, `GetAutoPowerDown` and
+  `GetSpkStatus` (that last one added 2026-08-15, same run) all time out every
+  time. Never let one of them decide whether a reading succeeded: `get_status`
+  used to, and reported a healthy speaker as unreachable.
+- For M5 liveness, still use `GetSpkName` rather than `wambridge-control
+  status`. The status action no longer fails on a healthy speaker, but it makes
+  four round trips - five in `cp`, the normal idle submode, which adds
+  `GetRadioInfo` - and its `timeout` is per command rather than a total, so an
+  unreachable speaker takes several times that to say so. One command that
+  answers in 0.14 s is the better test.
 - Terminate timed-out child processes. Runaway FFmpeg processes have already
   exhausted the 8 GB physical test machine.
 

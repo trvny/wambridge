@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-08.
+Last reviewed: 2026-08-15.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -8,9 +8,11 @@ branch or implementing another timing layer.
 ## Stable on `main`
 
 - SSDP discovery with subnet fallback and saved devices resolved by stable device ID.
-- Raw volume, mute, pause, play, stop and standby control. The `status` action is broken on
-  this firmware: `get_status` calls `GetPowerStatus`, which does not exist here, so it
-  always times out and reports a healthy speaker as unreachable.
+- Raw volume, mute, pause, play, stop and standby control. The `status` action reads
+  `GetPowerStatus` best-effort, capped at one second: the command does not exist on this
+  firmware and answers with silence, and until 2026-08-15 letting that timeout propagate
+  made the whole snapshot fail and reported a healthy speaker as unreachable. `power=` is
+  therefore always `unknown` here; the front LED remains the only power indicator.
 - Direct `SetUrlPlayback`, custom radio stations and native TuneIn preset playback.
 - Windows builds for bundled helpers and foobar2000 2.x x64.
 - Restricted helper handle inheritance from merged PR #2.
