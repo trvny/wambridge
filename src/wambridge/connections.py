@@ -1,10 +1,10 @@
 """Count local TCP sockets still attached to the speaker.
 
 A leaked ``wambridge-pcm`` helper keeps both the persistent control socket and
-the speaker's audio pull alive. No idle power-down exists on this firmware, so
-whether releasing everything is enough to let the speaker sleep is unmeasured;
-a session that was killed rather than stopped is only the leading suspect for
-the M5 staying lit. The speaker cannot answer this itself either: ``MusicInfo``
+the speaker's audio pull alive, and the M5 only reaches the idle state its own
+power-down needs once everything has let go. Whether releasing is enough on its
+own is unmeasured; a session that was killed rather than stopped is only the
+leading suspect for the M5 staying lit. The speaker cannot answer this itself either: ``MusicInfo``
 was measured returning mixed and stale state, so the local socket table is the
 only trustworthy view.
 
@@ -88,13 +88,26 @@ def _packed_address(speaker_ip: str) -> int | None:
         return None
 
 
-def attached_connections_to(speaker_ip: str) -> int | None:
+def attached_connections_to(
+    speaker_ip: str,
+    *,
+    ignore_pid: int | None = None,
+) -> int | None:
     """Return how many local sockets are still attached to the speaker.
 
     Attached means any state from ``SYN_SENT`` through ``LAST_ACK``, so a
     half-closed socket left by a killed helper counts. ``None`` means the socket
     table could not be read, which is not the same as zero and must never be
     reported as "nothing is attached".
+
+    ``ignore_pid`` drops the caller's own sockets. A process that has just
+    closed its connections still owns them for a moment: measured against the
+    M5 on 2026-08-15, a socket closed locally sat in ``FIN_WAIT`` for a further
+    0.5 s to 1.5 s. Counting those made the reading both slow and wrong - the
+    question this answers is whether anything *else* is holding the speaker
+    after we let go, and the caller's own dying sockets are the one thing that
+    is certainly not. Sockets of a killed process still count: their owner is
+    gone, so its PID cannot match the caller's.
     """
     if not sys.platform.startswith("win"):
         return None
@@ -134,8 +147,11 @@ def attached_connections_to(speaker_ip: str) -> int | None:
             break
         row = _MIB_TCPROW_OWNER_PID.from_buffer_copy(buffer.raw[offset : offset + row_size])
         offset += row_size
-        if row.dwState in _ATTACHED_STATES and row.dwRemoteAddr == target:
-            held += 1
+        if row.dwRemoteAddr != target or row.dwState not in _ATTACHED_STATES:
+            continue
+        if ignore_pid is not None and row.dwOwningPid == ignore_pid:
+            continue
+        held += 1
     return held
 
 
@@ -144,16 +160,21 @@ def wait_until_released(
     *,
     timeout: float = STANDBY_RELEASE_TIMEOUT,
     poll: float = STANDBY_RELEASE_POLL,
+    ignore_pid: int | None = None,
 ) -> int | None:
     """Wait for local sockets against the speaker to drop, and report the count.
 
     Returns ``None`` when the socket table could not be read. That is reported
     as unknown rather than as zero: claiming nothing is attached when it could
     not be checked is the failure this exists to prevent.
+
+    ``ignore_pid`` is passed straight through, and a caller tearing its own
+    session down wants it: without it this waits out its own closing sockets,
+    which is time paid for a reading that was never in question.
     """
     deadline = time.monotonic() + timeout
-    held = attached_connections_to(speaker_ip)
+    held = attached_connections_to(speaker_ip, ignore_pid=ignore_pid)
     while held is not None and held > 0 and time.monotonic() < deadline:
         time.sleep(poll)
-        held = attached_connections_to(speaker_ip)
+        held = attached_connections_to(speaker_ip, ignore_pid=ignore_pid)
     return held

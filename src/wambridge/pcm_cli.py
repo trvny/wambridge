@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import threading
 from collections.abc import Iterator
@@ -134,8 +135,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help=(
             "Seconds of sleep timer to arm once the stream ends; 0 arms "
-            "nothing. This firmware has no idle power-down, so nothing else "
-            "ever turns the speaker off"
+            "nothing. A fallback: the speaker sleeps on its own once every "
+            "program lets go, and this helper now releases it, but nothing "
+            "can read or set that idle power-down"
         ),
     )
     parser.add_argument("--verbose", action="store_true")
@@ -291,24 +293,18 @@ class PlaybackWatcher:
             self._thread.join()
 
     def _unarmed_sleep_field(self) -> str:
-        """Report why no timer was armed, without claiming none was configured.
-
-        Both fields appear on every teardown line: one that changes shape by
-        case is one more thing to work out at the moment it is being read to
-        explain something that has already gone wrong. `off` means nobody asked
-        for a timer; `skipped` means one was configured and this session had
-        nothing to arm it after.
-        """
-        return "sleep=off" if self._sleep_after_stop <= 0 else "sleep=skipped"
+        """Report why no timer was armed, for this watcher's configuration."""
+        return _unarmed_sleep_field(self._sleep_after_stop)
 
     def release(self) -> None:
         """Tell the speaker the stream is over, on the connection already open.
 
         Nothing else does. Teardown closes the local HTTP server and this
         socket, which leaves the M5 holding a URL playback session whose source
-        simply vanished, and this firmware has no idle power-down to fall back
-        on: after a session that ended this way on 2026-08-08 the speaker was
-        still lit the next morning.
+        simply vanished - and a speaker that believes it is still serving one
+        never reaches the idle state its own power-down needs: after a session
+        that ended this way on 2026-08-08 the speaker was still lit the next
+        morning.
 
         Best effort by construction. This runs while a session is being torn
         down, often because something already went wrong, so a speaker that has
@@ -322,6 +318,18 @@ class PlaybackWatcher:
             # No URL was ever offered, so there is no playback session of ours
             # to end. Sending a stop anyway would reach past this helper into
             # whatever else the speaker is doing.
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            return
+        with self._response_lock:
+            refused = self._results.get(_PLAYBACK_COMMAND)
+        if refused:
+            # Offered and refused is not the same as owned. A matched rejection
+            # means the speaker never took the URL, so it is still doing
+            # whatever it was doing before - a TuneIn station, someone else's
+            # DLNA queue - and `pause` would reach past this helper and stop
+            # that instead. Arming happens before the offer, so it cannot carry
+            # this distinction on its own.
+            LOGGER.debug("Not releasing a playback the speaker refused")
             self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
             return
 
@@ -566,20 +574,50 @@ class PlaybackWatcher:
                 self._connection = None
 
 
-def _stopped_line(watcher: PlaybackWatcher | None, speaker_ip: str) -> str:
+def _unarmed_sleep_field(sleep_after_stop: int) -> str:
+    """Report why no timer was armed, without claiming none was configured.
+
+    Both fields appear on every teardown line: one that changes shape by case
+    is one more thing to work out at the moment it is being read to explain
+    something that has already gone wrong. ``off`` means nobody asked for a
+    timer; ``skipped`` means one was configured and this session had nothing to
+    arm it after. This lives outside the watcher because the line still has to
+    be printed when startup failed before there was one.
+    """
+    return "sleep=off" if sleep_after_stop <= 0 else "sleep=skipped"
+
+
+def _stopped_line(
+    watcher: PlaybackWatcher | None,
+    speaker_ip: str,
+    *,
+    sleep_after_stop: int,
+) -> str:
     """Describe how this session let the speaker go.
 
     Every session used to end with silence in the console, so the morning after
     a speaker that stayed lit there was nothing to read. ``holding`` counts
-    every local socket still attached, not only this helper's: something else
-    holding the speaker is the same problem seen from the other side. It is
-    ``unknown`` when the table could not be read, never a comforting zero.
+    every local socket still attached **except this helper's own**: something
+    else holding the speaker is the same problem seen from the other side,
+    while our own sockets are closed by the time this runs and only sit in
+    ``FIN_WAIT`` while the kernel finishes the job. Counting them cost 0.5 s to
+    1.5 s of measured wall clock on every exit - paid on every seek, because
+    the component stops one helper before starting its replacement - and
+    reported this helper's own teardown as something holding the speaker. A
+    killed session's sockets still count: their owner is gone, so its PID
+    cannot match ours. The value is ``unknown`` when the table could not be
+    read, never a comforting zero.
     """
-    summary = watcher.release_summary if watcher is not None else "stop=skipped"
+    summary = (
+        watcher.release_summary
+        if watcher is not None
+        else f"stop=skipped {_unarmed_sleep_field(sleep_after_stop)}"
+    )
     held = wait_until_released(
         speaker_ip,
         timeout=_RELEASE_TIMEOUT,
         poll=_RELEASE_POLL,
+        ignore_pid=os.getpid(),
     )
     return (
         f"WAMBRIDGE STOPPED {summary} "
@@ -756,7 +794,11 @@ def run(
             # the count is only meaningful once this helper has let go of
             # everything it held.
             print(
-                _stopped_line(watcher, speaker_ip),
+                _stopped_line(
+                    watcher,
+                    speaker_ip,
+                    sleep_after_stop=args.sleep_after_stop,
+                ),
                 file=output_stream,
                 flush=True,
             )

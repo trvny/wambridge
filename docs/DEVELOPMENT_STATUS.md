@@ -227,7 +227,7 @@ Each of these cost real time and each is closed by measurement, not by argument.
 | Does the SDK offer a hardware volume interface | `output_entry_v2::get_volume_control` exists but no public component implements it; not a foundation to build on | PR #30 |
 | Does `flag_needs_shims` affect volume | No. It means regular `update()` calls and end-of-stream padding | SDK `output.h` |
 | Can a command clear `cp` | Not observed. `SetPlaybackControl stop` is accepted and does not clear it | `WAM_PROTOCOL.md` |
-| Does the M5 auto-power-down | No configurable one exists. `SetSleepTimer` in **seconds** is the only lever | `WAM_PROTOCOL.md` |
+| Does the M5 auto-power-down | Yes, once every program lets go — but nothing can read or set it, so `SetSleepTimer` in **seconds** is the only lever a client has | `WAM_PROTOCOL.md` |
 | Does closing the stream end playback for the speaker | No. Nothing on the PCM path ever told it anything; every session left a URL session whose source vanished | `WAM_PROTOCOL.md` |
 
 ## Open, in the order that makes sense

@@ -97,9 +97,9 @@ compete with playback; a second FFmpeg splits the shared stdin.
 ## Ending a stream is a command, not just a close
 
 Closing the local HTTP server does not end anything as far as the speaker is concerned. It
-was told to play a URL and it keeps that session, with no idle power-down on this firmware to
-recover from a source that stopped answering: a normal `Shutting down...` with a stream still
-up left the M5 lit all night on 2026-08-08.
+was told to play a URL and it keeps that session, and a speaker that believes it is still
+serving one never reaches the idle state its own power-down needs: a normal `Shutting
+down...` with a stream still up left the M5 lit all night on 2026-08-08.
 
 The helper therefore releases the speaker on its way out, over the persistent `55001`
 connection it already owns rather than a second one. Three rules hold it together:
@@ -114,7 +114,19 @@ connection it already owns rather than a second one. Three rules hold it togethe
 Every session then ends with one line: `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|
 skipped> sleep=<off|Ns> holding=<count>`. Before it there was nothing at all in the console
 at the end of a stream, which is why the morning after a speaker that stayed lit there was
-nothing to read.
+nothing to read. All three fields appear on every path, including one that failed before the
+watcher existed.
+
+`stop=skipped` also covers an offer the speaker **refused**. A matched rejection means it
+never took the URL, so it is still doing whatever it was doing before, and a release would
+reach past this helper and pause that instead.
+
+`holding` excludes sockets owned by this helper. Measured on 2026-08-15, a locally closed
+socket sits in `FIN_WAIT` for a further 0.5 s to 1.5 s, and the count is taken right after
+teardown closes its own — so counting them reported this helper's own exit as something
+holding the speaker, and made every helper exit wait it out. That wait lands in the seek
+path, where the component stops one helper before starting its replacement. A killed
+session's sockets still count: their owner is gone, so its PID cannot match ours.
 
 `sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
 default. It is the only lever this firmware answers, and it is opt-in because powering the

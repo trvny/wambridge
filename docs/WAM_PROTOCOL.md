@@ -315,8 +315,17 @@ the display go down.
 - On firing, the timer clears itself back to `sleepoption=off`, `sleeptime=0` and the speaker
   stays in standby. A fired timer leaves no trace, so `GetSleepTimer` cannot distinguish
   "asleep because a timer fired" from "asleep for any other reason".
-- There is no configurable idle power-down. `GetPowerSaving` and `GetAutoPowerDown` do not
-  exist either. The sleep timer is the only power lever this firmware exposes.
+- There is no *controllable* idle power-down: `GetPowerSaving` and `GetAutoPowerDown` do not
+  exist, so nothing can read or set one. `SetSleepTimer` is the only power lever this
+  firmware exposes to a client.
+
+  That is not the same as the speaker never sleeping on its own, and this document said so
+  for a while. Corrected 2026-08-15 on the owner's account of normal use: the M5 does go dark
+  by itself, but only after every program talking to it has let go, and the Samsung app's
+  sleep timer is a separate manual control that has never been seen to arm itself. An
+  unreadable idle power-down is still an idle power-down. That reframes the release work
+  below as the whole fix rather than half of one, and `sleep_after_stop` as a fallback for
+  when it is not.
 
 The component's standby menu item is therefore misnamed. It sends a stop and a mute, which
 leaves the speaker lit and fully powered. Only the sleep timer produces the state a user
@@ -339,15 +348,24 @@ still up and no error. Reading the PCM path settled why. Nothing on it ever told
 anything about the end of a stream: `stop_playback` was reachable only from the menu and
 `cli.py`, while the helper's teardown closed the local HTTP server and the control socket and
 exited. Every session, clean or not, left the M5 holding a URL playback session whose source
-had simply vanished — and this firmware has no idle power-down to recover from that.
+had simply vanished — and a speaker that believes it is still serving a session is exactly
+the speaker that never reaches the idle state its own power-down needs.
 
 The helper now releases the speaker before it goes, over the persistent `55001` connection it
 already holds: `SetPlaybackControl pause` on the UIC API, the same command `stop_playback`
 uses on this path, without the mute that would hand the speaker back silent, and without
 `pwron`. It then reports `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|skipped>
-sleep=<off|Ns> holding=<count>` once its own sockets are gone. Whether releasing cleanly is
-enough for the M5 to go dark by itself is still unmeasured, which is what `sleep_after_stop`
-is for.
+sleep=<off|Ns> holding=<count>` once its own sockets are gone. `holding` counts every local
+socket attached to the speaker **except this helper's own**: those are closed by the time the
+line is printed and only linger in `FIN_WAIT` while the kernel finishes, so counting them
+both inflated the reading and made every helper exit wait 0.5 s to 1.5 s for it. A killed
+session's sockets still count, which is the case this reading exists for — their owner is
+gone, so its PID cannot match.
+
+Whether releasing cleanly is enough for the M5 to go dark by itself is still unmeasured.
+The owner's account of normal use says it should be (see the standby section: the speaker
+sleeps once every program lets go), which makes this release the fix and `sleep_after_stop`
+the fallback for when it is not.
 
 ## No AVTransport renderer
 

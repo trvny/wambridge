@@ -1,3 +1,4 @@
+import os
 import socket
 import sys
 from unittest import TestCase, skipUnless
@@ -68,3 +69,28 @@ class ConnectionCountTests(TestCase):
             1,
             "a half-closed socket must still count as attached",
         )
+
+    @skipUnless(sys.platform.startswith("win"), "socket table is a Windows API")
+    def test_ignore_pid_drops_only_the_callers_own_sockets(self) -> None:
+        """Our own closing sockets are the one thing not holding the speaker.
+
+        Measured against the M5 on 2026-08-15: a locally closed socket sat in
+        FIN_WAIT for a further 0.5-1.5 s, so a teardown reading taken right
+        after closing waited that out and then reported its own exit as a hold.
+        Sockets of a killed helper still count - its PID is gone and cannot
+        match the caller's.
+        """
+        server = socket.socket()
+        self.addCleanup(server.close)
+        server.bind(("127.0.0.1", 0))
+        server.listen(2)
+        client = socket.create_connection(server.getsockname())
+        self.addCleanup(client.close)
+        accepted, _ = server.accept()
+        self.addCleanup(accepted.close)
+
+        counted = attached_connections_to("127.0.0.1")
+        ignored = attached_connections_to("127.0.0.1", ignore_pid=os.getpid())
+
+        # Both ends belong to this process, so both rows have to disappear.
+        self.assertGreaterEqual(counted - ignored, 2)

@@ -397,10 +397,10 @@ class FoobarSourceTests(TestCase):
         self.assertIn("parsed <= kMaximumStartupSilenceMs", source)
 
     def test_sleep_timer_is_configurable_and_off_by_default(self) -> None:
-        # Nothing else can turn this speaker off: the firmware has no idle
-        # power-down, so a stopped stream leaves it lit indefinitely. Off by
-        # default all the same - powering the speaker down is the listener's
-        # decision, and a surprise standby is worse than a lit LED.
+        # A fallback for when releasing the stream is not enough on its own:
+        # the speaker does sleep once every program lets go, but nothing can
+        # read or set that. Off by default - powering the speaker down is the
+        # listener's decision, and a surprise standby is worse than a lit LED.
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertIn("constexpr int kDefaultSleepAfterStopSeconds = 0;", source)

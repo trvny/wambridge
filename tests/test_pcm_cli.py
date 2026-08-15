@@ -1,3 +1,4 @@
+import os
 from io import BytesIO, StringIO
 from threading import Event
 from types import SimpleNamespace
@@ -571,8 +572,36 @@ class PcmCliTests(TestCase):
     @patch("wambridge.pcm_cli.wait_until_released", return_value=None)
     def test_unreadable_socket_table_is_unknown_not_zero(self, _released_mock) -> None:
         self.assertEqual(
-            _stopped_line(None, "10.0.0.118"),
-            "WAMBRIDGE STOPPED stop=skipped holding=unknown",
+            _stopped_line(None, "10.0.0.118", sleep_after_stop=0),
+            "WAMBRIDGE STOPPED stop=skipped sleep=off holding=unknown",
+        )
+
+    @patch("wambridge.pcm_cli.wait_until_released", return_value=0)
+    def test_teardown_line_keeps_its_shape_when_startup_died_early(
+        self,
+        _released_mock,
+    ) -> None:
+        # No watcher was ever built, so the summary comes from the fallback. It
+        # still has to separate "nobody asked for a timer" from "one was
+        # configured and nothing got to arm it".
+        self.assertEqual(
+            _stopped_line(None, "10.0.0.118", sleep_after_stop=90),
+            "WAMBRIDGE STOPPED stop=skipped sleep=skipped holding=0",
+        )
+
+    @patch("wambridge.pcm_cli.wait_until_released", return_value=0)
+    def test_teardown_count_ignores_this_helpers_own_sockets(
+        self,
+        released_mock,
+    ) -> None:
+        # Measured 2026-08-15: a locally closed socket sits in FIN_WAIT for
+        # 0.5-1.5 s, and the component serializes helper teardown ahead of the
+        # replacement, so counting our own put that delay into every seek.
+        _stopped_line(None, "10.0.0.118", sleep_after_stop=0)
+
+        self.assertEqual(
+            released_mock.call_args.kwargs["ignore_pid"],
+            os.getpid(),
         )
 
     def _connected_watcher(
@@ -638,6 +667,19 @@ class PcmCliTests(TestCase):
         # Both fields on every teardown line, whatever happened. `skipped`
         # rather than `off`, because a timer was configured and this session
         # simply had nothing to arm it after.
+        self.assertEqual(watcher.release_summary, "stop=skipped sleep=skipped")
+
+    def test_release_sends_nothing_when_the_speaker_refused_the_offer(self) -> None:
+        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+        watcher.arm()
+        # Arming happens before the offer, so it says a URL was sent, not that
+        # the speaker took it. A matched rejection means the speaker is still
+        # doing whatever it was doing - and `pause` would stop that instead.
+        watcher._results["SetUrlPlayback"] = "Speaker rejected SetUrlPlayback"
+
+        watcher.release()
+
+        self.assertEqual(connection.sent, [])
         self.assertEqual(watcher.release_summary, "stop=skipped sleep=skipped")
 
     def test_release_happens_once_per_session(self) -> None:

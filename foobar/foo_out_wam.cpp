@@ -217,10 +217,13 @@ constexpr int kMaximumBufferExtraMs = 10000;
 // Seconds of sleep timer the helper arms once a stream ends. Off by default,
 // because it powers the speaker down and that has to be asked for.
 //
-// This firmware has no idle power-down at all: `GetPowerSaving` and
-// `GetAutoPowerDown` do not exist, and `SetSleepTimer` is the only power lever
-// it answers. Stopping playback therefore leaves the M5 lit indefinitely, which
-// is how it once stayed on overnight.
+// A fallback, not the mechanism. The M5 sleeps by itself once every program
+// talking to it lets go, which is what releasing the stream is for; what this
+// firmware exposes no control over is that idle power-down, since
+// `GetPowerSaving` and `GetAutoPowerDown` do not exist. `SetSleepTimer` is the
+// only power lever it answers, and it is here for the case where a clean
+// release turns out not to be enough - which is how the M5 once stayed lit
+// overnight.
 constexpr int kDefaultSleepAfterStopSeconds = 0;
 constexpr int kMaximumSleepAfterStopSeconds = 86400;
 

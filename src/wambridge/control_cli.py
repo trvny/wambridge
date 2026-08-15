@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -245,10 +246,11 @@ def standby(
     """Stop playback, mute, and confirm nothing is still attached.
 
     This sends no power command: the firmware is left awake and simply quiet.
-    What it does guarantee is that nothing of ours is holding the speaker. No
-    idle power-down was found on this firmware, so whether release alone lets it
-    sleep is unmeasured; a leaked helper keeping the control socket and the
-    audio pull open is the leading suspect for the speaker staying lit.
+    What it does guarantee is that nothing of ours is holding the speaker, and
+    that is the point - the M5 reaches its own idle power-down only once every
+    program talking to it has let go. Whether release alone is enough is
+    unmeasured; a leaked helper keeping the control socket and the audio pull
+    open is the leading suspect for the speaker staying lit.
     """
     stop_result = _attempt(
         "standby stop",
@@ -289,6 +291,11 @@ def standby(
         target.ip,
         timeout=release_timeout,
         poll=release_poll,
+        # Not this process: the stop, the mute and the verification each opened
+        # and closed a connection of their own, and waiting those out would
+        # report this action's own requests as something holding the speaker.
+        # A leaked helper is a different process, so it still counts.
+        ignore_pid=os.getpid(),
     )
     lines = [
         "action=standby",

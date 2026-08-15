@@ -32,9 +32,12 @@ volume=4
 ;buffer_extra=1000
 
 ; Seconds of sleep timer armed once a stream ends, 0..86400, default 0 (off).
-; This firmware has no idle power-down at all - GetPowerSaving and
-; GetAutoPowerDown do not exist - so stopping playback leaves the M5 lit until
-; something asks it to sleep, and SetSleepTimer is the only thing it answers.
+; A fallback, not the mechanism. The M5 does go dark on its own once every
+; program talking to it has let go, and the helper now tells the speaker the
+; stream is over for exactly that reason. What this firmware has no control
+; over is that idle power-down - GetPowerSaving and GetAutoPowerDown do not
+; exist - so SetSleepTimer is the only thing it answers if releasing is not
+; enough on its own.
 ; The timer clears itself once it fires and is cleared again when the next
 ; stream starts, so nothing stays configured on the speaker. Off by default,
 ; because powering the speaker down is not this component's decision to make.
