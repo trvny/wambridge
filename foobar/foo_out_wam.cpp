@@ -55,8 +55,11 @@ constexpr std::chrono::milliseconds kCounterInterval{1000};
 // silent reads exactly like a run that stayed healthy.
 //
 // So the burst keeps its per-second detail and the rest of the stream
-// continues at a rate that costs nothing: about 120 lines an hour, against a
-// measured 6 lines per minute and ~85 KB/h while the burst is going.
+// continues at a rate that costs nothing. The burst is 60 lines a minute until
+// it has spent its 240, roughly 36 KB, once per stream; after that it is 120
+// lines an hour, roughly 18 KB. (An earlier note here said "6 lines a minute"
+// for the burst - that was the average over a whole console log including idle
+// time and non-CLOCK lines, not the rate of the burst itself.)
 //
 // What this still cannot promise: the line is written from update_v2(), the
 // callback foobar uses to ask how much room the output has - not from the path
