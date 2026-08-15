@@ -58,10 +58,12 @@ constexpr std::chrono::milliseconds kCounterInterval{1000};
 // continues at a rate that costs nothing: about 120 lines an hour, against a
 // measured 6 lines per minute and ~85 KB/h while the burst is going.
 //
-// What this still cannot promise: the line is written from the push callback,
-// so it only appears while foobar is handing over audio. A gap means foobar
-// stopped pushing, which a long pause or a full buffer produces just as well as
-// a dead stream. Silence here is not evidence of a dropout on its own.
+// What this still cannot promise: the line is written from update_v2(), the
+// callback foobar uses to ask how much room the output has - not from the path
+// that hands over samples. Both are driven by the same output loop, so a gap
+// still means foobar stopped asking, which a long pause or a full buffer
+// produces just as well as a dead stream. Silence here is not evidence of a
+// dropout on its own.
 constexpr std::chrono::milliseconds kSteadyCounterInterval{30000};
 constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
