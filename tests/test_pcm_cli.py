@@ -618,6 +618,7 @@ class PcmCliTests(TestCase):
         rejection: str | None = None,
         rejection_method: str = "SetPlaybackControl",
         failing: bool = False,
+        stream_active: bool = True,
     ) -> tuple[PlaybackWatcher, FakeControlConnection]:
         watcher = PlaybackWatcher(
             "10.0.0.118",
@@ -633,6 +634,12 @@ class PcmCliTests(TestCase):
             failing=failing,
         )
         watcher._connection = connection
+        # Default on, because every release test below describes a live session:
+        # the speaker fetched the stream and this helper owns the playback.
+        # `release()` skips an offer the speaker never took up, so a watcher that
+        # never reached this point has nothing to end.
+        if stream_active:
+            watcher.mark_stream_active()
         return watcher, connection
 
     def test_release_stops_playback_over_the_connection_already_open(self) -> None:
@@ -711,6 +718,19 @@ class PcmCliTests(TestCase):
         watcher.release()
 
         self.assertEqual(watcher.release_summary, "stop=rejected sleep=120s")
+
+    def test_an_offer_the_speaker_never_took_up_is_not_released(self) -> None:
+        # The matched rejection is the rare way to own nothing; this firmware
+        # answers plenty of commands with silence, so the common way is an offer
+        # that went unanswered. Pausing then reaches past this helper into
+        # whatever the speaker is really doing.
+        watcher, connection = self._connected_watcher(stream_active=False)
+        watcher.arm()
+
+        watcher.release()
+
+        self.assertEqual(connection.sent, [])
+        self.assertEqual(watcher.release_summary, "stop=skipped sleep=off")
 
     def test_release_survives_a_speaker_that_has_gone_away(self) -> None:
         watcher, _connection = self._connected_watcher(failing=True)

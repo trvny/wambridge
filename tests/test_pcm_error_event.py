@@ -135,6 +135,9 @@ class PlaybackWatcherErrorTests(TestCase):
             connection.events.side_effect = events
             with watcher:
                 watcher.wait_for_start(timeout=0.1)
+                # The speaker fetched the stream, which is what makes this a
+                # session worth releasing on the way out.
+                watcher.mark_stream_active()
                 watcher.set_volume(7)
 
             connection.send.assert_any_call(

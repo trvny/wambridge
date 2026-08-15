@@ -344,6 +344,18 @@ class PlaybackWatcher:
             LOGGER.debug("Not releasing a playback the speaker refused")
             self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
             return
+        if not self._stream_active.is_set():
+            # Offered and never taken up. The rejection above only catches a
+            # refusal the speaker bothered to send; this firmware answers plenty
+            # of things with silence, so the commoner way to own nothing is an
+            # offer that simply went unanswered - a startup timeout, or stdin
+            # closing right after the URL went out. Until the speaker fetches
+            # the stream there is no session of ours to end, and pausing on the
+            # guess does the same harm the rejection case avoids: it reaches
+            # past this helper into whatever the speaker is really doing.
+            LOGGER.debug("Not releasing a stream the speaker never requested")
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            return
 
         # `pause` rather than `stop`: measured on this firmware, the URL and DLNA
         # path answers UIC pause, while `stop` belongs to the native CP API. The

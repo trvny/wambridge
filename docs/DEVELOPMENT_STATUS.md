@@ -274,7 +274,15 @@ Each of these cost real time and each is closed by measurement, not by argument.
    four separate review findings all reduce to that. A `release` command over the
    `WAMBRIDGE CONTROL_PORT` channel from PR #47 would arm the sleep timer only on a real
    stop, would survive an encoder that never exits, and would let a replacement skip the
-   teardown work it does not need.
+   teardown work it does not need. Two review findings name the same root concretely and
+   are deliberately deferred here rather than patched. The `55001` socket belongs to the
+   listener thread and its `with` block closes it when `_run` returns, so a session that
+   ends in failure reaches `release()` with nothing to send on and reports
+   `stop=unreachable` — the teardown that most needs to land is the one that cannot.
+   And `kActiveShutdownGraceMs` is a ceiling on a helper that may never get there at all:
+   if FFmpeg does not exit after its stdin closes, the HTTP handler stays blocked, the
+   drain never finishes, and the grace expires into a hard kill. Both need the release to
+   stop depending on the listener's lifetime, which is this item.
 8. **Tighten the window on a released speaker going dark.** Answered in outline on
    2026-08-15 and no longer open in the form it was asked: a session ended
    `stop=sent sleep=off holding=0` at 15:10:50 and the speaker was dark by roughly 16:00,
