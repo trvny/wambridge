@@ -248,9 +248,13 @@ def standby(
     This sends no power command: the firmware is left awake and simply quiet.
     What it does guarantee is that nothing of ours is holding the speaker, and
     that is the point - the M5 reaches its own idle power-down only once every
-    program talking to it has let go. Whether release alone is enough is
-    unmeasured; a leaked helper keeping the control socket and the audio pull
-    open is the leading suspect for the speaker staying lit.
+    program talking to it has let go.
+
+    It is not, however, the explanation for a speaker that stays lit: that
+    survived shutting the whole computer down, and a powered-off host holds no
+    sockets. The cause lives in the speaker's own state, which is what the PCM
+    helper's release addresses. This reading proves only that nothing here is
+    contributing.
     """
     stop_result = _attempt(
         "standby stop",

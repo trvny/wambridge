@@ -169,11 +169,16 @@ still open work. See the standby section of `docs/WAM_PROTOCOL.md`.
 What standby does now guarantee is that nothing local is still attached. After the stop and
 the mute it waits up to `STANDBY_RELEASE_TIMEOUT` for established TCP connections to the
 speaker to drop, and reports `holding=<count>`, or `holding=unknown` when the socket table
-could not be read. A remaining hold adds a `warning=` line rather than failing the action:
-the mute and the stop did land, and the caller may have asked while something else was
-streaming. This targets the documented case of a hard-killed session leaving the M5 lit for
-hours — a leaked helper keeps both the control socket and the audio pull open. It is the
-best lead available, not a proven cause.
+could not be read. Sockets owned by the action's own process are excluded; its stop, mute and
+verification each opened one, and waiting those out would report the action's own requests as
+a hold. A remaining hold adds a `warning=` line rather than failing the action: the mute and
+the stop did land, and the caller may have asked while something else was streaming.
+
+This is not the explanation for a speaker that stays lit, and it should not be read as one.
+The M5 was still on the morning after the whole computer had been shut down, and a
+powered-off host holds no sockets. Whatever keeps the speaker awake outlives its peer, which
+puts it in the speaker's own state — the `SetUrlPlayback` session nothing ever ended. The
+reading is worth having as proof that this end let go, not as the lead.
 
 `holding=unknown` is deliberately not `holding=0`. Reporting a speaker as released when it
 was never checked is the failure this exists to prevent.

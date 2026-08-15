@@ -2,9 +2,13 @@
 
 A leaked ``wambridge-pcm`` helper keeps both the persistent control socket and
 the speaker's audio pull alive, and the M5 only reaches the idle state its own
-power-down needs once everything has let go. Whether releasing is enough on its
-own is unmeasured; a session that was killed rather than stopped is only the
-leading suspect for the M5 staying lit. The speaker cannot answer this itself either: ``MusicInfo``
+power-down needs once everything has let go.
+
+This proves *this* end let go. It is not the explanation for a speaker that
+stays lit: on 2026-08-08 the M5 was still on in the morning after the whole
+computer had been shut down, and a powered-off host holds no sockets. What
+keeps the speaker awake outlives its peer, so it lives in the speaker's own
+state rather than in this table. The speaker cannot answer this itself either: ``MusicInfo``
 was measured returning mixed and stale state, so the local socket table is the
 only trustworthy view.
 

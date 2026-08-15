@@ -333,10 +333,17 @@ recognises as the speaker having gone to sleep.
 
 Something about a hard-killed session keeps the speaker awake. After a run whose helper and
 FFmpeg were killed by hand instead of stopped over the protocol, the M5 was still lit some
-hours later. The standby action now measures the leading suspect rather than assuming it:
-it waits for established TCP connections to the speaker to drop and reports
-`holding=<count>`. That turns "something was still attached" from a guess into a reading,
-but it has not yet caught the case in the act, so the cause remains open. `submode` was `cp`, but `cp` is not the cause: the sleep timer put the speaker
+hours later. The standby action measures what was long assumed to be the cause rather than
+assuming it: it waits for TCP connections to the speaker to drop and reports
+`holding=<count>`. That turns "something was still attached" from a guess into a reading.
+
+**A held connection is not the cause, though, and that is settled.** On the owner's account
+of 2026-08-08, corrected here on 2026-08-15: the speaker stayed lit all night after foobar
+and then *the whole computer* were shut down. A powered-off host has no sockets left to
+hold anything with. Whatever keeps the M5 awake survives its peer disappearing entirely,
+which points at the state the speaker holds in its own head — a `SetUrlPlayback` session it
+was never told had ended — and not at anything local. `holding=` keeps its value as proof
+that this end let go; it is not the lead. `submode` was `cp`, but `cp` is not the cause either: the sleep timer put the speaker
 into standby while it stayed in `cp`, and the speaker returns to `cp` on its own while idle.
 A `SetPlaybackControl stop` on the CPM API was accepted and reported `playstatus=stop`
 without clearing `cp`. The likelier explanation is a half-open HTTP pull the speaker never
