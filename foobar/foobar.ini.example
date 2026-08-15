@@ -31,10 +31,15 @@ volume=4
 ; as audible dropouts, not as a better number.
 ;buffer_extra=1000
 
-; CLOCK line in the foobar console: one a second for the first 240, then one
-; every thirty seconds for as long as playback lasts. Diagnostic only, and cheap
-; enough to leave on - the per-second burst measured 6 lines a minute and about
-; 85 KB an hour, the steady rate after it is a twentieth of that. Turn it on
-; before reporting anything about pacing, and leave it on to catch a stream that
-; dies after ten minutes rather than at startup.
+; CLOCK line in the foobar console: one a second for the first 240 of each
+; stream, then one every thirty seconds for as long as that stream lasts.
+; Diagnostic only, and cheap enough to leave on - the per-second burst measured
+; 6 lines a minute and about 85 KB an hour, the steady rate after it is a
+; twentieth of that. Turn it on before reporting anything about pacing, and
+; leave it on to catch a stream that dies after ten minutes rather than at
+; startup.
+; Reading it: the line is written from the output's own push callback, so it
+; appears only while foobar is handing over audio. A gap therefore means "foobar
+; stopped pushing", which covers a long pause and a full buffer as well as a
+; dead stream - do not read silence as a dropout on its own.
 ;diagnostics=1

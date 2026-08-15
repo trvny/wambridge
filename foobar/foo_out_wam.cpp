@@ -54,9 +54,14 @@ constexpr std::chrono::milliseconds kCounterInterval{1000};
 // twenty-seven minutes. A run that logged 240 healthy samples and then went
 // silent reads exactly like a run that stayed healthy.
 //
-// So the burst keeps its per-second detail and the rest of the session
+// So the burst keeps its per-second detail and the rest of the stream
 // continues at a rate that costs nothing: about 120 lines an hour, against a
 // measured 6 lines per minute and ~85 KB/h while the burst is going.
+//
+// What this still cannot promise: the line is written from the push callback,
+// so it only appears while foobar is handing over audio. A gap means foobar
+// stopped pushing, which a long pause or a full buffer produces just as well as
+// a dead stream. Silence here is not evidence of a dropout on its own.
 constexpr std::chrono::milliseconds kSteadyCounterInterval{30000};
 constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
@@ -903,6 +908,12 @@ private:
         m_clockStarted = false;
         m_drainRequested = false;
         m_childExited = false;
+        // Per stream, like everything else here. The burst exists to capture a
+        // startup, and every stream has one; leaving the counter to run meant
+        // the first track of a session spent it and every later track began
+        // already in steady mode, missing exactly the detail it is for.
+        m_counterLines = 0;
+        m_lastCounterLog = {};
     }
 
     void start_playback_clock_locked(
