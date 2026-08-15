@@ -31,8 +31,21 @@ volume=4
 ; as audible dropouts, not as a better number.
 ;buffer_extra=1000
 
-; Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
-; 240 lines. Turn it on before reporting anything about pacing.
+; CLOCK line in the foobar console: one a second for the first 240 of each
+; stream, then one every thirty seconds for as long as that stream lasts.
+; Diagnostic only. The burst runs at 60 lines a minute until it has spent its
+; 240 - about 36 KB, once per stream - and after that the rate is 120 lines an
+; hour, about 18 KB. The burst is per stream, though, so an hour of skipping
+; between tracks pays the per-second rate the whole time; the cheap figure
+; describes long uninterrupted listening, not every session. Turn it on before
+; reporting anything about pacing, and leave it on to catch a stream that dies
+; after ten minutes rather than at startup.
+; Reading it: the line comes from the callback foobar uses to ask how much room
+; the output has, so it appears only while foobar is working the output loop. A
+; gap therefore means "foobar stopped asking", which covers a long pause and a
+; full buffer as well as a dead stream - do not read silence as a dropout on its
+; own. A format change counts as a new stream too, so a station switching sample
+; rate mid-session restarts the burst just like a track change does.
 ;diagnostics=1
 
 ; Highest raw step the FIRST helper of a playback session may start at, 0..30,
