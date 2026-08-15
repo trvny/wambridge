@@ -1878,8 +1878,11 @@ private:
     // starts and torn down when it stops, so a seek cannot clear it.
     std::atomic<bool> m_startupVolumeApplied{false};
     // Level the current helper reported at PLAYING, held until its control
-    // channel is announced on the following line. Only the pipe-reading thread
-    // touches it, so it needs no atomic. -1 means nothing to apply.
+    // channel is announced on the following line. -1 means nothing to apply.
+    //
+    // Written by the pipe-reading thread and cleared in start_child, which runs
+    // after that thread has been joined for the outgoing helper and before the
+    // next one exists - so the two never overlap and it needs no atomic.
     int m_reportedStep = -1;
     std::atomic<double> m_gain{1.0};
     // -1 until foobar reports the slider position, which it does before the
