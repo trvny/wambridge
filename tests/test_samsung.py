@@ -3,7 +3,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from wambridge.samsung import (
-    POWER_STATUS_TIMEOUT,
+    SILENT_COMMAND_TIMEOUT,
     WamApiError,
     WamPlaybackStatus,
     WamResponse,
@@ -287,7 +287,7 @@ class SamsungCommandTests(TestCase):
         self.assertEqual(status.power_status, "1")
         self.assertEqual(
             power_mock.call_args.kwargs["timeout"],
-            POWER_STATUS_TIMEOUT,
+            SILENT_COMMAND_TIMEOUT,
         )
         # Every other field keeps the caller's timeout.
         self.assertEqual(volume_mock.call_args.kwargs["timeout"], 30.0)
