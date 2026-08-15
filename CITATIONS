@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-title: "_"
-message: kurde
+title: "WAM Bridge"
+message: "If you use this software or its protocol research in your work, please cite it using the metadata below."
 type: software
 authors:
   - name: trvny
@@ -8,17 +8,16 @@ authors:
   - name: dependabot[bot]
   - name: actions-user
   - name: claude
-  - name: claudiusz69[bot]
-  - name: codex
   - name: chatgpt
-  - name: chatgpt-codex-connector[bot]
+  - name: codex
+  - name: chatgpt-codex-connector
   - name: gptomek[bot]
+  - name: claudiusz69[bot]
   - name: devin-ai-integration[bot]
 identifiers:
-  - type: url
-    value: 'https://github.com/trvny'
-repository-code: 'https://github.com/trvny/wambridge'
-url: 'https://travny.pages.dev/'
+  - type: doi
+    value: "10.5281/zenodo.21877543"
+    description: "Zenodo concept DOI for all archived versions."
+repository-code: "https://github.com/trvny/wambridge"
+url: "https://github.com/trvny/wambridge"
 license: ISC
-version: 0.0.0
-date-released: '2026-07-29'
