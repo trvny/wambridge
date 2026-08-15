@@ -475,6 +475,10 @@ class FoobarSourceTests(TestCase):
             "                std::to_wstring(m_settings.startVolumeMax);",
             source,
         )
+        # The capped level replaces the slider reading, so a seek passes the
+        # cap rather than the stale slider position. Without it the quiet start
+        # survived only until the first seek.
+        self.assertIn("m_lastVolumeStep.store(level);", source)
         # A configured INI volume is a deliberate choice and stays uncapped.
         self.assertIn(
             'command += L" --volume " + std::to_wstring(*m_settings.volume);',

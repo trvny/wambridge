@@ -1202,7 +1202,7 @@ private:
             channels == m_channels;
     }
 
-    std::wstring command_line(unsigned sampleRate, unsigned channels) const {
+    std::wstring command_line(unsigned sampleRate, unsigned channels) {
         std::wstring command = quoted(m_settings.helper);
         command += L" --device " + quoted(m_settings.device);
         command += L" --sample-rate " + std::to_wstring(sampleRate);
@@ -1230,6 +1230,14 @@ private:
                     m_settings.startVolumeMax <= 0
                 ? routed
                 : (std::min)(routed, m_settings.startVolumeMax);
+            // Remember what was actually asked for, not what the slider said.
+            // A seek launches a replacement, which reads this and passes it
+            // straight through - so without this the capped start survived
+            // exactly until the first seek, which handed the speaker the old
+            // slider level and undid it. The slider sync cannot carry this on
+            // its own: it is conditional on a socket and on volume_max, and
+            // this must hold whether or not it ran.
+            m_lastVolumeStep.store(level);
             command += L" --volume " + std::to_wstring(level);
         } else if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
             // Otherwise the configured level, but only until some helper of
