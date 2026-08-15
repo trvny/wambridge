@@ -454,7 +454,7 @@ class FoobarSourceTests(TestCase):
         self.assertIn("if (*start < '0' || *start > '9') return -1;", source)
         self.assertIn("value < 0 || value > kMaximumRawVolume", source)
 
-    def test_the_unrouted_start_path_carries_a_clamp(self) -> None:
+    def test_the_routed_start_path_with_no_slider_yet_carries_a_clamp(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
         # The branch that reaches neither the slider nor a configured volume was

@@ -79,8 +79,10 @@ Optional keys and overrides:
   dropped chunk rather than to the output clock.
 
 **Nothing here is ignored quietly any more.** Unknown keys, a `format` that is not one of
-the three, a `volume`, `startup_silence` or `buffer_extra` that is not a number in range,
-and a `helper` path that does not exist all say so in the console. So do settings written as
+the three, a `volume`, `volume_max`, `start_volume_max`, `startup_silence` or `buffer_extra`
+that is not a number in range, and a `helper` path that does not exist all say so in the
+console. `volume_max` was the last one still falling back in silence while this paragraph
+already claimed otherwise. So do settings written as
 `#key=value`: Windows comments start with `;`, so those are key names rather than disabled
 lines and nothing reads them. The owner ran for days with `hardware_volume=1`, a key that
 exists only on an unmerged branch, with nothing anywhere saying it was dead.
