@@ -17,6 +17,9 @@ MIN_VOLUME = 0
 MAX_VOLUME = 100
 MAX_RESPONSE_BYTES = 1024 * 1024
 API_TYPES = ("UIC", "CPM")
+# Ceiling for the one command this firmware answers by staying silent. See
+# `_best_effort_power_status`.
+POWER_STATUS_TIMEOUT = 1.0
 LOCAL_OPENER = build_opener(ProxyHandler({}))
 _NAME_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_.-]*\Z")
 _HOST_RE = re.compile(r"\A[A-Za-z0-9._:%\[\]-]+\Z")
@@ -551,7 +554,13 @@ def get_power_status(
     port: int = DEFAULT_PORT,
     timeout: float = 5.0,
 ) -> str | None:
-    """Return the firmware's raw power-status value."""
+    """Return the firmware's raw power-status value.
+
+    Measured on the M5: this command is not implemented and the speaker stays
+    silent, so every call here runs out its timeout. Callers that want a
+    snapshot rather than this one field should go through
+    `_best_effort_power_status`.
+    """
     response = request(
         speaker_ip,
         "GetPowerStatus",
@@ -559,6 +568,38 @@ def get_power_status(
         timeout=timeout,
     )
     return _first_value(response, "powerStatus", "powerstatus")
+
+
+def _best_effort_power_status(
+    speaker_ip: str,
+    *,
+    port: int,
+    timeout: float,
+) -> str | None:
+    """Return the power status, or ``None`` when the speaker does not answer.
+
+    This firmware does not implement ``GetPowerStatus``: like ``GetFeature``, it
+    stays silent instead of refusing, so the call always runs out its timeout.
+    Letting that propagate cost the whole snapshot - ``status`` reported a
+    healthy speaker as unreachable over one field it was never going to fill,
+    and sent its owner to the wall socket at 02:40 for nothing. Optional detail
+    is dropped the way ``get_playback_status`` already drops provider metadata.
+
+    The wait is capped separately because a command that answers here answers
+    fast: measured on the M5, ``GetSpkName`` takes 0.14 s and ``get_volume``
+    0.12 s, while this one takes the full timeout every time. A firmware that
+    does implement it still gets a reply in; ours no longer charges five
+    seconds for silence.
+    """
+    try:
+        return get_power_status(
+            speaker_ip,
+            port=port,
+            timeout=min(timeout, POWER_STATUS_TIMEOUT),
+        )
+    except WamApiError as error:
+        LOGGER.debug("Speaker did not report power status: %s", error)
+        return None
 
 
 def get_status(
@@ -576,7 +617,7 @@ def get_status(
         ),
         volume=get_volume(speaker_ip, port=port, timeout=timeout),
         muted=get_mute(speaker_ip, port=port, timeout=timeout),
-        power_status=get_power_status(
+        power_status=_best_effort_power_status(
             speaker_ip,
             port=port,
             timeout=timeout,
