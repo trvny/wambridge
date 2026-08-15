@@ -275,14 +275,15 @@ Each of these cost real time and each is closed by measurement, not by argument.
    `WAMBRIDGE CONTROL_PORT` channel from PR #47 would arm the sleep timer only on a real
    stop, would survive an encoder that never exits, and would let a replacement skip the
    teardown work it does not need.
-8. **Confirm on hardware that a released speaker goes dark by itself.** The helper now ends
-   every session with `SetPlaybackControl pause` over its own `55001` connection and reports
-   `WAMBRIDGE STOPPED stop=... sleep=... holding=...`. What that changes for the LED is
-   unmeasured: leave `sleep_after_stop` at `0`, stop playback, and read the console line and
-   the speaker the next morning. `stop=sent holding=0` and a lit LED would mean releasing
-   cleanly is not enough and the timer is the answer; a dark LED closes the question that has
-   been open since 2026-08-02. The prior is now that it will go dark — normal use does, once
-   every program lets go — so a lit LED is the surprising outcome and the interesting one.
+8. **Tighten the window on a released speaker going dark.** Answered in outline on
+   2026-08-15 and no longer open in the form it was asked: a session ended
+   `stop=sent sleep=off holding=0` at 15:10:50 and the speaker was dark by roughly 16:00,
+   so releasing cleanly *is* enough. `docs/WAM_PROTOCOL.md` carries the reading. What
+   remains is the window rather than the answer — foobar was closed at 15:56, so whether
+   the LED went out before or after that is unknown, and a tighter figure needs a session
+   left running after the stop. The time is also not a constant: an earlier observation put
+   it near twenty minutes against the owner's memory of hours, which fits a firmware
+   stepping down through several states rather than one timeout.
 9. Reduce and reimplement the finite share path from its measured working form.
 10. Add a proper foobar preferences page while retaining legacy INI compatibility.
 11. Add TuneIn/radio UI and a dockable panel only after output transport is stable.

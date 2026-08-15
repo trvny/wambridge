@@ -408,9 +408,14 @@ class FoobarSourceTests(TestCase):
         self.assertIn('environment_value(L"WAMBRIDGE_SLEEP_AFTER_STOP")', source)
         self.assertIn('ini_value(L"sleep_after_stop", L"", path)', source)
         self.assertIn('command += L" --sleep-after-stop " +', source)
-        # Passed only when armed, so a default install's command line does not
-        # grow a flag that means "do nothing".
-        self.assertIn("if (m_settings.sleepAfterStopSeconds > 0) {", source)
+        # Passed unconditionally, zero included: the helper has to tell "the
+        # feature is off" apart from "nobody said", because only the second
+        # still has to clear a timer armed under a setting that has changed
+        # since. What is gated instead is the clear, on a marker that is sticky
+        # for the playback session rather than a reading of the setting.
+        self.assertIn('command += L" --clear-sleep-timer";', source)
+        self.assertIn("if (m_sleepTimerArmed.load()) {", source)
+        self.assertIn("m_sleepTimerArmed.store(true);", source)
         self.assertIn("parsed <= kMaximumSleepAfterStopSeconds", source)
         self.assertIn(
             "sleep_after_stop %s is not a number of seconds in 0..%u",

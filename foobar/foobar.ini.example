@@ -38,9 +38,12 @@ volume=4
 ; over is that idle power-down - GetPowerSaving and GetAutoPowerDown do not
 ; exist - so SetSleepTimer is the only thing it answers if releasing is not
 ; enough on its own.
-; The timer clears itself once it fires and is cleared again when the next
-; stream starts, so nothing stays configured on the speaker. Off by default,
-; because powering the speaker down is not this component's decision to make.
+; The timer clears itself once it fires, and is cleared again when the next
+; stream starts - but only within the same playback session, because nothing
+; records across a foobar restart that one was ever armed. So arming a long
+; timer, then setting this back to 0 and restarting foobar, leaves exactly one
+; armed timer to fire once. Off by default, because powering the speaker down
+; is not this component's decision to make.
 ;sleep_after_stop=120
 
 ; Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
