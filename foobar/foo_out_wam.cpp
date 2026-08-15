@@ -47,6 +47,27 @@ constexpr double kSilenceDecibels = -60.0;
 // foobar advancing at a median 11x with no term ever observed.
 constexpr unsigned kMaxCounterLines = 240;
 constexpr std::chrono::milliseconds kCounterInterval{1000};
+// What happens after that burst. It used to be nothing at all, which made the
+// diagnostics useless for anything that is not a startup problem: 240 lines at
+// one per second go quiet four minutes in, and the failure being chased here -
+// the speaker closing the stream on its own - arrived at thirteen and at
+// twenty-seven minutes. A run that logged 240 healthy samples and then went
+// silent reads exactly like a run that stayed healthy.
+//
+// So the burst keeps its per-second detail and the rest of the stream
+// continues at a rate that costs nothing. The burst is 60 lines a minute until
+// it has spent its 240, roughly 36 KB, once per stream; after that it is 120
+// lines an hour, roughly 18 KB. (An earlier note here said "6 lines a minute"
+// for the burst - that was the average over a whole console log including idle
+// time and non-CLOCK lines, not the rate of the burst itself.)
+//
+// What this still cannot promise: the line is written from update_v2(), the
+// callback foobar uses to ask how much room the output has - not from the path
+// that hands over samples. Both are driven by the same output loop, so a gap
+// still means foobar stopped asking, which a long pause or a full buffer
+// produces just as well as a dead stream. Silence here is not evidence of a
+// dropout on its own.
+constexpr std::chrono::milliseconds kSteadyCounterInterval{30000};
 constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
 constexpr DWORD kActiveShutdownGraceMs = 2000;
@@ -892,6 +913,12 @@ private:
         m_clockStarted = false;
         m_drainRequested = false;
         m_childExited = false;
+        // Per stream, like everything else here. The burst exists to capture a
+        // startup, and every stream has one; leaving the counter to run meant
+        // the first track of a session spent it and every later track began
+        // already in steady mode, missing exactly the detail it is for.
+        m_counterLines = 0;
+        m_lastCounterLog = {};
     }
 
     void start_playback_clock_locked(
@@ -934,13 +961,17 @@ private:
     void log_counters_locked(std::chrono::steady_clock::time_point now) {
         if (!m_settings.diagnostics) return;
         if (m_sampleRate == 0 || !m_clockStarted) return;
-        if (m_counterLines >= kMaxCounterLines) return;
+        const auto interval = m_counterLines >= kMaxCounterLines
+            ? kSteadyCounterInterval
+            : kCounterInterval;
         if (m_lastCounterLog != std::chrono::steady_clock::time_point{} &&
-            now - m_lastCounterLog < kCounterInterval) {
+            now - m_lastCounterLog < interval) {
             return;
         }
         m_lastCounterLog = now;
-        ++m_counterLines;
+        // Stops counting at the cap rather than running up forever; past that
+        // point the number only has to compare against it.
+        if (m_counterLines < kMaxCounterLines) ++m_counterLines;
 
         std::string flags;
         if (m_playing.load()) flags += 'P';

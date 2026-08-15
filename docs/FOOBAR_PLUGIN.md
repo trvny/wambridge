@@ -64,8 +64,14 @@ Optional keys and overrides:
   the `CLOCK` line and as audible dropouts,
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
-  `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on
-  before reporting anything about pacing — it is what attributed the runaway start to a
+  `free`, `capacity`, flags). Off by default. One line a second for the first 240 of each
+  stream, then one every thirty seconds for as long as that stream lasts — it used to stop
+  dead at 240, which made it useless for anything that is not a startup problem. A format
+  change starts a new stream for this purpose, so a station changing sample rate restarts
+  the burst. The line comes from the callback foobar uses to ask how much room the output
+  has, so a gap in it means foobar stopped asking — a long pause or a full buffer does that
+  as readily as a dead stream, and silence is not evidence of a dropout on its own. Turn it
+  on before reporting anything about pacing — it is what attributed the runaway start to a
   dropped chunk rather than to the output clock.
 
 **Nothing here is ignored quietly any more.** Unknown keys, a `format` that is not one of
