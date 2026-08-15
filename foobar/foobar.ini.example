@@ -31,6 +31,10 @@ volume=4
 ; as audible dropouts, not as a better number.
 ;buffer_extra=1000
 
-; Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
-; 240 lines. Turn it on before reporting anything about pacing.
+; CLOCK line in the foobar console: one a second for the first 240, then one
+; every thirty seconds for as long as playback lasts. Diagnostic only, and cheap
+; enough to leave on - the per-second burst measured 6 lines a minute and about
+; 85 KB an hour, the steady rate after it is a twentieth of that. Turn it on
+; before reporting anything about pacing, and leave it on to catch a stream that
+; dies after ten minutes rather than at startup.
 ;diagnostics=1

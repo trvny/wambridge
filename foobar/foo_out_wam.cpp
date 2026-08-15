@@ -47,6 +47,17 @@ constexpr double kSilenceDecibels = -60.0;
 // foobar advancing at a median 11x with no term ever observed.
 constexpr unsigned kMaxCounterLines = 240;
 constexpr std::chrono::milliseconds kCounterInterval{1000};
+// What happens after that burst. It used to be nothing at all, which made the
+// diagnostics useless for anything that is not a startup problem: 240 lines at
+// one per second go quiet four minutes in, and the failure being chased here -
+// the speaker closing the stream on its own - arrived at thirteen and at
+// twenty-seven minutes. A run that logged 240 healthy samples and then went
+// silent reads exactly like a run that stayed healthy.
+//
+// So the burst keeps its per-second detail and the rest of the session
+// continues at a rate that costs nothing: about 120 lines an hour, against a
+// measured 6 lines per minute and ~85 KB/h while the burst is going.
+constexpr std::chrono::milliseconds kSteadyCounterInterval{30000};
 constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
 constexpr DWORD kActiveShutdownGraceMs = 2000;
@@ -934,13 +945,17 @@ private:
     void log_counters_locked(std::chrono::steady_clock::time_point now) {
         if (!m_settings.diagnostics) return;
         if (m_sampleRate == 0 || !m_clockStarted) return;
-        if (m_counterLines >= kMaxCounterLines) return;
+        const auto interval = m_counterLines >= kMaxCounterLines
+            ? kSteadyCounterInterval
+            : kCounterInterval;
         if (m_lastCounterLog != std::chrono::steady_clock::time_point{} &&
-            now - m_lastCounterLog < kCounterInterval) {
+            now - m_lastCounterLog < interval) {
             return;
         }
         m_lastCounterLog = now;
-        ++m_counterLines;
+        // Stops counting at the cap rather than running up forever; past that
+        // point the number only has to compare against it.
+        if (m_counterLines < kMaxCounterLines) ++m_counterLines;
 
         std::string flags;
         if (m_playing.load()) flags += 'P';
