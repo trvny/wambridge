@@ -34,3 +34,14 @@ volume=4
 ; Per-second CLOCK line in the foobar console. Diagnostic only; caps itself at
 ; 240 lines. Turn it on before reporting anything about pacing.
 ;diagnostics=1
+
+; Highest raw step the FIRST helper of a playback session may start at, 0..30,
+; default 3. 0 means no cap. The slider governs everything after the start, so
+; this is not a volume limit - it only stops a slider left high after an evening
+; of listening from becoming the level the next track opens at, on material
+; whose loudness nobody knows yet.
+; Measured by ear on the M5 on 15.08.2026, slider mapped onto 0..10: 1 inaudible,
+; 2 barely, 3 a little more, 4 clearly louder, 5 distinct, 6 cuts through
+; conversation, 7 comfortable. There is no cliff in that curve - the mapping was
+; never the problem, the starting point was.
+;start_volume_max=3

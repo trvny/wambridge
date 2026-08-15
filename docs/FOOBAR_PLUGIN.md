@@ -104,6 +104,32 @@ starting PCM playback at 3`. Replacement helpers are launched with the clamp rai
 speaker's own maximum instead, so they leave the level alone. The safe clamp protects the
 start of a session; it has no business overriding a level a person chose during one.
 
+Routing the slider used to disable that protection entirely. With `hardware_volume=1` the
+component passes the slider's level as an explicit `--volume`, and `choose_start_volume`
+returns an explicit level before it ever looks at `max_start_volume` — so the safe start
+existed in the code, was passed on the paths that did not need it, and was skipped on the
+one that did. A slider left high after an evening of listening became the level the next
+session opened at, on material whose loudness nobody knew yet.
+
+`start_volume_max` (raw step, `0..30`, default `3`, `0` disables) caps the level handed to
+the **first** helper of a session. It is not a volume limit: the slider governs everything
+after the start, and moving it reaches the speaker in about a second over the held
+connection. The cap lifts as soon as a helper reports `PLAYING`, so a seek cannot turn down
+a level chosen mid-session.
+
+The component also moves the slider to whatever level the helper reports in
+`WAMBRIDGE PLAYING volume=<step>`. Without that the capped start leaves the slider pointing
+at a level the speaker is not playing, and the first pixel of movement jumps straight to it
+— the same surprise the cap removes, only deferred.
+
+**The mapping was never the problem.** Measured by ear on the M5 on 2026-08-15, slider onto
+`0..10`: `1` inaudible, `2` barely there, `3` a little more, `4` clearly louder, `5`
+distinct, `6` enough to cut through conversation, `7` comfortable listening. No cliff
+anywhere in it. Reaching `7` by dragging sounds fine; reaching it cold is what made the
+owner jump, which is why this is a cap on the starting point rather than a different curve.
+Whether the M5's own raw steps are even in dB is still unmeasured — this reading is a
+listener's judgement, not an instrument's.
+
 ## Menu behavior
 
 Emergency stop and standby stop foobar before invoking the control helper. Commands are

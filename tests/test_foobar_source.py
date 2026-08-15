@@ -409,3 +409,27 @@ class FoobarSourceTests(TestCase):
             "std::chrono::milliseconds(m_settings.startupSilenceMs)",
             source,
         )
+
+    def test_the_start_volume_cap_applies_only_to_the_first_helper(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kDefaultStartVolumeMax = 3;", source)
+        self.assertIn('L"start_volume_max",', source)
+        self.assertIn('environment_value(L"WAMBRIDGE_START_VOLUME_MAX")', source)
+        self.assertIn('ini_value(L"start_volume_max", L"", path)', source)
+        # Zero is a real answer - "no cap" - so the range starts there rather
+        # than at 1 like volume_max, whose zero would mean a silent ceiling.
+        self.assertIn("parsed >= 0 &&\n            parsed <= kMaximumRawVolume", source)
+        # The cap is lifted once a helper of this session has reported PLAYING,
+        # so a seek cannot turn down a level the listener chose mid-session.
+        self.assertIn("m_startupVolumeApplied.load() ||", source)
+        self.assertIn("(std::min)(routed, m_settings.startVolumeMax)", source)
+
+    def test_the_slider_follows_the_level_the_helper_reports(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # Without this the capped start leaves the slider pointing somewhere the
+        # speaker is not, and the first touch of it jumps - which is the same
+        # surprise the cap exists to remove.
+        self.assertIn('const auto marker = line.find("volume=");', source)
+        self.assertIn("wam::note_speaker_step(", source)

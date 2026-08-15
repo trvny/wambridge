@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cwchar>
 #include <deque>
 #include <mutex>
@@ -39,6 +40,22 @@ constexpr size_t kWriteBatchFrames = 4096;
 // replaced mid-session rather than started.
 constexpr int kMaximumRawVolume = 30;
 constexpr int kDefaultVolumeMax = 10;
+// The highest raw step the first helper of a playback session may start at,
+// however high the slider is sitting. The slider governs everything after it.
+//
+// The curve itself is fine, which is why this is a cap and not a different
+// mapping. Measured by ear on the M5 on 2026-08-15 over a slider mapped onto
+// 0..10: 1 inaudible, 2 barely there, 3 a little more, 4 clearly louder, 5
+// distinct, 6 enough to cut through conversation in the room, 7 comfortable
+// listening. No cliff anywhere in it.
+//
+// What made the owner jump was never the mapping. Arriving at 7 by dragging the
+// slider sounds fine; arriving at 7 cold, on a track whose loudness nobody knows
+// yet, does not - and a slider left there after an evening of listening is
+// exactly what the next session started from. So the start is capped and the
+// listener raises it, which is the shape they asked for: "not a global limit,
+// just don't scare me every single time".
+constexpr int kDefaultStartVolumeMax = 3;
 // Below this the slider is treated as silence. Amplitude at -60 dB is 0.001,
 // which rounds to step 0 for every ceiling in range anyway.
 constexpr double kSilenceDecibels = -60.0;
@@ -209,6 +226,7 @@ constexpr const wchar_t* kKnownIniKeys[] = {
     L"buffer_extra",
     L"hardware_volume",
     L"volume_max",
+    L"start_volume_max",
 };
 
 void report_unknown_ini_keys(const std::wstring& path) {
@@ -294,6 +312,7 @@ struct Settings {
     int bufferExtraMs = kDefaultBufferExtraMs;
     bool hardwareVolume = false;
     int volumeMax = kDefaultVolumeMax;
+    int startVolumeMax = kDefaultStartVolumeMax;
 };
 
 bool truthy(const std::wstring& value) {
@@ -397,6 +416,30 @@ Settings load_settings() {
         }
     }
 
+    int startVolumeMax = kDefaultStartVolumeMax;
+    auto rawStartMax = environment_value(L"WAMBRIDGE_START_VOLUME_MAX");
+    if (rawStartMax.empty()) {
+        rawStartMax = ini_value(L"start_volume_max", L"", path);
+    }
+    if (!rawStartMax.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawStartMax.c_str(), &end, 10);
+        // Zero is a real answer here and means "no cap, start where the slider
+        // points", so the range starts at 0 rather than 1.
+        if (end != rawStartMax.c_str() && *end == L'\0' && parsed >= 0 &&
+            parsed <= kMaximumRawVolume) {
+            startVolumeMax = static_cast<int>(parsed);
+        } else {
+            console::printf(
+                "%s: start_volume_max %s is not a raw step in 0..%u, keeping %u",
+                kComponentName,
+                narrowed(rawStartMax).c_str(),
+                static_cast<unsigned>(kMaximumRawVolume),
+                static_cast<unsigned>(startVolumeMax)
+            );
+        }
+    }
+
     int startupSilenceMs = kDefaultStartupSilenceMs;
     auto rawSilence = environment_value(L"WAMBRIDGE_STARTUP_SILENCE");
     if (rawSilence.empty()) {
@@ -453,6 +496,7 @@ Settings load_settings() {
         bufferExtraMs,
         hardwareVolume,
         volumeMax,
+        startVolumeMax,
     };
 }
 
@@ -1103,7 +1147,17 @@ private:
         // and the first touch of the slider jumped the speaker to 10.
         const int routed = m_lastVolumeStep.load();
         if (m_settings.hardwareVolume && routed >= 0) {
-            command += L" --volume " + std::to_wstring(routed);
+            // Capped for the first helper of a session only, and not at all
+            // once one has reported PLAYING: after that the listener is at the
+            // controls and a seek must not turn them down. The helper's own
+            // --max-start-volume cannot do this job, because an explicit level
+            // wins over that clamp outright - which is how routing the slider
+            // silently disabled the safe start it looks like it respects.
+            const int level = m_startupVolumeApplied.load() ||
+                    m_settings.startVolumeMax <= 0
+                ? routed
+                : (std::min)(routed, m_settings.startVolumeMax);
+            command += L" --volume " + std::to_wstring(level);
         } else if (m_settings.volume.has_value() && !m_startupVolumeApplied.load()) {
             // Otherwise the configured level, but only until some helper of
             // this session has reported PLAYING - that line is the helper
@@ -1342,6 +1396,22 @@ private:
                         false,
                         true
                     );
+                    // Put the slider where the speaker actually ended up. It
+                    // usually agrees already, but the first helper of a session
+                    // starts capped, and a slider still pointing at last
+                    // night's level would jump there on the first pixel of
+                    // movement - which is the surprise the cap removes, only
+                    // deferred to the next time the listener touches it.
+                    const auto marker = line.find("volume=");
+                    if (marker != std::string::npos) {
+                        wam::note_speaker_step(
+                            static_cast<int>(std::strtol(
+                                line.c_str() + marker + 7,
+                                nullptr,
+                                10
+                            ))
+                        );
+                    }
                 } else if (line.rfind("WAMBRIDGE CONTROL_PORT ", 0) == 0) {
                     connect_control_channel(line.substr(23), generation);
                 } else if (line.rfind("WAMBRIDGE ERROR ", 0) == 0) {
