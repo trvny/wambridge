@@ -71,14 +71,14 @@ class ConnectionCountTests(TestCase):
         )
 
     @skipUnless(sys.platform.startswith("win"), "socket table is a Windows API")
-    def test_ignore_pid_drops_only_the_callers_own_sockets(self) -> None:
-        """Our own closing sockets are the one thing not holding the speaker.
+    def test_own_pid_does_not_hide_a_socket_the_caller_still_holds(self) -> None:
+        """A leak of our own is a leak, and must not vanish from our own count.
 
-        Measured against the M5 on 2026-08-15: a locally closed socket sat in
-        FIN_WAIT for a further 0.5-1.5 s, so a teardown reading taken right
-        after closing waited that out and then reported its own exit as a hold.
-        Sockets of a killed helper still count - its PID is gone and cannot
-        match the caller's.
+        `own_pid` exists to skip *closing* sockets, not to excuse the caller.
+        Dropping them wholesale would make a helper's own leaked connection
+        invisible to the very line printed to prove it let go - `holding=0`
+        would then mean "nobody checked", which is what this counter exists to
+        prevent.
         """
         server = socket.socket()
         self.addCleanup(server.close)
@@ -90,7 +90,33 @@ class ConnectionCountTests(TestCase):
         self.addCleanup(accepted.close)
 
         counted = attached_connections_to("127.0.0.1")
-        ignored = attached_connections_to("127.0.0.1", ignore_pid=os.getpid())
+        with_own = attached_connections_to("127.0.0.1", own_pid=os.getpid())
 
-        # Both ends belong to this process, so both rows have to disappear.
-        self.assertGreaterEqual(counted - ignored, 2)
+        # Both ends are ESTABLISHED and belong to this process. Neither is
+        # closing, so neither may be skipped.
+        self.assertEqual(counted, with_own)
+
+    @skipUnless(sys.platform.startswith("win"), "socket table is a Windows API")
+    def test_own_pid_skips_a_socket_the_caller_has_already_closed(self) -> None:
+        """Measured on 2026-08-15: a locally closed socket lingers 0.5-1.5 s.
+
+        A reading taken right after a teardown waited that out and then
+        reported the teardown itself as a hold. That delay is paid on every
+        helper exit, and a helper exit precedes every seek.
+        """
+        server = socket.socket()
+        self.addCleanup(server.close)
+        server.bind(("127.0.0.1", 0))
+        server.listen(2)
+        client = socket.create_connection(server.getsockname())
+        accepted, _ = server.accept()
+        self.addCleanup(accepted.close)
+
+        before = attached_connections_to("127.0.0.1", own_pid=os.getpid())
+        # This end closes; the peer does not. The closer goes to FIN_WAIT and
+        # is the caller's own business, while the peer sits in CLOSE_WAIT
+        # holding on and still counts.
+        client.close()
+        after = attached_connections_to("127.0.0.1", own_pid=os.getpid())
+
+        self.assertEqual(before - after, 1)

@@ -72,6 +72,15 @@ _ATTACHED_STATES = frozenset(
     }
 )
 
+# The subset that means the local end has not asked to close yet. FIN_WAIT1,
+# FIN_WAIT2, CLOSING and LAST_ACK all follow a local close and are the kernel
+# finishing the exchange; CLOSE_WAIT is the opposite - the peer closed and this
+# end has not - so it stays. Used only for the caller's own sockets, where the
+# difference between "still holding" and "closing" is knowable. For any other
+# process it is not: a killed helper's sockets sit in FIN_WAIT because the
+# kernel closed them on its way out, and those are exactly the ones to count.
+_UNCLOSED_STATES = frozenset({3, 4, 5, 8})
+
 
 class _MIB_TCPROW_OWNER_PID(ctypes.Structure):
     _fields_ = [
@@ -95,7 +104,7 @@ def _packed_address(speaker_ip: str) -> int | None:
 def attached_connections_to(
     speaker_ip: str,
     *,
-    ignore_pid: int | None = None,
+    own_pid: int | None = None,
 ) -> int | None:
     """Return how many local sockets are still attached to the speaker.
 
@@ -104,14 +113,15 @@ def attached_connections_to(
     table could not be read, which is not the same as zero and must never be
     reported as "nothing is attached".
 
-    ``ignore_pid`` drops the caller's own sockets. A process that has just
-    closed its connections still owns them for a moment: measured against the
-    M5 on 2026-08-15, a socket closed locally sat in ``FIN_WAIT`` for a further
-    0.5 s to 1.5 s. Counting those made the reading both slow and wrong - the
-    question this answers is whether anything *else* is holding the speaker
-    after we let go, and the caller's own dying sockets are the one thing that
-    is certainly not. Sockets of a killed process still count: their owner is
-    gone, so its PID cannot match the caller's.
+    ``own_pid`` narrows what counts *for that one process* to sockets it has
+    not closed - measured against the M5 on 2026-08-15, a socket closed locally
+    sat in ``FIN_WAIT`` for a further 0.5 s to 1.5 s, so a caller reading the
+    table right after its own teardown waited that out and then reported itself
+    as a hold. Note what this deliberately does not do: it does not drop the
+    caller's sockets wholesale. One left ``ESTABLISHED`` or ``CLOSE_WAIT`` is a
+    connection this process failed to close, which is a leak worth exactly as
+    much attention as anyone else's, and hiding it would turn ``holding=0``
+    into the comforting lie this counter exists to prevent.
     """
     if not sys.platform.startswith("win"):
         return None
@@ -153,7 +163,11 @@ def attached_connections_to(
         offset += row_size
         if row.dwRemoteAddr != target or row.dwState not in _ATTACHED_STATES:
             continue
-        if ignore_pid is not None and row.dwOwningPid == ignore_pid:
+        if (
+            own_pid is not None
+            and row.dwOwningPid == own_pid
+            and row.dwState not in _UNCLOSED_STATES
+        ):
             continue
         held += 1
     return held
@@ -164,7 +178,7 @@ def wait_until_released(
     *,
     timeout: float = STANDBY_RELEASE_TIMEOUT,
     poll: float = STANDBY_RELEASE_POLL,
-    ignore_pid: int | None = None,
+    own_pid: int | None = None,
 ) -> int | None:
     """Wait for local sockets against the speaker to drop, and report the count.
 
@@ -172,13 +186,14 @@ def wait_until_released(
     as unknown rather than as zero: claiming nothing is attached when it could
     not be checked is the failure this exists to prevent.
 
-    ``ignore_pid`` is passed straight through, and a caller tearing its own
-    session down wants it: without it this waits out its own closing sockets,
-    which is time paid for a reading that was never in question.
+    ``own_pid`` is passed straight through, and a caller tearing its own session
+    down wants it: without it this waits out its own closing sockets, which is
+    time paid for a reading that was never in question. A socket that caller
+    failed to close still counts, and still holds this open until the deadline.
     """
     deadline = time.monotonic() + timeout
-    held = attached_connections_to(speaker_ip, ignore_pid=ignore_pid)
+    held = attached_connections_to(speaker_ip, own_pid=own_pid)
     while held is not None and held > 0 and time.monotonic() < deadline:
         time.sleep(poll)
-        held = attached_connections_to(speaker_ip, ignore_pid=ignore_pid)
+        held = attached_connections_to(speaker_ip, own_pid=own_pid)
     return held

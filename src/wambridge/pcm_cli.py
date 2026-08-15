@@ -597,16 +597,22 @@ def _stopped_line(
 
     Every session used to end with silence in the console, so the morning after
     a speaker that stayed lit there was nothing to read. ``holding`` counts
-    every local socket still attached **except this helper's own**: something
-    else holding the speaker is the same problem seen from the other side,
-    while our own sockets are closed by the time this runs and only sit in
-    ``FIN_WAIT`` while the kernel finishes the job. Counting them cost 0.5 s to
-    1.5 s of measured wall clock on every exit - paid on every seek, because
-    the component stops one helper before starting its replacement - and
-    reported this helper's own teardown as something holding the speaker. A
-    killed session's sockets still count: their owner is gone, so its PID
-    cannot match ours. The value is ``unknown`` when the table could not be
-    read, never a comforting zero.
+    every local socket still attached, including this helper's own - a
+    connection *we* failed to close is a leak worth as much attention as
+    anyone else's, and hiding it would make this line's zero mean "nobody
+    checked".
+
+    What is skipped is narrower: this helper's own sockets that are already
+    closing. By the time this runs the server and the control socket have been
+    closed, and measured on 2026-08-15 they sit in ``FIN_WAIT`` for a further
+    0.5 s to 1.5 s while the kernel finishes. Waiting that out cost that long on
+    every exit - and a helper exit precedes every seek, because the component
+    stops one before starting its replacement - to report this teardown as
+    something holding the speaker. A killed session's sockets are untouched by
+    this: they belong to a process that is gone, so its PID cannot match ours.
+
+    The value is ``unknown`` when the table could not be read, never a
+    comforting zero.
     """
     summary = (
         watcher.release_summary
@@ -617,7 +623,7 @@ def _stopped_line(
         speaker_ip,
         timeout=_RELEASE_TIMEOUT,
         poll=_RELEASE_POLL,
-        ignore_pid=os.getpid(),
+        own_pid=os.getpid(),
     )
     return (
         f"WAMBRIDGE STOPPED {summary} "

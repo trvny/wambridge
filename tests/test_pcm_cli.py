@@ -600,7 +600,7 @@ class PcmCliTests(TestCase):
         _stopped_line(None, "10.0.0.118", sleep_after_stop=0)
 
         self.assertEqual(
-            released_mock.call_args.kwargs["ignore_pid"],
+            released_mock.call_args.kwargs["own_pid"],
             os.getpid(),
         )
 

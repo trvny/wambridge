@@ -299,7 +299,7 @@ def standby(
         # and closed a connection of their own, and waiting those out would
         # report this action's own requests as something holding the speaker.
         # A leaked helper is a different process, so it still counts.
-        ignore_pid=os.getpid(),
+        own_pid=os.getpid(),
     )
     lines = [
         "action=standby",

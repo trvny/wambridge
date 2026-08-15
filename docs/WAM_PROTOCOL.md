@@ -309,6 +309,29 @@ LED off is network standby, not power off. With the LED dark the M5 still answer
 `GetVolume` and `GetApInfo` on `55001`. Wi-Fi and the control port stay up; the amplifier and
 the display go down.
 
+**The control port cannot see the difference at all, and that is now measured rather than
+assumed.** On 2026-08-15 the same 23 read-only commands were run against the speaker with the
+LED confirmed dark and again a minute later with it confirmed lit, woken in between by a
+no-op `SetVolume`. Exactly one field differed — `mute`, changed by the wake itself. `GetFunc`
+read `wifi`/`dlna` in both, response times stayed in the 0.02–0.2 s band in both, and all
+seven silent commands stayed silent in both. Stop looking for a network-side standby
+detector; a human has to look at the speaker.
+
+Two things fell out of that run:
+
+- **The `Date` clock runs through standby.** Uptime advanced 1861 s over 31 minutes of wall
+  clock while the LED was dark, so it is a boot counter and not a sleep indicator. A reset in
+  it means the speaker actually restarted.
+- **`SetVolume` clears mute.** Sent with `<pwron>on</pwron>` at the level the speaker was
+  already on, it returned `VolumeLevel ok` and left `mute=off` where `GetMute` had read `on`
+  a moment earlier — no `SetMute` involved. The standby menu item's "leaves it muted" state
+  therefore survives only until the next volume command.
+
+**The speaker does put itself into standby.** Left alone after 2026-08-09 it was dark by
+2026-08-15, having answered every reading in between, and it went dark within hours of an
+unattended restart with nothing connected. That is the same behaviour the owner reports from
+normal use with the Samsung app. What does not exist is any way to read or configure it.
+
 `SetSleepTimer` reaches that state on demand:
 
 - `sleeptime` is in **seconds**, not minutes. `60` counted down to `0` in one minute.
@@ -363,11 +386,12 @@ already holds: `SetPlaybackControl pause` on the UIC API, the same command `stop
 uses on this path, without the mute that would hand the speaker back silent, and without
 `pwron`. It then reports `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|skipped>
 sleep=<off|Ns> holding=<count>` once its own sockets are gone. `holding` counts every local
-socket attached to the speaker **except this helper's own**: those are closed by the time the
-line is printed and only linger in `FIN_WAIT` while the kernel finishes, so counting them
-both inflated the reading and made every helper exit wait 0.5 s to 1.5 s for it. A killed
-session's sockets still count, which is the case this reading exists for — their owner is
-gone, so its PID cannot match.
+socket attached to the speaker, this helper's included — one it failed to close is a leak
+like any other, and hiding it would make the count's zero mean "nobody checked". What it
+skips is only its own sockets that are *already closing*: those linger in `FIN_WAIT` for a
+measured 0.5 s to 1.5 s while the kernel finishes, and waiting them out cost that on every
+helper exit. A killed session's sockets are untouched by that rule — their owner is gone, so
+its PID cannot match — and they are the case this reading exists for.
 
 Whether releasing cleanly is enough for the M5 to go dark by itself is still unmeasured.
 The owner's account of normal use says it should be (see the standby section: the speaker

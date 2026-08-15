@@ -121,12 +121,15 @@ watcher existed.
 never took the URL, so it is still doing whatever it was doing before, and a release would
 reach past this helper and pause that instead.
 
-`holding` excludes sockets owned by this helper. Measured on 2026-08-15, a locally closed
-socket sits in `FIN_WAIT` for a further 0.5 s to 1.5 s, and the count is taken right after
-teardown closes its own — so counting them reported this helper's own exit as something
-holding the speaker, and made every helper exit wait it out. That wait lands in the seek
-path, where the component stops one helper before starting its replacement. A killed
-session's sockets still count: their owner is gone, so its PID cannot match ours.
+`holding` counts this helper's own sockets too. What it skips is narrower: its own sockets
+that are *already closing*. Measured on 2026-08-15, a locally closed socket sits in
+`FIN_WAIT` for a further 0.5 s to 1.5 s, and the count is taken right after teardown closes
+its own — so waiting those out cost that long on every helper exit, which precedes every
+seek, to report this teardown as something holding the speaker. A socket this helper left
+`ESTABLISHED` or `CLOSE_WAIT` is a different thing entirely and still counts; skipping those
+would make `holding=0` mean "nobody checked", which is the failure this reading exists to
+prevent. A killed session's sockets are untouched by any of this — their owner is gone, so
+its PID cannot match.
 
 `sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
 default. It is the only lever this firmware answers, and it is opt-in because powering the
