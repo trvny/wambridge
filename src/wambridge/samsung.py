@@ -17,11 +17,16 @@ MIN_VOLUME = 0
 MAX_VOLUME = 100
 MAX_RESPONSE_BYTES = 1024 * 1024
 API_TYPES = ("UIC", "CPM")
-# Ceiling for a command this firmware answers by staying silent rather than
-# refusing. `GetPowerStatus`, `GetLedStatus`, `GetStandbyMode`, `GetSpkStatus`,
-# `GetFeature`, `GetPowerSaving` and `GetAutoPowerDown` are all in that class,
-# so this is a per-command cap rather than one command's exception. See
-# `_best_effort_power_status`.
+# Default wait for a command this firmware answers by staying silent rather
+# than refusing, so that asking costs a second instead of five. `GetSpkName`
+# answers in 0.14 s and `get_volume` in 0.12 s, so a second is generous for one
+# that is going to answer at all.
+#
+# Seven commands are in that class - `GetPowerStatus`, `GetLedStatus`,
+# `GetStandbyMode`, `GetSpkStatus`, `GetFeature`, `GetPowerSaving` and
+# `GetAutoPowerDown` - but only the first has a wrapper here, so this is the
+# default of exactly one function today. Give any of the others a wrapper and
+# it wants this as its default too; nothing applies it automatically.
 SILENT_COMMAND_TIMEOUT = 1.0
 LOCAL_OPENER = build_opener(ProxyHandler({}))
 _NAME_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_.-]*\Z")
@@ -555,22 +560,26 @@ def get_power_status(
     speaker_ip: str,
     *,
     port: int = DEFAULT_PORT,
-    timeout: float = 5.0,
+    timeout: float = SILENT_COMMAND_TIMEOUT,
 ) -> str | None:
     """Return the firmware's raw power-status value.
 
     Measured on the M5: this command is not implemented and the speaker stays
-    silent, so every call here runs out its timeout. The cap belongs to the
-    command rather than to one caller - a guardrail only the snapshot path knew
-    about would hand the next caller the old five seconds back. Callers that
-    want a snapshot rather than this one field should still go through
+    silent, so every call here runs out its timeout. The short wait is this
+    function's *default* rather than a clamp on what it is given. Both halves
+    matter: a caller that says nothing gets the guardrail without having to know
+    the command is special, and a caller on a firmware that does answer this,
+    slowly, can still ask for five seconds and get them. Silently shortening a
+    timeout somebody wrote down would be its own bug.
+
+    Callers that want a snapshot rather than this one field should go through
     `_best_effort_power_status`, which also survives the silence.
     """
     response = request(
         speaker_ip,
         "GetPowerStatus",
         port=port,
-        timeout=min(timeout, SILENT_COMMAND_TIMEOUT),
+        timeout=timeout,
     )
     return _first_value(response, "powerStatus", "powerstatus")
 
@@ -591,14 +600,15 @@ def _best_effort_power_status(
     and sent its owner to the wall socket at 02:40 for nothing. Optional detail
     is dropped the way ``get_playback_status`` already drops provider metadata.
 
-    The wait is capped separately because a command that answers here answers
-    fast: measured on the M5, ``GetSpkName`` takes 0.14 s and ``get_volume``
-    0.12 s, while this one takes the full timeout every time. A firmware that
-    does implement it still gets a reply in; ours no longer charges five
-    seconds for silence.
+    The caller's ``timeout`` is deliberately **not** passed on. It belongs to
+    the fields the speaker actually answers; this one is left on the short
+    default, because a command that answers on this port answers fast -
+    measured on the M5, ``GetSpkName`` takes 0.14 s and ``get_volume`` 0.12 s,
+    while this one takes whatever it is given, every time. Forwarding a
+    generous timeout here would spend it entirely on silence.
     """
     try:
-        return get_power_status(speaker_ip, port=port, timeout=timeout)
+        return get_power_status(speaker_ip, port=port)
     except WamApiError as error:
         LOGGER.debug("Speaker did not report power status: %s", error)
         return None

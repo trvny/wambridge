@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-08.
+Last reviewed: 2026-08-15.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.

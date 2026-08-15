@@ -271,7 +271,7 @@ class SamsungCommandTests(TestCase):
     @patch("wambridge.samsung.get_mute")
     @patch("wambridge.samsung.get_volume")
     @patch("wambridge.samsung.get_playback_status")
-    def test_caps_the_wait_for_a_command_that_answers_with_silence(
+    def test_status_forwards_the_callers_timeout_to_the_answering_fields(
         self,
         playback_mock,
         volume_mock,
@@ -286,16 +286,14 @@ class SamsungCommandTests(TestCase):
         status = get_status("10.0.0.118", timeout=30.0)
 
         self.assertEqual(status.power_status, "1")
-        # Every field is handed the caller's timeout; the cap on the silent one
-        # lives in the command itself, below.
         self.assertEqual(volume_mock.call_args.kwargs["timeout"], 30.0)
-        self.assertEqual(power_mock.call_args.kwargs["timeout"], 30.0)
+        self.assertEqual(mute_mock.call_args.kwargs["timeout"], 30.0)
+        # The silent one is not offered it. A generous timeout here would be
+        # spent entirely on silence, so it keeps the short default instead.
+        self.assertNotIn("timeout", power_mock.call_args.kwargs)
 
     @patch("wambridge.samsung.request")
-    def test_silent_command_caps_its_own_wait(self, request_mock) -> None:
-        # The cap belongs to the command, not to the one caller that happens to
-        # know about it: a guardrail living only in `get_status` would hand the
-        # next caller of this public function the full timeout back.
+    def test_silent_command_defaults_to_a_short_wait(self, request_mock) -> None:
         request_mock.return_value = WamResponse(
             method="PowerStatus",
             result="ok",
@@ -303,11 +301,30 @@ class SamsungCommandTests(TestCase):
             values={"powerStatus": "1"},
         )
 
-        self.assertEqual(get_power_status("10.0.0.118", timeout=30.0), "1")
+        self.assertEqual(get_power_status("10.0.0.118"), "1")
         self.assertEqual(
             request_mock.call_args.kwargs["timeout"],
             SILENT_COMMAND_TIMEOUT,
         )
+
+    @patch("wambridge.samsung.request")
+    def test_silent_command_still_honours_an_explicit_timeout(
+        self,
+        request_mock,
+    ) -> None:
+        # A default, not a clamp. On a firmware that does answer this command
+        # slowly, somebody asking for five seconds must get five seconds -
+        # quietly shortening a timeout that was written down is its own bug.
+        request_mock.return_value = WamResponse(
+            method="PowerStatus",
+            result="ok",
+            body="",
+            values={"powerStatus": "1"},
+        )
+
+        get_power_status("10.0.0.118", timeout=5.0)
+
+        self.assertEqual(request_mock.call_args.kwargs["timeout"], 5.0)
 
     @patch("wambridge.samsung.request")
     def test_sends_cpm_stop(self, request_mock) -> None:
