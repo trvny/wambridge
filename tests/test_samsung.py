@@ -11,6 +11,7 @@ from wambridge.samsung import (
     build_command,
     get_mute,
     get_playback_status,
+    get_power_status,
     get_status,
     get_volume,
     normalize_device_id,
@@ -285,12 +286,28 @@ class SamsungCommandTests(TestCase):
         status = get_status("10.0.0.118", timeout=30.0)
 
         self.assertEqual(status.power_status, "1")
+        # Every field is handed the caller's timeout; the cap on the silent one
+        # lives in the command itself, below.
+        self.assertEqual(volume_mock.call_args.kwargs["timeout"], 30.0)
+        self.assertEqual(power_mock.call_args.kwargs["timeout"], 30.0)
+
+    @patch("wambridge.samsung.request")
+    def test_silent_command_caps_its_own_wait(self, request_mock) -> None:
+        # The cap belongs to the command, not to the one caller that happens to
+        # know about it: a guardrail living only in `get_status` would hand the
+        # next caller of this public function the full timeout back.
+        request_mock.return_value = WamResponse(
+            method="PowerStatus",
+            result="ok",
+            body="",
+            values={"powerStatus": "1"},
+        )
+
+        self.assertEqual(get_power_status("10.0.0.118", timeout=30.0), "1")
         self.assertEqual(
-            power_mock.call_args.kwargs["timeout"],
+            request_mock.call_args.kwargs["timeout"],
             SILENT_COMMAND_TIMEOUT,
         )
-        # Every other field keeps the caller's timeout.
-        self.assertEqual(volume_mock.call_args.kwargs["timeout"], 30.0)
 
     @patch("wambridge.samsung.request")
     def test_sends_cpm_stop(self, request_mock) -> None:

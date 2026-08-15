@@ -560,15 +560,17 @@ def get_power_status(
     """Return the firmware's raw power-status value.
 
     Measured on the M5: this command is not implemented and the speaker stays
-    silent, so every call here runs out its timeout. Callers that want a
-    snapshot rather than this one field should go through
-    `_best_effort_power_status`.
+    silent, so every call here runs out its timeout. The cap belongs to the
+    command rather than to one caller - a guardrail only the snapshot path knew
+    about would hand the next caller the old five seconds back. Callers that
+    want a snapshot rather than this one field should still go through
+    `_best_effort_power_status`, which also survives the silence.
     """
     response = request(
         speaker_ip,
         "GetPowerStatus",
         port=port,
-        timeout=timeout,
+        timeout=min(timeout, SILENT_COMMAND_TIMEOUT),
     )
     return _first_value(response, "powerStatus", "powerstatus")
 
@@ -596,11 +598,7 @@ def _best_effort_power_status(
     seconds for silence.
     """
     try:
-        return get_power_status(
-            speaker_ip,
-            port=port,
-            timeout=min(timeout, SILENT_COMMAND_TIMEOUT),
-        )
+        return get_power_status(speaker_ip, port=port, timeout=timeout)
     except WamApiError as error:
         LOGGER.debug("Speaker did not report power status: %s", error)
         return None

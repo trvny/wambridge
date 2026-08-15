@@ -19,10 +19,12 @@ plausible explanation. This file keeps only easy-to-miss traps.
 - Model `Popen().stdout` with a real `BytesIO` in tests rather than a bare
   `MagicMock`.
 - This firmware answers unimplemented commands with silence, not a refusal, so
-  every such call costs a full timeout. `GetPowerStatus`, `GetLedStatus`,
-  `GetStandbyMode`, `GetFeature`, `GetPowerSaving` and `GetAutoPowerDown` are all
-  in that class. Never let one of them decide whether a reading succeeded:
-  `get_status` used to, and reported a healthy speaker as unreachable.
+  every such call costs a full timeout. Measured on the M5 against a speaker
+  answering everything else in 0.02-0.2 s: `GetPowerStatus`, `GetLedStatus`,
+  `GetStandbyMode`, `GetFeature`, `GetPowerSaving`, `GetAutoPowerDown` and
+  `GetSpkStatus` (that last one added 2026-08-15, same run) all time out every
+  time. Never let one of them decide whether a reading succeeded: `get_status`
+  used to, and reported a healthy speaker as unreachable.
 - Terminate timed-out child processes. Runaway FFmpeg processes have already
   exhausted the 8 GB physical test machine.
 
