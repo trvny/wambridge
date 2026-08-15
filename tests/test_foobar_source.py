@@ -431,5 +431,41 @@ class FoobarSourceTests(TestCase):
         # Without this the capped start leaves the slider pointing somewhere the
         # speaker is not, and the first touch of it jumps - which is the same
         # surprise the cap exists to remove.
-        self.assertIn('const auto marker = line.find("volume=");', source)
-        self.assertIn("wam::note_speaker_step(", source)
+        self.assertIn("wam::note_speaker_step(m_reportedStep);", source)
+        # Applied on CONTROL_PORT, not on PLAYING. Moving the slider sends the
+        # level back out, and at PLAYING there is no socket yet, so it would
+        # fall back to launching a process - a second connection to 55001 while
+        # audio streams, which AGENTS.md says can starve the stream.
+        self.assertIn("m_reportedStep = parsed_volume_step(line);", source)
+        self.assertIn(
+            "connect_control_channel(line.substr(23), generation);",
+            source,
+        )
+        # Generation-checked, or a PLAYING left in a retired helper's pipe moves
+        # the slider on behalf of a helper being killed.
+        self.assertIn("generation_is_current(generation)", source)
+
+    def test_an_unreadable_volume_step_is_not_treated_as_zero(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # strtol answers 0 for a malformed payload, and 0 is a level: it would
+        # silence the speaker rather than do nothing.
+        self.assertIn("static int parsed_volume_step(", source)
+        self.assertIn("if (*start < '0' || *start > '9') return -1;", source)
+        self.assertIn("value < 0 || value > kMaximumRawVolume", source)
+
+    def test_every_start_path_carries_a_clamp(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # The branch that reaches neither the slider nor a configured volume was
+        # the one with nothing watching it: the helper followed whatever the
+        # speaker had been left at, held only by its own default of 10.
+        self.assertIn(
+            "m_settings.startVolumeMax > 0 ? m_settings.startVolumeMax",
+            source,
+        )
+        # A configured INI volume is a deliberate choice and stays uncapped.
+        self.assertIn(
+            'command += L" --volume " + std::to_wstring(*m_settings.volume);',
+            source,
+        )

@@ -62,6 +62,10 @@ Optional keys and overrides:
   single share of the roughly six seconds that reach the ear, and it was chosen rather than
   measured. Lower it to find where the pipe starves; starving shows up as `free` climbing in
   the `CLOCK` line and as audible dropouts,
+- `start_volume_max` or `WAMBRIDGE_START_VOLUME_MAX`, the highest raw step the **first**
+  helper of a playback session may start at, `0..30`, default `3`, `0` disables. Not a
+  volume limit — the slider governs everything after the start. See the section below for
+  why the slider needs this and a configured `volume` does not,
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on
