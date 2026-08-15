@@ -309,15 +309,25 @@ LED off is network standby, not power off. With the LED dark the M5 still answer
 `GetVolume` and `GetApInfo` on `55001`. Wi-Fi and the control port stay up; the amplifier and
 the display go down.
 
-**The control port cannot see the difference at all, and that is now measured rather than
-assumed.** On 2026-08-15 the same 23 read-only commands were run against the speaker with the
-LED confirmed dark and again a minute later with it confirmed lit, woken in between by a
-no-op `SetVolume`. Exactly one field differed — `mute`, changed by the wake itself. `GetFunc`
-read `wifi`/`dlna` in both, response times stayed in the 0.02–0.2 s band in both, and all
-seven silent commands stayed silent in both. Stop looking for a network-side standby
-detector; a human has to look at the speaker.
+**Almost nothing on the control port distinguishes the two states.** On 2026-08-15 the same
+23 read-only commands were run against the speaker with the LED confirmed dark and again a
+minute later with it confirmed lit, woken in between by a no-op `SetVolume`. `GetFunc` read
+`wifi`/`dlna` in both, response times stayed in the 0.02–0.2 s band in both, and all seven
+silent commands stayed silent in both. Exactly one field differed: `mute`.
 
-Two things fell out of that run:
+**That one field is the open lead, and it was first written off too quickly.** The wake
+itself clears mute, so the difference was initially read as an artefact of the method. Later
+the same day the speaker went dark again on its own, with nothing sent to it but reads, and
+`GetMute` had returned to `on` — no `SetMute` involved. Three observations now line up: dark
+`on`, lit `off`, dark `on`. The leading hypothesis is that entering standby mutes, which
+would make `GetMute` the network-side indicator this section previously said did not exist.
+
+It is not yet a controlled test. To make it one: wake the speaker, set mute off explicitly,
+send nothing further, and read `GetMute` once after the LED is confirmed dark. If it reads
+`on`, the indicator is real. Until then, a human looking at the speaker remains the only
+reading anyone should act on.
+
+Two other things fell out of that run:
 
 - **The `Date` clock runs through standby.** Uptime advanced 1861 s over 31 minutes of wall
   clock while the LED was dark, so it is a boot counter and not a sleep indicator. A reset in
@@ -330,7 +340,16 @@ Two things fell out of that run:
 **The speaker does put itself into standby.** Left alone after 2026-08-09 it was dark by
 2026-08-15, having answered every reading in between, and it went dark within hours of an
 unattended restart with nothing connected. That is the same behaviour the owner reports from
-normal use with the Samsung app. What does not exist is any way to read or configure it.
+normal use with the Samsung app. What does not exist is any way to configure it.
+
+**How long it takes is not measured, and one figure from that day should not be read as if it
+were.** Woken by a bare `SetVolume` at 10:55 and dark by 11:24, with nothing sent in between,
+gives under 29 minutes — but for a speaker that had played nothing, held no session and had
+no client attached. The owner's recollection from normal use is hours: long enough to wonder
+whether it is going to switch off at all. Those are plausibly two different quantities, and
+the one that matters for this component is the second: time from the end of *playback*.
+Nothing has measured that. Reads on `55001` are also a confound in either direction, since
+polling may itself be what keeps the speaker shallow.
 
 `SetSleepTimer` reaches that state on demand:
 
