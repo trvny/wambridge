@@ -42,8 +42,8 @@ Optional keys and overrides:
 - `WAMBRIDGE_CONTROL` for a development control helper,
 - `WAMBRIDGE_DEVICE`,
 - `WAMBRIDGE_VOLUME`,
-- `format` or `WAMBRIDGE_FORMAT`, one of `flac` (default), `wav` or `mp3`. Anything else
-  falls back to `flac`. The prebuffer is partly bounded by bytes, confirmed from both
+- `format` or `WAMBRIDGE_FORMAT`, one of `flac` (default), `wav`, `wav24` or `mp3`. Anything
+  else falls back to `flac`. The prebuffer is partly bounded by bytes, confirmed from both
   directions: `mp3` at 320 kbps against FLAC's 700-900 measured *worse*, 16.9 s against
   13.4 s, because a thinner stream fits more seconds into the same space; `wav`, which is
   uncompressed 16-bit PCM fixed at 44.1 kHz, measured *better* than FLAC on every passage
@@ -52,7 +52,11 @@ Optional keys and overrides:
   1.00x, seamless track change, seek, pause/resume, clean shutdown, no leaks - but every one
   of those was read off instruments while nobody was listening, so the absence of audible
   artefacts is still unverified. It also costs depth: FLAC carries 24 bit through this path
-  and `wav` is fixed at 16,
+  and `wav` is fixed at 16. `wav24` is the same lever pulled harder — 2117 kbps against
+  1411, at 24 bit — and **the M5 does accept it**, first heard on 2026-08-15. It is not
+  recommended: across that day the speaker closed the stream by itself thirteen minutes in,
+  twice, while a `flac` run over the same station reached twenty-seven without trouble. One
+  day is not a verdict, but nothing so far argues for spending the bandwidth,
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
   `0..10000`, default `1500`. Values outside that fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,
@@ -62,6 +66,11 @@ Optional keys and overrides:
   single share of the roughly six seconds that reach the ear, and it was chosen rather than
   measured. Lower it to find where the pipe starves; starving shows up as `free` climbing in
   the `CLOCK` line and as audible dropouts,
+- `sleep_after_stop` or `WAMBRIDGE_SLEEP_AFTER_STOP`, seconds of sleep timer armed once a
+  stream ends, `0..86400`, default `0` (off). `SetSleepTimer` is the only power lever this
+  firmware answers, and it stays opt-in because powering the speaker down is the listener's
+  decision — the speaker does go dark on its own once every program has let go, so this is a
+  fallback rather than the mechanism. See the prose below for what it does not cover,
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default; it caps itself at 240 lines. Turn it on
@@ -69,7 +78,7 @@ Optional keys and overrides:
   dropped chunk rather than to the output clock.
 
 **Nothing here is ignored quietly any more.** Unknown keys, a `format` that is not one of
-the three, a `volume`, `startup_silence` or `buffer_extra` that is not a number in range,
+the four, a `volume`, `startup_silence` or `buffer_extra` that is not a number in range,
 and a `helper` path that does not exist all say so in the console. So do settings written as
 `#key=value`: Windows comments start with `;`, so those are key names rather than disabled
 lines and nothing reads them. The owner ran for days with `hardware_volume=1`, a key that
