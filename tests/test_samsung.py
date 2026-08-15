@@ -3,6 +3,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from wambridge.samsung import (
+    SILENT_COMMAND_TIMEOUT,
     WamApiError,
     WamPlaybackStatus,
     WamResponse,
@@ -10,6 +11,8 @@ from wambridge.samsung import (
     build_command,
     get_mute,
     get_playback_status,
+    get_power_status,
+    get_status,
     get_volume,
     normalize_device_id,
     parse_response,
@@ -237,6 +240,116 @@ class SamsungCommandTests(TestCase):
         self.assertTrue(status.is_native_cp)
         self.assertEqual(status.cp_name, "TuneIn")
         self.assertEqual(status.title, "Radio Paradise")
+
+    @patch("wambridge.samsung.get_power_status")
+    @patch("wambridge.samsung.get_mute")
+    @patch("wambridge.samsung.get_volume")
+    @patch("wambridge.samsung.get_playback_status")
+    def test_reports_status_when_power_status_times_out(
+        self,
+        playback_mock,
+        volume_mock,
+        mute_mock,
+        power_mock,
+    ) -> None:
+        # The whole point: one unimplemented command must not take the snapshot
+        # down with it and report a healthy speaker as unreachable.
+        playback_mock.return_value = WamPlaybackStatus(function="wifi")
+        volume_mock.return_value = 7
+        mute_mock.return_value = False
+        power_mock.side_effect = WamApiError(
+            "Cannot reach Samsung WAM at 10.0.0.118:55001: timed out"
+        )
+
+        status = get_status("10.0.0.118")
+
+        self.assertEqual(status.volume, 7)
+        self.assertFalse(status.muted)
+        self.assertIsNone(status.power_status)
+
+    @patch("wambridge.samsung.get_power_status")
+    @patch("wambridge.samsung.get_mute")
+    @patch("wambridge.samsung.get_volume")
+    @patch("wambridge.samsung.get_playback_status")
+    def test_status_forwards_the_callers_timeout_to_the_answering_fields(
+        self,
+        playback_mock,
+        volume_mock,
+        mute_mock,
+        power_mock,
+    ) -> None:
+        playback_mock.return_value = WamPlaybackStatus(function="wifi")
+        volume_mock.return_value = 7
+        mute_mock.return_value = False
+        power_mock.return_value = "1"
+
+        status = get_status("10.0.0.118", timeout=30.0)
+
+        self.assertEqual(status.power_status, "1")
+        self.assertEqual(volume_mock.call_args.kwargs["timeout"], 30.0)
+        self.assertEqual(mute_mock.call_args.kwargs["timeout"], 30.0)
+        # The silent one is trimmed: a generous budget must not be spent
+        # entirely on a command that is never going to answer.
+        self.assertEqual(
+            power_mock.call_args.kwargs["timeout"],
+            SILENT_COMMAND_TIMEOUT,
+        )
+
+    @patch("wambridge.samsung.get_power_status")
+    @patch("wambridge.samsung.get_mute")
+    @patch("wambridge.samsung.get_volume")
+    @patch("wambridge.samsung.get_playback_status")
+    def test_status_does_not_overrun_a_tighter_timeout_on_the_silent_field(
+        self,
+        playback_mock,
+        volume_mock,
+        mute_mock,
+        power_mock,
+    ) -> None:
+        # A snapshot asked for in 0.1 s must not sit for a second on the one
+        # field that never answers. The default is a ceiling, not a floor.
+        playback_mock.return_value = WamPlaybackStatus(function="wifi")
+        volume_mock.return_value = 7
+        mute_mock.return_value = False
+        power_mock.return_value = None
+
+        get_status("10.0.0.118", timeout=0.1)
+
+        self.assertEqual(power_mock.call_args.kwargs["timeout"], 0.1)
+
+    @patch("wambridge.samsung.request")
+    def test_silent_command_defaults_to_a_short_wait(self, request_mock) -> None:
+        request_mock.return_value = WamResponse(
+            method="PowerStatus",
+            result="ok",
+            body="",
+            values={"powerStatus": "1"},
+        )
+
+        self.assertEqual(get_power_status("10.0.0.118"), "1")
+        self.assertEqual(
+            request_mock.call_args.kwargs["timeout"],
+            SILENT_COMMAND_TIMEOUT,
+        )
+
+    @patch("wambridge.samsung.request")
+    def test_silent_command_still_honours_an_explicit_timeout(
+        self,
+        request_mock,
+    ) -> None:
+        # A default, not a clamp. On a firmware that does answer this command
+        # slowly, somebody asking for five seconds must get five seconds -
+        # quietly shortening a timeout that was written down is its own bug.
+        request_mock.return_value = WamResponse(
+            method="PowerStatus",
+            result="ok",
+            body="",
+            values={"powerStatus": "1"},
+        )
+
+        get_power_status("10.0.0.118", timeout=5.0)
+
+        self.assertEqual(request_mock.call_args.kwargs["timeout"], 5.0)
 
     @patch("wambridge.samsung.request")
     def test_sends_cpm_stop(self, request_mock) -> None:

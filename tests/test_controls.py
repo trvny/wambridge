@@ -5,6 +5,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from wambridge.cli import _print_status, _run_remote_action, build_parser
+from wambridge.control_cli import _status_lines
 from wambridge.samsung import WamPlaybackStatus, WamStatus
 
 
@@ -62,3 +63,19 @@ class RemoteControlCliTests(TestCase):
         self.assertIn("provider=TuneIn", output.getvalue())
         self.assertIn("volume=4", output.getvalue())
         self.assertIn("title=Radio Paradise", output.getvalue())
+
+    def test_component_status_names_a_missing_power_field(self) -> None:
+        # This firmware never answers `GetPowerStatus`, so the field is always
+        # absent here. A bare `power=` reads like a speaker that reported
+        # nothing back; `unknown` says the reading was not available, and it is
+        # the word the other status view already uses.
+        lines = _status_lines(
+            WamStatus(
+                playback=WamPlaybackStatus(function="wifi", submode="dlna"),
+                volume=4,
+                muted=False,
+                power_status=None,
+            )
+        )
+
+        self.assertIn("power=unknown", lines)
