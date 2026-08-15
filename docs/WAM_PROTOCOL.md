@@ -404,7 +404,7 @@ The helper now releases the speaker before it goes, over the persistent `55001` 
 already holds: `SetPlaybackControl pause` on the UIC API, the same command `stop_playback`
 uses on this path, without the mute that would hand the speaker back silent, and without
 `pwron`. It then reports `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|skipped>
-sleep=<off|Ns> holding=<count>` once its own sockets are gone. `holding` counts every local
+sleep=<off|Ns|skipped|unreachable|rejected> holding=<count>` once its own sockets are gone. `holding` counts every local
 socket attached to the speaker, this helper's included — one it failed to close is a leak
 like any other, and hiding it would make the count's zero mean "nobody checked". What it
 skips is only its own sockets that are *already closing*: those linger in `FIN_WAIT` for a
@@ -412,10 +412,20 @@ measured 0.5 s to 1.5 s while the kernel finishes, and waiting them out cost tha
 helper exit. A killed session's sockets are untouched by that rule — their owner is gone, so
 its PID cannot match — and they are the case this reading exists for.
 
-Whether releasing cleanly is enough for the M5 to go dark by itself is still unmeasured.
-The owner's account of normal use says it should be (see the standby section: the speaker
-sleeps once every program lets go), which makes this release the fix and `sleep_after_stop`
-the fallback for when it is not.
+Releasing cleanly **is** enough for the M5 to go dark by itself, measured 2026-08-15. A
+session ended `stop=sent sleep=off holding=0` at 15:10:50 and the speaker was dark by roughly
+16:00 — under fifty minutes, with nothing armed and nothing held. That matches the owner's
+account of normal use (see the standby section: the speaker sleeps once every program lets
+go) and makes this release the fix, with `sleep_after_stop` the fallback for when it is not.
+
+Two things the run does not settle. The window is loose: foobar was closed at 15:56, so
+whether the speaker went dark before or after that is unknown, and a tighter reading needs a
+session left running after the stop. And the time is not a constant — an earlier observation
+put it near twenty minutes, while the owner remembers hours, which fits a firmware that steps
+down through several states rather than one timeout. The contrast that does hold is with the
+failure case: the night the M5 stayed lit until morning, the session had ended
+`stop=unreachable holding=1`. What separates the two is whether the stop landed, not whether
+the host was still running.
 
 ## No AVTransport renderer
 

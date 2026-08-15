@@ -1152,9 +1152,14 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
-        if (m_settings.sleepAfterStopSeconds > 0) {
-            command += L" --sleep-after-stop " +
-                std::to_wstring(m_settings.sleepAfterStopSeconds);
+        // Passed even when zero. Omitting it left the helper unable to tell
+        // "the feature is off" from "nobody said", and the two need different
+        // behaviour: the second still has to clear a timer an earlier helper
+        // armed under a setting that has since changed.
+        command += L" --sleep-after-stop " +
+            std::to_wstring(m_settings.sleepAfterStopSeconds);
+        if (m_sleepTimerArmed.load()) {
+            command += L" --clear-sleep-timer";
         }
         // Three rules, in the order that makes them agree.
         //
@@ -1208,6 +1213,13 @@ private:
         m_childStopping.store(false);
         m_helperReady.store(false);
         m_childReachedPlaying.store(false);
+        // Set before the command line is built, so the first helper of an
+        // arming configuration also clears on the way in. That matches what
+        // this did before the flag existed; what changes is that it keeps
+        // clearing after the setting goes to zero.
+        if (m_settings.sleepAfterStopSeconds > 0) {
+            m_sleepTimerArmed.store(true);
+        }
         {
             std::lock_guard lock(m_mutex);
             m_childExited = false;
@@ -1745,6 +1757,14 @@ private:
     // Per playback session, not per helper: this object is built when playback
     // starts and torn down when it stops, so a seek cannot clear it.
     std::atomic<bool> m_startupVolumeApplied{false};
+    // Also per playback session, and deliberately sticky rather than a reading
+    // of the current setting: once any helper has been told to arm a timer on
+    // its way out, every later helper has to clear one on its way in, including
+    // after the setting drops to zero. Without that, turning the feature off
+    // leaves the last armed timer running and the speaker sleeps mid-track.
+    // Only a configuration that arms timers ever clears them, so a default
+    // install still never touches a timer set from the Samsung app.
+    std::atomic<bool> m_sleepTimerArmed{false};
     std::atomic<double> m_gain{1.0};
     // -1 until foobar reports the slider position, which it does before the
     // first stream starts. Only meaningful when hardwareVolume is on.

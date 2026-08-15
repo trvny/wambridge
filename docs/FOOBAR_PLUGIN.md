@@ -112,7 +112,10 @@ connection it already owns rather than a second one. Three rules hold it togethe
   it up next, and `pwron` would wake what is being released.
 
 Every session then ends with one line: `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|
-skipped> sleep=<off|Ns> holding=<count>`. Before it there was nothing at all in the console
+skipped> sleep=<off|Ns|skipped|unreachable|rejected> holding=<count>`. `sleep=off` means
+nothing was configured, `skipped` that there was nothing left to arm after, `unreachable`
+that the command could not be sent and `rejected` that the speaker refused it. Before this
+line there was nothing at all in the console
 at the end of a stream, which is why the morning after a speaker that stayed lit there was
 nothing to read. All three fields appear on every path, including one that failed before the
 watcher existed.

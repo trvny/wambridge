@@ -140,6 +140,16 @@ def build_parser() -> argparse.ArgumentParser:
             "can read or set that idle power-down"
         ),
     )
+    parser.add_argument(
+        "--clear-sleep-timer",
+        action="store_true",
+        help=(
+            "Clear any pending sleep timer before offering the stream. Set by "
+            "the component once some helper of the playback session has armed "
+            "one, which is not the same as --sleep-after-stop being non-zero: "
+            "the setting can drop to zero while an armed timer still runs"
+        ),
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -250,11 +260,13 @@ class PlaybackWatcher:
         *,
         port: int,
         sleep_after_stop: int = 0,
+        clear_sleep_timer: bool = False,
     ) -> None:
         self._speaker_ip = speaker_ip
         self._client_uuid = client_uuid.casefold()
         self._port = port
         self._sleep_after_stop = sleep_after_stop
+        self._clear_sleep_timer = clear_sleep_timer
         self._released = False
         self.release_summary = "stop=skipped"
         self._armed = threading.Event()
@@ -366,6 +378,18 @@ class PlaybackWatcher:
             self.release_summary += " sleep=unreachable"
             LOGGER.warning("Could not arm the sleep timer: %s", error)
             return
+        # Same treatment the stop gets, and for the same reason: `_send_command`
+        # returns once the request is written, so without this a speaker that
+        # answered `result="ng"` was reported as `sleep=Ns`. The listener stops
+        # right after release, so an unmatched rejection would never be seen.
+        rejection = self.wait_for_response(
+            _SLEEP_COMMAND,
+            timeout=_STOP_ACK_TIMEOUT,
+        )
+        if rejection:
+            self.release_summary += " sleep=rejected"
+            LOGGER.warning("%s while arming the sleep timer", rejection)
+            return
         self.release_summary += f" sleep={self._sleep_after_stop}s"
 
     def cancel_sleep_timer(self) -> None:
@@ -375,16 +399,29 @@ class PlaybackWatcher:
         one that left survives into the stream that replaced it and would put
         the speaker into standby mid-track.
 
+        Whether to clear is the component's call, not this process's, and it
+        arrives as ``--clear-sleep-timer``. Reading it off ``sleep_after_stop``
+        instead was wrong in the one case that matters: with the setting moved
+        to zero, the helper saw a disabled feature and left the timer its
+        predecessor had armed running, so the speaker slept mid-track precisely
+        when the listener had just turned the feature off. The component keeps
+        the flag sticky for the playback session, so it survives that change.
+
         Two limits, both real. This clears **any** pending timer, including one
         the listener set from the Samsung app, because the speaker does not say
-        who armed it - so only a configuration that arms timers clears them, and
-        a default install never touches it. And it is a race, not a guarantee:
-        the replacement only gets here after discovery, probing and the server
-        coming up, so a short enough timer can fire first. Closing that needs the
-        component to say whether a helper is being replaced or the session is
-        ending, which it knows and the helper does not.
+        who armed it - so only a configuration that has armed timers clears
+        them, and a default install never touches it. And it is a race, not a
+        guarantee: the replacement only gets here after discovery, probing and
+        the server coming up, so a short enough timer can fire first. Closing
+        that needs the component to say whether a helper is being replaced or
+        the session is ending, which it knows and the helper does not.
+
+        Not covered, and not coverable here: a timer armed in an earlier foobar
+        session. Nothing survives the component's own lifetime to record it, so
+        turning the feature off and restarting foobar leaves at most one armed
+        timer to fire once.
         """
-        if self._sleep_after_stop <= 0:
+        if not self._clear_sleep_timer:
             return
         try:
             self._send_command(
@@ -703,6 +740,7 @@ def run(
             client_uuid,
             port=speaker_port,
             sleep_after_stop=args.sleep_after_stop,
+            clear_sleep_timer=args.clear_sleep_timer,
         )
         with watcher:
             LOGGER.info("Offering %s to %s", stream_url, speaker_ip)

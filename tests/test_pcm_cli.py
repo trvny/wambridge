@@ -105,10 +105,15 @@ class FakeControlConnection:
         watcher: PlaybackWatcher,
         *,
         rejection: str | None = None,
+        rejection_method: str = "SetPlaybackControl",
         failing: bool = False,
     ) -> None:
         self._watcher = watcher
         self._rejection = rejection
+        # Which command the rejection answers. Recording it against every method
+        # made "the stop was refused" indistinguishable from "everything was
+        # refused", so a test could not say which one it meant.
+        self._rejection_method = rejection_method
         self._failing = failing
         self.sent: list[tuple[str, list | None, bool]] = []
 
@@ -124,7 +129,8 @@ class FakeControlConnection:
             raise WamEventError("Samsung WAM closed the persistent connection")
         self.sent.append((method, arguments, power_on))
         # What the listener thread would have recorded, without the thread.
-        self._watcher._results[method] = self._rejection or ""
+        answer = self._rejection if method == self._rejection_method else None
+        self._watcher._results[method] = answer or ""
 
 
 class PcmCliTests(TestCase):
@@ -608,7 +614,9 @@ class PcmCliTests(TestCase):
         self,
         *,
         sleep_after_stop: int = 0,
+        clear_sleep_timer: bool = False,
         rejection: str | None = None,
+        rejection_method: str = "SetPlaybackControl",
         failing: bool = False,
     ) -> tuple[PlaybackWatcher, FakeControlConnection]:
         watcher = PlaybackWatcher(
@@ -616,10 +624,12 @@ class PcmCliTests(TestCase):
             CLIENT_UUID,
             port=55001,
             sleep_after_stop=sleep_after_stop,
+            clear_sleep_timer=clear_sleep_timer,
         )
         connection = FakeControlConnection(
             watcher,
             rejection=rejection,
+            rejection_method=rejection_method,
             failing=failing,
         )
         watcher._connection = connection
@@ -713,7 +723,10 @@ class PcmCliTests(TestCase):
         self.assertEqual(watcher.release_summary, "stop=unreachable sleep=off")
 
     def test_a_pending_sleep_timer_is_cleared_before_the_next_stream(self) -> None:
-        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+        watcher, connection = self._connected_watcher(
+            sleep_after_stop=120,
+            clear_sleep_timer=True,
+        )
 
         watcher.cancel_sleep_timer()
 
@@ -730,11 +743,55 @@ class PcmCliTests(TestCase):
             ],
         )
 
+    def test_a_timer_is_still_cleared_after_the_setting_drops_to_zero(
+        self,
+    ) -> None:
+        # The regression this flag exists for. Turning `sleep_after_stop` off
+        # does not disarm what an earlier helper already armed, and reading the
+        # decision off the setting made the one helper that could still clear it
+        # decide the feature was disabled. The speaker then slept mid-track,
+        # right after the listener had turned the feature off.
+        watcher, connection = self._connected_watcher(
+            sleep_after_stop=0,
+            clear_sleep_timer=True,
+        )
+
+        watcher.cancel_sleep_timer()
+
+        self.assertEqual(
+            connection.sent,
+            [
+                (
+                    "SetSleepTimer",
+                    [("option", "off", "str"), ("sleeptime", 0, "dec")],
+                    False,
+                )
+            ],
+        )
+
     def test_no_sleep_timer_configured_leaves_the_speakers_own_timer_alone(
         self,
     ) -> None:
+        # A default install must not touch a timer set from the Samsung app: the
+        # speaker does not say who armed one, so the component only clears what
+        # its own configuration has armed.
         watcher, connection = self._connected_watcher()
 
         watcher.cancel_sleep_timer()
 
         self.assertEqual(connection.sent, [])
+
+    def test_a_refused_sleep_timer_is_not_reported_as_armed(self) -> None:
+        watcher, _connection = self._connected_watcher(
+            sleep_after_stop=120,
+            rejection="Speaker rejected SetSleepTimer (error 3)",
+            rejection_method="SetSleepTimer",
+        )
+        watcher.arm()
+
+        watcher.release()
+
+        # `_send_command` returns once the request is written, so without
+        # matching the answer this said `sleep=120s` about a timer the speaker
+        # had refused.
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=rejected")
