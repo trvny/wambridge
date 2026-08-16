@@ -42,8 +42,8 @@ Optional keys and overrides:
 - `WAMBRIDGE_CONTROL` for a development control helper,
 - `WAMBRIDGE_DEVICE`,
 - `WAMBRIDGE_VOLUME`,
-- `format` or `WAMBRIDGE_FORMAT`, one of `flac` (default), `wav` or `mp3`. Anything else
-  falls back to `flac`. The prebuffer is partly bounded by bytes, confirmed from both
+- `format` or `WAMBRIDGE_FORMAT`, one of `flac` (default), `wav`, `wav24` or `mp3`. Anything
+  else falls back to `flac`. The prebuffer is partly bounded by bytes, confirmed from both
   directions: `mp3` at 320 kbps against FLAC's 700-900 measured *worse*, 16.9 s against
   13.4 s, because a thinner stream fits more seconds into the same space; `wav`, which is
   uncompressed 16-bit PCM fixed at 44.1 kHz, measured *better* than FLAC on every passage
@@ -52,7 +52,11 @@ Optional keys and overrides:
   1.00x, seamless track change, seek, pause/resume, clean shutdown, no leaks - but every one
   of those was read off instruments while nobody was listening, so the absence of audible
   artefacts is still unverified. It also costs depth: FLAC carries 24 bit through this path
-  and `wav` is fixed at 16,
+  and `wav` is fixed at 16. `wav24` is the same lever pulled harder — 2117 kbps against
+  1411, at 24 bit — and **the M5 does accept it**, first heard on 2026-08-15. It is not
+  recommended: across that day the speaker closed the stream by itself thirteen minutes in,
+  twice, while a `flac` run over the same station reached twenty-seven without trouble. One
+  day is not a verdict, but nothing so far argues for spending the bandwidth,
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
   `0..10000`, default `1500`. Values outside that fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,
@@ -66,6 +70,11 @@ Optional keys and overrides:
   helper of a playback session may start at, `0..30`, default `3`, `0` disables. Not a
   volume limit — the slider governs everything after the start. See the section below for
   why the slider needs this and a configured `volume` does not,
+- `sleep_after_stop` or `WAMBRIDGE_SLEEP_AFTER_STOP`, seconds of sleep timer armed once a
+  stream ends, `0..86400`, default `0` (off). `SetSleepTimer` is the only power lever this
+  firmware answers, and it stays opt-in because powering the speaker down is the listener's
+  decision — the speaker does go dark on its own once every program has let go, so this is a
+  fallback rather than the mechanism. See the prose below for what it does not cover,
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default. One line a second for the first 240 of each
@@ -79,7 +88,7 @@ Optional keys and overrides:
   dropped chunk rather than to the output clock.
 
 **Nothing here is ignored quietly any more.** Unknown keys, a `format` that is not one of
-the three, a `volume`, `volume_max`, `start_volume_max`, `startup_silence` or `buffer_extra`
+the four, a `volume`, `volume_max`, `start_volume_max`, `startup_silence` or `buffer_extra`
 that is not a number in range, and a `helper` path that does not exist all say so in the
 console. `volume_max` was the last one still falling back in silence while this paragraph
 already claimed otherwise. So do settings written as
@@ -105,6 +114,62 @@ log correlated starts and surface real failures.
 
 Only one control connection and one FFmpeg may own a session. A second TCP listener can
 compete with playback; a second FFmpeg splits the shared stdin.
+
+## Ending a stream is a command, not just a close
+
+Closing the local HTTP server does not end anything as far as the speaker is concerned. It
+was told to play a URL and it keeps that session, and a speaker that believes it is still
+serving one never reaches the idle state its own power-down needs: a normal `Shutting
+down...` with a stream still up left the M5 lit all night on 2026-08-08.
+
+The helper therefore releases the speaker on its way out, over the persistent `55001`
+connection it already owns rather than a second one. Three rules hold it together:
+
+- It runs from `PlaybackWatcher.__exit__`, so failed sessions release too. Those are the ones
+  that used to walk away from a speaker still holding a session.
+- It is best effort. Teardown usually runs because something already went wrong, and a second
+  exception there would bury the first. What happened is reported instead.
+- It sends no mute and no `pwron`. A mute would hand the speaker back silent to whoever picks
+  it up next, and `pwron` would wake what is being released.
+
+Every session then ends with one line: `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|
+skipped> sleep=<off|Ns|skipped|unreachable|rejected> holding=<count>`. `sleep=off` means
+nothing was configured, `skipped` that there was nothing left to arm after, `unreachable`
+that the command could not be sent and `rejected` that the speaker refused it. Before this
+line there was nothing at all in the console
+at the end of a stream, which is why the morning after a speaker that stayed lit there was
+nothing to read. All three fields appear on every path, including one that failed before the
+watcher existed.
+
+`stop=skipped` also covers an offer the speaker **refused**. A matched rejection means it
+never took the URL, so it is still doing whatever it was doing before, and a release would
+reach past this helper and pause that instead.
+
+`holding` counts this helper's own sockets too. What it skips is narrower: its own sockets
+that are *already closing*. Measured on 2026-08-15, a locally closed socket sits in
+`FIN_WAIT` for a further 0.5 s to 1.5 s, and the count is taken right after teardown closes
+its own — so waiting those out cost that long on every helper exit, which precedes every
+seek, to report this teardown as something holding the speaker. A socket this helper left
+`ESTABLISHED` or `CLOSE_WAIT` is a different thing entirely and still counts; skipping those
+would make `holding=0` mean "nobody checked", which is the failure this reading exists to
+prevent. A killed session's sockets are untouched by any of this — their owner is gone, so
+its PID cannot match.
+
+`sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
+default. It is the only lever this firmware answers, and it is opt-in because powering the
+speaker down is the listener's decision.
+
+It is **not finished**, and the gap is in the seek path. A seek restarts the helper
+mid-session, so the departing helper arms a timer that the stream replacing it never asked
+for. The replacement clears any pending timer before offering its stream, which closes the
+common case but is a race, not a guarantee: it only gets there after discovery, probing and
+its own server coming up, so a short enough timer fires first and the speaker goes into
+standby mid-track. Closing that properly needs the component to tell the helper whether it is
+being replaced or the session is ending — it knows, and the helper does not. Two consequences
+worth stating while it stands: the clear removes **any** pending timer, including one set from
+the Samsung app, because the speaker does not say who armed it; and a configured install that
+goes back to `0` leaves the last timer armed with nothing left to clear it. A default install
+never sends either command.
 
 ## Startup volume is per session, not per helper
 
@@ -170,9 +235,11 @@ serialized so button presses cannot launch overlapping control processes. Physic
 commands operate in raw M5 steps.
 
 Standby is misnamed. It stops and mutes, which leaves the speaker lit and fully powered.
-Clicking it and expecting the LED to go out is a reasonable expectation the item does not
-meet. Arming a short `SetSleepTimer` would make the name true — `sleeptime` is in seconds and
-the timer clears itself after firing — and that is open work; see the standby section of
+The state a user recognises as the speaker sleeping now arrives on its own: since PR #48 the
+stream path tells the speaker the stream is over, and a released speaker goes dark after its
+own idle interval - measured at 17 min 4 s. `SetSleepTimer`, exposed as `sleep_after_stop`,
+reaches that state *on demand* and is a fallback rather than the mechanism. Renaming this menu
+item or pointing it at the same timer is still open work. See the standby section of
 `docs/WAM_PROTOCOL.md`.
 
 Left alone the speaker reaches standby by itself in under 17 minutes (measured 2026-08-16),
@@ -182,15 +249,26 @@ firmware never sleeps unaided; that was wrong.
 What standby does now guarantee is that nothing local is still attached. After the stop and
 the mute it waits up to `STANDBY_RELEASE_TIMEOUT` for established TCP connections to the
 speaker to drop, and reports `holding=<count>`, or `holding=unknown` when the socket table
-could not be read. A remaining hold adds a `warning=` line rather than failing the action:
-the mute and the stop did land, and the caller may have asked while something else was
-streaming.
+could not be read. What the action excludes is narrower than its own process: only sockets it
+owns that are *already closing* — `FIN_WAIT1`, `FIN_WAIT2`, `CLOSING`, `LAST_ACK`. Its stop,
+mute and verification each opened one, and waiting out that lingering kernel bookkeeping would
+report the action's own finished requests as a hold. A socket the action still holds open
+counts like anyone else's, deliberately: excluding the whole process would hide this
+component's own leaks behind a reassuring `holding=0`. A remaining hold adds a `warning=` line
+rather than failing the action: the mute and
+the stop did land, and the caller may have asked while something else was streaming.
 
-Read `holding=` with one caveat: a helper respawn storm inflates it. Killing a helper while
-foobar is still playing makes the component relaunch it immediately — measured at 78 restarts
-in about two minutes, with no backoff and no give-up — and every dead session leaves a socket
-behind. Twenty-nine were in `TIME_WAIT` afterwards. That is a component bug in its own right,
-separate from anything the speaker does.
+This is not the explanation for a speaker that stays lit, and it should not be read as one.
+The M5 was still on the morning after the whole computer had been shut down, and a
+powered-off host holds no sockets. Whatever keeps the speaker awake outlives its peer, which
+puts it in the speaker's own state — the `SetUrlPlayback` session nothing ever ended. The
+reading is worth having as proof that this end let go, not as the lead.
+
+One thing `holding=` will *not* show you is a respawn storm. Killing a helper while foobar is
+still playing makes the component relaunch it immediately - measured at 78 restarts in about
+two minutes, with no backoff - and every dead session leaves a socket behind, 29 of them in
+`TIME_WAIT` afterwards. Those are excluded from the count by design, so `holding=` stays low
+while the socket table fills up. Read the table itself if you suspect a storm.
 
 `holding=unknown` is deliberately not `holding=0`. Reporting a speaker as released when it
 was never checked is the failure this exists to prevent.

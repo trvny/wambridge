@@ -321,6 +321,13 @@ user-facing warning string, and the sleep-timer helper on the open teardown bran
 firmware never reaches standby by itself and the sleep timer is the only way there.
 **It is not.** The sleep timer is the only way to
 reach standby *on demand*; left alone, the speaker gets there in about a quarter of an hour.
+
+**With one condition, established 2026-08-16 and easy to miss: the countdown only starts once
+every program has let go.** Same speaker, same evening, two sessions: one ended on a build that
+sent no release and the LED was still lit 33 minutes later; the next ended with
+`WAMBRIDGE STOPPED stop=sent holding=0` and the speaker was dark 17 min 4 s afterwards. A
+speaker still holding a `SetUrlPlayback` session whose source vanished does not idle at all,
+which is why this looked for a week like a firmware that never sleeps.
 What has no configurable knob is the delay — `GetPowerSaving` and `GetAutoPowerDown` do not
 exist, so the interval cannot be read or changed.
 
@@ -329,6 +336,11 @@ exist, so the interval cannot be read or changed.
 `mute=on` when the LED is dark, `mute=off` when it is lit — consistent across every
 observation on 2026-08-15 and 2026-08-16, including a timer firing live. Use it instead of
 asking someone to look at the speaker.
+
+**It reads the mute flag, not the lamp.** This component mutes deliberately in places -
+`standby` sends `set_mute(True)`, and startup mutes before unmuting - so `mute=on` means dark
+*only when nothing has just muted it*. As an idle-state detector it is sound; as a check run
+immediately after one of this component's own actions it is not.
 
 Two properties that matter when measuring this:
 
@@ -347,33 +359,88 @@ That makes it a usable instrument at any hour.
 - On firing, the timer clears itself back to `sleepoption=off`, `sleeptime=0` and the speaker
   stays in standby. A fired timer leaves no trace, so `GetSleepTimer` cannot distinguish
   "asleep because a timer fired" from "asleep for any other reason".
+- There is no *controllable* idle power-down: `GetPowerSaving` and `GetAutoPowerDown` do not
+  exist, so nothing can read or set one. `SetSleepTimer` is the only power lever this
+  firmware exposes to a client.
+
+  That is not the same as the speaker never sleeping on its own, and this document said so
+  for a while. Corrected 2026-08-15 on the owner's account of normal use: the M5 does go dark
+  by itself, but only after every program talking to it has let go, and the Samsung app's
+  sleep timer is a separate manual control that has never been seen to arm itself. An
+  unreadable idle power-down is still an idle power-down. That reframes the release work
+  below as the whole fix rather than half of one, and `sleep_after_stop` as a fallback for
+  when it is not.
 
 The component's standby menu item is misnamed. It sends a stop and a mute, which leaves the
 speaker lit and fully powered.
 
-### What actually keeps it lit — narrowed, not solved
+### What kept it lit — SOLVED 2026-08-16
 
-The speaker has been found still lit hours after a session ended. Two explanations have been
-tested and dropped:
+The speaker had been found still lit hours after a session ended. Three explanations were
+tested; two were dropped and the third turned out to be it.
 
 - **`submode` is not the cause.** The sleep timer put the speaker into standby while it
   stayed in `cp`, and it returns to `cp` on its own while idle. A CPM `SetPlaybackControl
   stop` was accepted and reported `playstatus=stop` without clearing `cp`.
-- **Hard-killed sessions do not accumulate damage.** Measured 2026-08-16: a helper killed
-  with `taskkill /F` was respawned by the component 78 times in roughly two minutes, leaving
-  29 sockets in `TIME_WAIT` and briefly making the speaker stop answering altogether. After
-  playback was stopped normally, the speaker went dark on its own within ten minutes and the
-  sockets drained to 4 unaided. **One clean ending is enough to undo any number of abrupt
-  ones.**
+- **Hard-killed sessions do not accumulate damage.** A helper killed with `taskkill /F` was
+  respawned by the component 78 times in roughly two minutes, leaving 29 sockets in
+  `TIME_WAIT` and briefly making the speaker stop answering altogether. After playback was
+  stopped normally, the speaker went dark on its own within ten minutes and the sockets
+  drained to 4 unaided. **One clean ending is enough to undo any number of abrupt ones.**
+- **No clean ending at all — this was it.** Nothing on the PCM path ever told the speaker the
+  stream was over, so every session left it holding a `SetUrlPlayback` whose source had
+  vanished, and a speaker in that state never starts its idle countdown. Reproduced on
+  2026-08-16: audio stopped at 18:44:48, foobar closed at 18:54:55, and the LED was still lit
+  at 19:18 — 33 minutes, against an idle interval of under 17. The same evening, on a build
+  that sends the release, a session ending `WAMBRIDGE STOPPED stop=sent sleep=off holding=0`
+  at 20:57:15 was dark by 21:14:19: **17 min 4 s**.
 
-That leaves a single untested case, and it is the one users hit: **no clean ending at all.**
-When foobar2000 closes mid-stream the last helper is terminated and nothing follows it,
-because the component is leaving too. On `main` nothing on the PCM path ever tells the
-speaker the stream is over — `PlaybackWatcher.__exit__` only stops its own listener thread.
+Fixed in PR #48: `PlaybackWatcher.release()` sends UIC `SetPlaybackControl pause` over the
+connection the listener already holds, at every helper exit, and the teardown line reports
+what happened. Seeks were the risk, because a seek replaces a helper and therefore pauses the
+speaker before the next `SetUrlPlayback` — measured over four seeks, audio resumed every time
+and the cost is about a second per seek.
 
-The standby action reports `holding=<count>` of established TCP connections to the speaker,
-which turns "something was still attached" from a guess into a reading. Note that a respawn
-storm inflates it: 78 dead sessions produced 29 `TIME_WAIT` entries.
+The standby action reports `holding=<count>` of TCP connections still attached to the speaker,
+which turns "something was still attached" from a guess into a reading. It excludes
+`TIME_WAIT` and the action's own closing sockets by design, so a respawn storm does **not**
+inflate it — that shows up in the socket table, not here.
+
+A second reading on 2026-08-09 narrowed it. The M5 was lit all night after a session that
+was **not** hard-killed: foobar's console shows a normal `Shutting down...` with the stream
+still up and no error. Reading the PCM path settled why. Nothing on it ever told the speaker
+anything about the end of a stream: `stop_playback` was reachable only from the menu and
+`cli.py`, while the helper's teardown closed the local HTTP server and the control socket and
+exited. Every session, clean or not, left the M5 holding a URL playback session whose source
+had simply vanished — and a speaker that believes it is still serving a session is exactly
+the speaker that never reaches the idle state its own power-down needs.
+
+The helper now releases the speaker before it goes, over the persistent `55001` connection it
+already holds: `SetPlaybackControl pause` on the UIC API, the same command `stop_playback`
+uses on this path, without the mute that would hand the speaker back silent, and without
+`pwron`. It then reports `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|skipped>
+sleep=<off|Ns|skipped|unreachable|rejected> holding=<count>` once its own sockets are gone. `holding` counts every local
+socket attached to the speaker, this helper's included — one it failed to close is a leak
+like any other, and hiding it would make the count's zero mean "nobody checked". What it
+skips is only its own sockets that are *already closing*: those linger in `FIN_WAIT` for a
+measured 0.5 s to 1.5 s while the kernel finishes, and waiting them out cost that on every
+helper exit. A killed session's sockets are untouched by that rule — their owner is gone, so
+its PID cannot match — and they are the case this reading exists for.
+
+Releasing cleanly **is** enough for the M5 to go dark by itself, measured 2026-08-15. A
+session ended `stop=sent sleep=off holding=0` at 15:10:50 and the speaker was dark by roughly
+16:00 — under fifty minutes, with nothing armed and nothing held. That matches the owner's
+account of normal use (see the standby section: the speaker sleeps once every program lets
+go) and makes this release the fix, with `sleep_after_stop` the fallback for when it is not.
+
+Two things the run does not settle. The window is loose: foobar was closed at 15:56, so
+whether the speaker went dark before or after that is unknown, and a tighter reading needs a
+session left running after the stop. And the time is not a constant — an earlier observation
+put it near twenty minutes, while the owner remembers hours, which fits a firmware that steps
+down through several states rather than one timeout. The contrast that does hold is with the
+failure case: the night the M5 stayed lit until morning, the session had ended
+`stop=unreachable holding=1`. What separates the two is whether the stop landed, not whether
+the host was still running.
 
 ## No AVTransport renderer
 
@@ -394,7 +461,12 @@ without evidence from different firmware.
   a sleep timer to do it. One sample taken hours after a hard-killed session read
   `sleepoption=off` with the LED still on, which argues against self-arming but does not
   settle it: a fired timer reads the same as one that never existed, so only a countdown
-  observed while the speaker is idle and still lit would prove the mechanism.
+  observed while the speaker is idle and still lit would prove the mechanism. Now testable:
+  a session that ends with `stop=sent holding=0` is the clean stop this question needs, and
+  the answer is whatever the LED does overnight with `sleep_after_stop` left at 0.
+- Whether `SetPlaybackControl pause` releases the speaker's HTTP pull, or only stops the
+  transport while it keeps the connection. `holding=<count>` reads the local end of that,
+  which is the same socket seen from this side, but the speaker's own view is unmeasured.
 
 ## Safety and acceptance
 

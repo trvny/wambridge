@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,7 +17,11 @@ from .cli_common import (
     bounded_int,
     configure_logging,
 )
-from .connections import attached_connections_to
+from .connections import (
+    STANDBY_RELEASE_POLL,
+    STANDBY_RELEASE_TIMEOUT,
+    wait_until_released,
+)
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
     WamApiError,
@@ -33,10 +38,6 @@ LOGGER = logging.getLogger("wambridge")
 DEFAULT_SAFE_VOLUME = 3
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.35
-# A helper that is shutting down needs a moment to drop its sockets, so a single
-# reading right after the stop would report a hold that is about to clear.
-STANDBY_RELEASE_TIMEOUT = 5.0
-STANDBY_RELEASE_POLL = 0.5
 
 
 class ControlError(RuntimeError):
@@ -238,26 +239,6 @@ def emergency_stop(
     return lines
 
 
-def wait_until_released(
-    speaker_ip: str,
-    *,
-    timeout: float = STANDBY_RELEASE_TIMEOUT,
-    poll: float = STANDBY_RELEASE_POLL,
-) -> int | None:
-    """Wait for local sockets against the speaker to drop, and report the count.
-
-    Returns ``None`` when the socket table could not be read. That is reported
-    as unknown rather than as zero: claiming nothing is attached when it could
-    not be checked is the failure this exists to prevent.
-    """
-    deadline = time.monotonic() + timeout
-    held = attached_connections_to(speaker_ip)
-    while held is not None and held > 0 and time.monotonic() < deadline:
-        time.sleep(poll)
-        held = attached_connections_to(speaker_ip)
-    return held
-
-
 def standby(
     target: Target,
     *,
@@ -269,10 +250,15 @@ def standby(
     """Stop playback, mute, and confirm nothing is still attached.
 
     This sends no power command: the firmware is left awake and simply quiet.
-    What it does guarantee is that nothing of ours is holding the speaker. No
-    idle power-down was found on this firmware, so whether release alone lets it
-    sleep is unmeasured; a leaked helper keeping the control socket and the
-    audio pull open is the leading suspect for the speaker staying lit.
+    What it does guarantee is that nothing of ours is holding the speaker, and
+    that is the point - the M5 reaches its own idle power-down only once every
+    program talking to it has let go.
+
+    It is not, however, the explanation for a speaker that stays lit: that
+    survived shutting the whole computer down, and a powered-off host holds no
+    sockets. The cause lives in the speaker's own state, which is what the PCM
+    helper's release addresses. This reading proves only that nothing here is
+    contributing.
     """
     stop_result = _attempt(
         "standby stop",
@@ -313,6 +299,11 @@ def standby(
         target.ip,
         timeout=release_timeout,
         poll=release_poll,
+        # Not this process: the stop, the mute and the verification each opened
+        # and closed a connection of their own, and waiting those out would
+        # report this action's own requests as something holding the speaker.
+        # A leaked helper is a different process, so it still counts.
+        own_pid=os.getpid(),
     )
     lines = [
         "action=standby",
@@ -332,7 +323,8 @@ def standby(
         # reaching for the sleep timer, which is the only known power lever.
         lines.append(
             f"warning={held} local connection(s) still attached to the speaker; "
-            "standby sends no power command, so it stays awake either way"
+            "standby sends no power command, and a speaker something is still "
+            "holding does not start its idle countdown"
         )
     return lines
 
