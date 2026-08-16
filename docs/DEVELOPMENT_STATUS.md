@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-15.
+Last reviewed: 2026-08-16.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -12,7 +12,11 @@ branch or implementing another timing layer.
   `GetPowerStatus` best-effort, capped at one second: the command does not exist on this
   firmware and answers with silence, and until 2026-08-15 letting that timeout propagate
   made the whole snapshot fail and reported a healthy speaker as unreachable. `power=` is
-  therefore always `unknown` here; the front LED remains the only power indicator.
+  therefore always `unknown` here. The front LED is the visible indicator, but it is no longer
+  the only one: `GetMute` tracks it — `on` while dark, `off` while lit — so the power state can
+  be read without a person in the room. It reads the mute flag rather than the lamp, though, and
+  this component mutes deliberately in places, so it is an idle-state detector rather than a
+  check to run right after one of our own actions.
 - Direct `SetUrlPlayback`, custom radio stations and native TuneIn preset playback.
 - Windows builds for bundled helpers and foobar2000 2.x x64.
 - Restricted helper handle inheritance from merged PR #2.
@@ -233,8 +237,10 @@ Each of these cost real time and each is closed by measurement, not by argument.
 | Does the SDK offer a hardware volume interface | `output_entry_v2::get_volume_control` exists but no public component implements it; not a foundation to build on | PR #30 |
 | Does `flag_needs_shims` affect volume | No. It means regular `update()` calls and end-of-stream padding | SDK `output.h` |
 | Can a command clear `cp` | Not observed. `SetPlaybackControl stop` is accepted and does not clear it | `WAM_PROTOCOL.md` |
-| Does the M5 auto-power-down | Yes, once every program lets go — but nothing can read or set it, so `SetSleepTimer` in **seconds** is the only lever a client has | `WAM_PROTOCOL.md` |
-| Does closing the stream end playback for the speaker | No. Nothing on the PCM path ever told it anything; every session left a URL session whose source vanished | `WAM_PROTOCOL.md` |
+| Does the M5 auto-power-down | **Yes, but only once every program lets go.** Then it goes dark after under 17 minutes idle. A session nobody ended keeps it lit indefinitely: measured 2026-08-16, 33 minutes and still lit after a foobar shutdown on a build that sent no release, against 17 min 4 s to dark on one that did. The interval itself has no knob - `GetPowerSaving` and `GetAutoPowerDown` do not exist - so `SetSleepTimer` (seconds) remains the only way to reach standby *on demand* | `WAM_PROTOCOL.md` |
+| Does closing the stream end playback for the speaker | It does **since PR #48**. Before that nothing on the PCM path ever told it, so every session left a URL session whose source had vanished - and that is exactly what stopped the idle countdown from starting | `WAM_PROTOCOL.md` |
+| How to tell whether the LED is lit | `GetMute`: `on` = dark, `off` = lit. Read-only commands do not wake a dark speaker; whether they reset the idle countdown on a lit one is unknown, so measure with one late reading, not a poll loop. Caveat: this component **also mutes deliberately** - `standby` sends `set_mute(True)` - so `mute=on` proves dark only when nothing has just muted it | `WAM_PROTOCOL.md` |
+| Do hard-killed sessions wedge the speaker | No. 78 killed helpers left 29 sockets in `TIME_WAIT`, then one normal stop and it went dark unaided within ten minutes | `WAM_PROTOCOL.md` |
 
 ## Open, in the order that makes sense
 
@@ -259,11 +265,21 @@ Each of these cost real time and each is closed by measurement, not by argument.
    silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and
    the HTTP connection times out - a 30 s pause did not disturb either socket or restart any
    process.
-5. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
+5. **Stop the helper respawn storm.** Killing a helper while foobar is still playing makes the
+   component relaunch it immediately, measured 2026-08-16 at **78 restarts in about two
+   minutes** with no backoff and no give-up, continuing on its own once external killing
+   stopped. No FFmpeg ever appeared, so each attempt died before encoding. It left 29 sockets
+   in `TIME_WAIT` and briefly made the speaker stop answering `55001` altogether. Reachable
+   without anyone killing anything by hand, since any repeatedly failing start does it.
+   PR #55 is a draft attempt and **does not work**: it counts failures in the one place out of
+   three where a dead helper is noticed, and not the one that wins the race in this scenario,
+   so the brake never engages. The counter has to sit at the single point every launch passes
+   through, which is `start_child`, rather than wherever the death happens to be observed.
+6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer. The stream
    path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
-6. **Offer the sleep timer as a menu command, not only as an automatic fallback.** This
+7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** This
    component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
    only power lever the firmware answers a client with — yet the only way to reach it is
    `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
@@ -273,7 +289,7 @@ Each of these cost real time and each is closed by measurement, not by argument.
    session clears pending timers before offering a stream, so starting playback must not
    silently wipe a timer set from the menu; and the speaker never says who armed a timer, so
    clearing one always risks removing one set from the Samsung app.
-7. **Move release onto the helper's control channel.** The component knows whether it is
+8. **Move release onto the helper's control channel.** The component knows whether it is
    replacing a helper (seek, format change) or ending a session; the helper does not, and
    four separate review findings all reduce to that. A `release` command over the
    `WAMBRIDGE CONTROL_PORT` channel from PR #47 would arm the sleep timer only on a real
@@ -287,18 +303,16 @@ Each of these cost real time and each is closed by measurement, not by argument.
    if FFmpeg does not exit after its stdin closes, the HTTP handler stays blocked, the
    drain never finishes, and the grace expires into a hard kill. Both need the release to
    stop depending on the listener's lifetime, which is this item.
-8. **Tighten the window on a released speaker going dark.** Answered in outline on
-   2026-08-15 and no longer open in the form it was asked: a session ended
-   `stop=sent sleep=off holding=0` at 15:10:50 and the speaker was dark by roughly 16:00,
-   so releasing cleanly *is* enough. `docs/WAM_PROTOCOL.md` carries the reading. What
-   remains is the window rather than the answer — foobar was closed at 15:56, so whether
-   the LED went out before or after that is unknown, and a tighter figure needs a session
-   left running after the stop. The time is also not a constant: an earlier observation put
-   it near twenty minutes against the owner's memory of hours, which fits a firmware
-   stepping down through several states rather than one timeout.
-9. Reduce and reimplement the finite share path from its measured working form.
-10. Add a proper foobar preferences page while retaining legacy INI compatibility.
-11. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+9. ~~**Tighten the window on a released speaker going dark.**~~ **Answered 2026-08-16.** A
+   session ended `WAMBRIDGE STOPPED stop=sent sleep=off holding=0` at 20:57:15 and `GetMute`
+   reported dark at 21:14:19: **17 min 4 s**, with no timer armed. The controlled comparison
+   is what makes it conclusive rather than suggestive - the same speaker the same evening, on
+   a build that sent no release, was still lit 33 minutes after its last audio. So the idle
+   interval is roughly a quarter of an hour and it starts when the last program lets go, not
+   when the audio stops.
+10. Reduce and reimplement the finite share path from its measured working form.
+11. Add a proper foobar preferences page while retaining legacy INI compatibility.
+12. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
 
 ## What the 7-8 s speaker figure was
 

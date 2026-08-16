@@ -254,11 +254,14 @@ def standby(
     that is the point - the M5 reaches its own idle power-down only once every
     program talking to it has let go.
 
-    It is not, however, the explanation for a speaker that stays lit: that
-    survived shutting the whole computer down, and a powered-off host holds no
-    sockets. The cause lives in the speaker's own state, which is what the PCM
-    helper's release addresses. This reading proves only that nothing here is
-    contributing.
+    That is also why this reading is not the whole story for a speaker that
+    stays lit. It survived shutting the whole computer down, and a powered-off
+    host holds no sockets - because the speaker was still holding a
+    ``SetUrlPlayback`` session whose source had vanished, which no amount of
+    closing sockets undoes. The PCM helper's release is what ends that session,
+    and once it does the speaker goes dark on its own: measured 2026-08-16 at
+    17 min 4 s, against 33 minutes and still lit after a session that sent no
+    release. This reading proves only that nothing here is holding on.
     """
     stop_result = _attempt(
         "standby stop",
@@ -323,7 +326,8 @@ def standby(
         # reaching for the sleep timer, which is the only known power lever.
         lines.append(
             f"warning={held} local connection(s) still attached to the speaker; "
-            "standby sends no power command, so it stays awake either way"
+            "standby sends no power command, and a speaker something is still "
+            "holding does not start its idle countdown"
         )
     return lines
 

@@ -156,8 +156,12 @@ prevent. A killed session's sockets are untouched by any of this — their owner
 its PID cannot match.
 
 `sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
-default. It is the only lever this firmware answers, and it is opt-in because powering the
-speaker down is the listener's decision.
+default. It is the only lever this firmware answers *on demand*, and it is opt-in because
+powering the speaker down is the listener's decision.
+
+In normal use it is not needed at all. Since the stream path tells the speaker the stream is
+over, a released speaker reaches its own idle standby unaided — measured at 17 min 4 s. The
+timer is worth arming when something might not let go, not as the way the speaker goes dark.
 
 It is **not finished**, and the gap is in the seek path. A seek restarts the helper
 mid-session, so the departing helper arms a timer that the stream replacing it never asked
@@ -235,10 +239,16 @@ serialized so button presses cannot launch overlapping control processes. Physic
 commands operate in raw M5 steps.
 
 Standby is misnamed. It stops and mutes, which leaves the speaker lit and fully powered.
-The state a user recognises as the speaker sleeping comes only from `SetSleepTimer`, whose
-`sleeptime` is in seconds and which clears itself after firing. The stream path now offers
-that through `sleep_after_stop`; renaming this menu item or pointing it at the same timer is
-still open work. See the standby section of `docs/WAM_PROTOCOL.md`.
+The state a user recognises as the speaker sleeping now arrives on its own: since PR #48 the
+stream path tells the speaker the stream is over, and a released speaker goes dark after its
+own idle interval - measured at 17 min 4 s. `SetSleepTimer`, exposed as `sleep_after_stop`,
+reaches that state *on demand* and is a fallback rather than the mechanism. Renaming this menu
+item or pointing it at the same timer is still open work. See the standby section of
+`docs/WAM_PROTOCOL.md`.
+
+Left alone the speaker reaches standby by itself in under 17 minutes (measured 2026-08-16),
+so the menu item is a convenience, not the only route. Earlier notes in this repo claimed the
+firmware never sleeps unaided; that was wrong.
 
 What standby does now guarantee is that nothing local is still attached. After the stop and
 the mute it waits up to `STANDBY_RELEASE_TIMEOUT` for established TCP connections to the
@@ -257,6 +267,12 @@ The M5 was still on the morning after the whole computer had been shut down, and
 powered-off host holds no sockets. Whatever keeps the speaker awake outlives its peer, which
 puts it in the speaker's own state — the `SetUrlPlayback` session nothing ever ended. The
 reading is worth having as proof that this end let go, not as the lead.
+
+One thing `holding=` will *not* show you is a respawn storm. Killing a helper while foobar is
+still playing makes the component relaunch it immediately - measured at 78 restarts in about
+two minutes, with no backoff - and every dead session leaves a socket behind, 29 of them in
+`TIME_WAIT` afterwards. Those are excluded from the count by design, so `holding=` stays low
+while the socket table fills up. Read the table itself if you suspect a storm.
 
 `holding=unknown` is deliberately not `holding=0`. Reporting a speaker as released when it
 was never checked is the failure this exists to prevent.
