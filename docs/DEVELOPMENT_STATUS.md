@@ -62,7 +62,11 @@ described terms that measurement showed to be correct. None of them was the faul
 - matched shared-socket responses: a rejected `SetUrlPlayback` fails the attempt and a
   rejected unmute fails startup, so `WAMBRIDGE PLAYING` cannot be printed over a speaker
   that was muted for startup and never unmuted,
-- a `CLOCK` counter line behind `diagnostics=1`,
+- a `CLOCK` counter line behind `diagnostics=1`, in two phases: one a second for the first
+  240 lines of each stream, then one every thirty seconds for as long as that stream lasts.
+  It used to stop dead at 240 — four minutes in — which made it blind to anything that is
+  not a startup problem, and a run that logged 240 healthy samples then went quiet read
+  exactly like a healthy one,
 - a write probe that prints its numbers again,
 
 - counts queued, in-progress and submitted PCM in latency and capacity,

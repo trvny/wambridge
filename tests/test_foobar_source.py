@@ -446,3 +446,95 @@ class FoobarSourceTests(TestCase):
             "std::chrono::milliseconds(m_settings.startupSilenceMs)",
             source,
         )
+
+    def test_the_start_volume_cap_applies_only_to_the_first_helper(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kDefaultStartVolumeMax = 3;", source)
+        self.assertIn('L"start_volume_max",', source)
+        self.assertIn('environment_value(L"WAMBRIDGE_START_VOLUME_MAX")', source)
+        self.assertIn('ini_value(L"start_volume_max", L"", path)', source)
+        # Zero is a real answer - "no cap" - so the range starts there rather
+        # than at 1 like volume_max, whose zero would mean a silent ceiling.
+        self.assertIn("parsed >= 0 &&\n            parsed <= kMaximumRawVolume", source)
+        # The cap is lifted once a helper of this session has reported PLAYING,
+        # so a seek cannot turn down a level the listener chose mid-session.
+        self.assertIn("m_startupVolumeApplied.load() ||", source)
+        self.assertIn("(std::min)(routed, m_settings.startVolumeMax)", source)
+
+    def test_the_slider_follows_the_level_the_helper_reports(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # Without this the capped start leaves the slider pointing somewhere the
+        # speaker is not, and the first touch of it jumps - which is the same
+        # surprise the cap exists to remove.
+        self.assertIn("wam::note_speaker_step(m_reportedStep);", source)
+        # Applied on CONTROL_PORT, not on PLAYING. Moving the slider sends the
+        # level back out, and at PLAYING there is no socket yet, so it would
+        # fall back to launching a process - a second connection to 55001 while
+        # audio streams, which AGENTS.md says can starve the stream.
+        self.assertIn("m_reportedStep = parsed_volume_step(line);", source)
+        self.assertIn(
+            "connect_control_channel(line.substr(23), generation);",
+            source,
+        )
+        # Generation-checked, or a PLAYING left in a retired helper's pipe moves
+        # the slider on behalf of a helper being killed.
+        self.assertIn("generation_is_current(generation)", source)
+
+    def test_an_unreadable_volume_step_is_not_treated_as_zero(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # strtol answers 0 for a malformed payload, and 0 is a level: it would
+        # silence the speaker rather than do nothing.
+        self.assertIn("static int parsed_volume_step(", source)
+        self.assertIn("if (*start < '0' || *start > '9') return -1;", source)
+        self.assertIn("value < 0 || value > kMaximumRawVolume", source)
+
+    def test_the_routed_start_path_with_no_slider_yet_carries_a_clamp(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # The branch that reaches neither the slider nor a configured volume was
+        # the one with nothing watching it: the helper followed whatever the
+        # speaker had been left at, held only by its own default of 10.
+        self.assertIn(
+            "} else if (m_settings.hardwareVolume && "
+            "m_settings.startVolumeMax > 0) {",
+            source,
+        )
+        # Gated on routing, because the promise attached to the cap - "the
+        # slider governs everything after the start" - is only true when the
+        # slider reaches the speaker at all. And gated on the cap being on:
+        # passing the speaker maximum for a disabled cap would raise the clamp
+        # above the helper's own default of 10, the opposite of disabling it.
+        self.assertIn(
+            'command += L" --max-start-volume " +\n'
+            "                std::to_wstring(m_settings.startVolumeMax);",
+            source,
+        )
+        # The capped level replaces the slider reading, so a seek passes the
+        # cap rather than the stale slider position. Without it the quiet start
+        # survived only until the first seek.
+        self.assertIn("m_lastVolumeStep.store(level);", source)
+        # A configured INI volume is a deliberate choice and stays uncapped.
+        self.assertIn(
+            'command += L" --volume " + std::to_wstring(*m_settings.volume);',
+            source,
+        )
+
+    def test_the_slider_sync_needs_a_socket_and_a_level_in_range(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        # Without the socket the send falls back to launching a process, which
+        # is a second connection to 55001 while audio streams.
+        self.assertIn("bool connect_control_channel(", source)
+        self.assertIn("if (connected && m_reportedStep >= 0 &&", source)
+        # decibels_for_step clamps to the ceiling, so syncing a level above
+        # volume_max would write the ceiling back and turn the speaker down.
+        self.assertIn("m_reportedStep <= m_settings.volumeMax &&", source)
+        # Reset per helper. One that reaches PLAYING and dies before announcing
+        # its control channel would otherwise leave its level for the next
+        # helper, which the generation check cannot catch - by then the
+        # generation is legitimately current.
+        reset = source.index("m_childReachedPlaying.store(false);")
+        self.assertLess(reset, source.index("m_reportedStep = -1;", reset))
