@@ -461,6 +461,31 @@ def set_mute(
     )
 
 
+def sleep_timer_arguments(seconds: int) -> list[tuple[str, str | int, str]]:
+    """Build the arguments for ``SetSleepTimer``.
+
+    Measured on the M5 on 2026-08-02: ``sleeptime`` counts **seconds**, not
+    minutes, and on firing the timer clears itself back to ``sleepoption=off``,
+    so arming one leaves nothing configured behind.
+
+    This is the only power lever the firmware answers - ``GetPowerSaving`` and
+    ``GetAutoPowerDown`` do not exist here. That does not make it the only way
+    the speaker goes dark: it does that on its own once every program talking to
+    it has let go, which is its normal behaviour and was measured on 2026-08-16.
+    The timer is a fallback for when something has not let go, not the mechanism.
+
+    Zero clears a pending timer rather than arming an immediate one.
+    """
+    if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 0:
+        raise ValueError(
+            f"Sleep timer seconds must be a whole number of seconds: {seconds!r}"
+        )
+    return [
+        ("option", "start" if seconds > 0 else "off", "str"),
+        ("sleeptime", seconds, "dec"),
+    ]
+
+
 def get_play_status(
     speaker_ip: str,
     *,

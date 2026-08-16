@@ -21,8 +21,31 @@ from wambridge.samsung import (
     set_mute,
     set_playback_control,
     set_volume,
+    sleep_timer_arguments,
     stop_playback,
 )
+
+
+class SleepTimerArgumentTests(TestCase):
+    def test_arms_the_timer_in_seconds(self) -> None:
+        # Measured, not assumed: sleeptime 60 counted down to zero in one
+        # minute on the M5, so these are seconds rather than minutes.
+        self.assertEqual(
+            sleep_timer_arguments(120),
+            [("option", "start", "str"), ("sleeptime", 120, "dec")],
+        )
+
+    def test_zero_seconds_clears_the_timer_instead_of_arming_one(self) -> None:
+        self.assertEqual(
+            sleep_timer_arguments(0),
+            [("option", "off", "str"), ("sleeptime", 0, "dec")],
+        )
+
+    def test_rejects_a_sleep_timer_that_is_not_whole_seconds(self) -> None:
+        for value in (-1, 1.5, True, "60"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "whole number of seconds"):
+                    sleep_timer_arguments(value)
 
 
 class SamsungCommandTests(TestCase):
