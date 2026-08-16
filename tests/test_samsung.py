@@ -47,6 +47,16 @@ class SleepTimerArgumentTests(TestCase):
                 with self.assertRaisesRegex(ValueError, "whole number of seconds"):
                     sleep_timer_arguments(value)
 
+    def test_rejects_a_sleep_timer_longer_than_the_component_accepts(self) -> None:
+        # Unbounded, a mistyped value reaches the speaker as a plausible
+        # sleeptime that never fires, which looks exactly like a broken timer.
+        self.assertEqual(
+            sleep_timer_arguments(86400)[1],
+            ("sleeptime", 86400, "dec"),
+        )
+        with self.assertRaisesRegex(ValueError, "between 0 and 86400"):
+            sleep_timer_arguments(86401)
+
 
 class SamsungCommandTests(TestCase):
     def test_builds_get_command(self) -> None:

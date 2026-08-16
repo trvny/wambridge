@@ -15,6 +15,9 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_PORT = 55001
 MIN_VOLUME = 0
 MAX_VOLUME = 100
+# A day. Matches the range the foobar component accepts for `sleep_after_stop`,
+# so the two ends of the same setting cannot disagree about what is valid.
+MAX_SLEEP_TIMER_SECONDS = 86400
 MAX_RESPONSE_BYTES = 1024 * 1024
 API_TYPES = ("UIC", "CPM")
 # Default wait for a command this firmware answers by staying silent rather
@@ -475,10 +478,24 @@ def sleep_timer_arguments(seconds: int) -> list[tuple[str, str | int, str]]:
     The timer is a fallback for when something has not let go, not the mechanism.
 
     Zero clears a pending timer rather than arming an immediate one.
+
+    The request parameter is ``option`` while the reply reports ``sleepoption``.
+    Both spellings are measured - see ``tools/wam-probes/capture.log`` - so the
+    asymmetry belongs to the speaker and is not a typo to tidy away.
+
+    The upper bound matches what the component accepts for ``sleep_after_stop``.
+    Without one, a mistyped value reaches the speaker as a plausible-looking
+    ``sleeptime`` that simply never fires, which is indistinguishable from the
+    timer not working at all.
     """
-    if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 0:
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, int)
+        or not 0 <= seconds <= MAX_SLEEP_TIMER_SECONDS
+    ):
         raise ValueError(
-            f"Sleep timer seconds must be a whole number of seconds: {seconds!r}"
+            "Sleep timer seconds must be a whole number of seconds between 0 "
+            f"and {MAX_SLEEP_TIMER_SECONDS}: {seconds!r}"
         )
     return [
         ("option", "start" if seconds > 0 else "off", "str"),
