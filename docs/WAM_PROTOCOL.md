@@ -301,9 +301,11 @@ so a rejected unmute leaves it silent while every other signal says it is playin
 
 ## Standby and the front LED
 
-Measured 2026-08-02. The front LED is the only indicator of the speaker's power state, and
-nothing on the control port reports it: `GetPowerStatus`, `GetLedStatus` and `GetStandbyMode`
-do not exist on this firmware and all three time out. A human has to look at the speaker.
+Measured 2026-08-02. Nothing on the control port reports the power state **directly**:
+`GetPowerStatus`, `GetLedStatus` and `GetStandbyMode` do not exist on this firmware and all
+three time out. That made the front LED the only indicator, and it needed a human in the room
+until `GetMute` turned out to track it — see the section below, which supersedes this
+paragraph on that point.
 
 LED off is network standby, not power off. With the LED dark the M5 still answers `GetFunc`,
 `GetVolume` and `GetApInfo` on `55001`. Wi-Fi and the control port stay up; the amplifier and

@@ -13,8 +13,10 @@ branch or implementing another timing layer.
   firmware and answers with silence, and until 2026-08-15 letting that timeout propagate
   made the whole snapshot fail and reported a healthy speaker as unreachable. `power=` is
   therefore always `unknown` here. The front LED is the visible indicator, but it is no longer
-  the only one: `GetMute` tracks it exactly — `on` while dark, `off` while lit — so the power
-  state can be read without a person in the room.
+  the only one: `GetMute` tracks it — `on` while dark, `off` while lit — so the power state can
+  be read without a person in the room. It reads the mute flag rather than the lamp, though, and
+  this component mutes deliberately in places, so it is an idle-state detector rather than a
+  check to run right after one of our own actions.
 - Direct `SetUrlPlayback`, custom radio stations and native TuneIn preset playback.
 - Windows builds for bundled helpers and foobar2000 2.x x64.
 - Restricted helper handle inheritance from merged PR #2.
