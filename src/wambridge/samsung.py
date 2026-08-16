@@ -15,8 +15,12 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_PORT = 55001
 MIN_VOLUME = 0
 MAX_VOLUME = 100
-# A day. Matches the range the foobar component accepts for `sleep_after_stop`,
-# so the two ends of the same setting cannot disagree about what is valid.
+# A day, which is already past any use for a timer that exists to let a speaker
+# go dark after listening. The bound is here because there is no upper end
+# otherwise: an oversized value is accepted by the speaker as a plausible
+# `sleeptime` and simply never fires, which looks exactly like a timer that does
+# not work. The component setting that will feed this does not exist on `main`
+# yet; when it lands it takes the same range rather than inventing a second one.
 MAX_SLEEP_TIMER_SECONDS = 86400
 MAX_RESPONSE_BYTES = 1024 * 1024
 API_TYPES = ("UIC", "CPM")
@@ -483,10 +487,9 @@ def sleep_timer_arguments(seconds: int) -> list[tuple[str, str | int, str]]:
     Both spellings are measured - see ``tools/wam-probes/capture.log`` - so the
     asymmetry belongs to the speaker and is not a typo to tidy away.
 
-    The upper bound matches what the component accepts for ``sleep_after_stop``.
-    Without one, a mistyped value reaches the speaker as a plausible-looking
-    ``sleeptime`` that simply never fires, which is indistinguishable from the
-    timer not working at all.
+    The upper bound is a day. Without one, a mistyped value reaches the speaker
+    as a plausible-looking ``sleeptime`` that simply never fires, which is
+    indistinguishable from the timer not working at all.
     """
     if (
         isinstance(seconds, bool)
