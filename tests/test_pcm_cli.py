@@ -732,6 +732,24 @@ class PcmCliTests(TestCase):
         self.assertEqual(connection.sent, [])
         self.assertEqual(watcher.release_summary, "stop=skipped sleep=off")
 
+    def test_summary_carries_both_fields_before_release_ever_runs(self) -> None:
+        # A session whose __enter__ raises never reaches release(), and the
+        # teardown line is still printed from the outer finally. It has to carry
+        # the sleep field like every other one, or the morning-after line is
+        # shorter for exactly the sessions that failed.
+        for sleep_after_stop, expected in ((0, "sleep=off"), (120, "sleep=skipped")):
+            with self.subTest(sleep_after_stop=sleep_after_stop):
+                watcher = PlaybackWatcher(
+                    "10.0.0.118",
+                    CLIENT_UUID,
+                    port=55001,
+                    sleep_after_stop=sleep_after_stop,
+                )
+
+                self.assertEqual(
+                    watcher.release_summary, f"stop=skipped {expected}"
+                )
+
     def test_release_survives_a_speaker_that_has_gone_away(self) -> None:
         watcher, _connection = self._connected_watcher(failing=True)
         watcher.arm()

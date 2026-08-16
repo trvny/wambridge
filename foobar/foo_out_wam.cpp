@@ -103,8 +103,10 @@ constexpr std::chrono::milliseconds kFlushGrace{2000};
 // release needs a path that does not depend on the encoder before this ceiling
 // can be called sufficient.
 constexpr DWORD kActiveShutdownGraceMs = 6000;
-// Only for terminating a helper that never reached playing, where nothing has
-// to be released before it goes.
+// How long to wait for a helper to actually die once it has been terminated,
+// which is any helper that outlived its graceful wait - not only one that never
+// reached playing. Nothing is released past this point; it is a reap, so the
+// only thing the ceiling buys is not leaving a zombie behind.
 constexpr DWORD kTerminatedShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
 

@@ -268,7 +268,11 @@ class PlaybackWatcher:
         self._sleep_after_stop = sleep_after_stop
         self._clear_sleep_timer = clear_sleep_timer
         self._released = False
-        self.release_summary = "stop=skipped"
+        # Carries the sleep field from the start. A session whose __enter__
+        # raises never reaches release(), and this default is what the teardown
+        # line prints - so without it that one path reports a shorter line than
+        # every other, which is exactly the line read the morning after.
+        self.release_summary = f"stop=skipped {_unarmed_sleep_field(sleep_after_stop)}"
         self._armed = threading.Event()
         self._stream_active = threading.Event()
         self._started = threading.Event()
