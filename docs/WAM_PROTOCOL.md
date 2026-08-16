@@ -309,14 +309,65 @@ LED off is network standby, not power off. With the LED dark the M5 still answer
 `GetVolume` and `GetApInfo` on `55001`. Wi-Fi and the control port stay up; the amplifier and
 the display go down.
 
+**Almost nothing on the control port distinguishes the two states.** On 2026-08-15 the same
+23 read-only commands were run against the speaker with the LED confirmed dark and again a
+minute later with it confirmed lit, woken in between by a no-op `SetVolume`. `GetFunc` read
+`wifi`/`dlna` in both, response times stayed in the 0.02–0.2 s band in both, and all seven
+silent commands stayed silent in both. Exactly one field differed: `mute`.
+
+**That one field is the open lead, and it was first written off too quickly.** The wake
+itself clears mute, so the difference was initially read as an artefact of the method. Later
+the same day the speaker went dark again on its own, with nothing sent to it but reads, and
+`GetMute` had returned to `on` — no `SetMute` involved. Three observations now line up: dark
+`on`, lit `off`, dark `on`. The leading hypothesis is that entering standby mutes, which
+would make `GetMute` the network-side indicator this section previously said did not exist.
+
+It is not yet a controlled test. To make it one: wake the speaker, set mute off explicitly,
+send nothing further, and read `GetMute` once after the LED is confirmed dark. If it reads
+`on`, the indicator is real. Until then, a human looking at the speaker remains the only
+reading anyone should act on.
+
+Two other things fell out of that run:
+
+- **The `Date` clock runs through standby.** Uptime advanced 1861 s over 31 minutes of wall
+  clock while the LED was dark, so it is a boot counter and not a sleep indicator. A reset in
+  it means the speaker actually restarted.
+- **`SetVolume` clears mute.** Sent with `<pwron>on</pwron>` at the level the speaker was
+  already on, it returned `VolumeLevel ok` and left `mute=off` where `GetMute` had read `on`
+  a moment earlier — no `SetMute` involved. The standby menu item's "leaves it muted" state
+  therefore survives only until the next volume command.
+
+**The speaker does put itself into standby.** Left alone after 2026-08-09 it was dark by
+2026-08-15, having answered every reading in between, and it went dark within hours of an
+unattended restart with nothing connected. That is the same behaviour the owner reports from
+normal use with the Samsung app. What does not exist is any way to configure it.
+
+**How long it takes is not measured, and one figure from that day should not be read as if it
+were.** Woken by a bare `SetVolume` at 10:55 and dark by 11:24, with nothing sent in between,
+gives under 29 minutes — but for a speaker that had played nothing, held no session and had
+no client attached. The owner's recollection from normal use is hours: long enough to wonder
+whether it is going to switch off at all. Those are plausibly two different quantities, and
+the one that matters for this component is the second: time from the end of *playback*.
+Nothing has measured that. Reads on `55001` are also a confound in either direction, since
+polling may itself be what keeps the speaker shallow.
+
 `SetSleepTimer` reaches that state on demand:
 
 - `sleeptime` is in **seconds**, not minutes. `60` counted down to `0` in one minute.
 - On firing, the timer clears itself back to `sleepoption=off`, `sleeptime=0` and the speaker
   stays in standby. A fired timer leaves no trace, so `GetSleepTimer` cannot distinguish
   "asleep because a timer fired" from "asleep for any other reason".
-- There is no configurable idle power-down. `GetPowerSaving` and `GetAutoPowerDown` do not
-  exist either. The sleep timer is the only power lever this firmware exposes.
+- There is no *controllable* idle power-down: `GetPowerSaving` and `GetAutoPowerDown` do not
+  exist, so nothing can read or set one. `SetSleepTimer` is the only power lever this
+  firmware exposes to a client.
+
+  That is not the same as the speaker never sleeping on its own, and this document said so
+  for a while. Corrected 2026-08-15 on the owner's account of normal use: the M5 does go dark
+  by itself, but only after every program talking to it has let go, and the Samsung app's
+  sleep timer is a separate manual control that has never been seen to arm itself. An
+  unreadable idle power-down is still an idle power-down. That reframes the release work
+  below as the whole fix rather than half of one, and `sleep_after_stop` as a fallback for
+  when it is not.
 
 The component's standby menu item is therefore misnamed. It sends a stop and a mute, which
 leaves the speaker lit and fully powered. Only the sleep timer produces the state a user
@@ -324,14 +375,57 @@ recognises as the speaker having gone to sleep.
 
 Something about a hard-killed session keeps the speaker awake. After a run whose helper and
 FFmpeg were killed by hand instead of stopped over the protocol, the M5 was still lit some
-hours later. The standby action now measures the leading suspect rather than assuming it:
-it waits for established TCP connections to the speaker to drop and reports
-`holding=<count>`. That turns "something was still attached" from a guess into a reading,
-but it has not yet caught the case in the act, so the cause remains open. `submode` was `cp`, but `cp` is not the cause: the sleep timer put the speaker
+hours later. The standby action measures what was long assumed to be the cause rather than
+assuming it: it waits for TCP connections to the speaker to drop and reports
+`holding=<count>`. That turns "something was still attached" from a guess into a reading.
+
+**A held connection is not the cause, though, and that is settled.** On the owner's account
+of 2026-08-08, corrected here on 2026-08-15: the speaker stayed lit all night after foobar
+and then *the whole computer* were shut down. A powered-off host has no sockets left to
+hold anything with. Whatever keeps the M5 awake survives its peer disappearing entirely,
+which points at the state the speaker holds in its own head — a `SetUrlPlayback` session it
+was never told had ended — and not at anything local. `holding=` keeps its value as proof
+that this end let go; it is not the lead. `submode` was `cp`, but `cp` is not the cause either: the sleep timer put the speaker
 into standby while it stayed in `cp`, and the speaker returns to `cp` on its own while idle.
 A `SetPlaybackControl stop` on the CPM API was accepted and reported `playstatus=stop`
 without clearing `cp`. The likelier explanation is a half-open HTTP pull the speaker never
 gave up on, since it cannot tell a dead local server from a slow one.
+
+A second reading on 2026-08-09 narrowed it. The M5 was lit all night after a session that
+was **not** hard-killed: foobar's console shows a normal `Shutting down...` with the stream
+still up and no error. Reading the PCM path settled why. Nothing on it ever told the speaker
+anything about the end of a stream: `stop_playback` was reachable only from the menu and
+`cli.py`, while the helper's teardown closed the local HTTP server and the control socket and
+exited. Every session, clean or not, left the M5 holding a URL playback session whose source
+had simply vanished — and a speaker that believes it is still serving a session is exactly
+the speaker that never reaches the idle state its own power-down needs.
+
+The helper now releases the speaker before it goes, over the persistent `55001` connection it
+already holds: `SetPlaybackControl pause` on the UIC API, the same command `stop_playback`
+uses on this path, without the mute that would hand the speaker back silent, and without
+`pwron`. It then reports `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|skipped>
+sleep=<off|Ns|skipped|unreachable|rejected> holding=<count>` once its own sockets are gone. `holding` counts every local
+socket attached to the speaker, this helper's included — one it failed to close is a leak
+like any other, and hiding it would make the count's zero mean "nobody checked". What it
+skips is only its own sockets that are *already closing*: those linger in `FIN_WAIT` for a
+measured 0.5 s to 1.5 s while the kernel finishes, and waiting them out cost that on every
+helper exit. A killed session's sockets are untouched by that rule — their owner is gone, so
+its PID cannot match — and they are the case this reading exists for.
+
+Releasing cleanly **is** enough for the M5 to go dark by itself, measured 2026-08-15. A
+session ended `stop=sent sleep=off holding=0` at 15:10:50 and the speaker was dark by roughly
+16:00 — under fifty minutes, with nothing armed and nothing held. That matches the owner's
+account of normal use (see the standby section: the speaker sleeps once every program lets
+go) and makes this release the fix, with `sleep_after_stop` the fallback for when it is not.
+
+Two things the run does not settle. The window is loose: foobar was closed at 15:56, so
+whether the speaker went dark before or after that is unknown, and a tighter reading needs a
+session left running after the stop. And the time is not a constant — an earlier observation
+put it near twenty minutes, while the owner remembers hours, which fits a firmware that steps
+down through several states rather than one timeout. The contrast that does hold is with the
+failure case: the night the M5 stayed lit until morning, the session had ended
+`stop=unreachable holding=1`. What separates the two is whether the stop landed, not whether
+the host was still running.
 
 ## No AVTransport renderer
 
@@ -352,7 +446,12 @@ without evidence from different firmware.
   a sleep timer to do it. One sample taken hours after a hard-killed session read
   `sleepoption=off` with the LED still on, which argues against self-arming but does not
   settle it: a fired timer reads the same as one that never existed, so only a countdown
-  observed while the speaker is idle and still lit would prove the mechanism.
+  observed while the speaker is idle and still lit would prove the mechanism. Now testable:
+  a session that ends with `stop=sent holding=0` is the clean stop this question needs, and
+  the answer is whatever the LED does overnight with `sleep_after_stop` left at 0.
+- Whether `SetPlaybackControl pause` releases the speaker's HTTP pull, or only stops the
+  transport while it keeps the connection. `holding=<count>` reads the local end of that,
+  which is the same socket seen from this side, but the speaker's own view is unmeasured.
 
 ## Safety and acceptance
 

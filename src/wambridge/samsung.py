@@ -427,6 +427,43 @@ def set_volume(
     )
 
 
+def sleep_timer_arguments(seconds: int) -> list[tuple[str, str | int, str]]:
+    """Build the only power lever this firmware exposes.
+
+    Measured on the M5 on 2026-08-02: ``sleeptime`` counts **seconds**, not
+    minutes, and the speaker reaches the dark-LED network standby it never
+    reaches on its own. On firing the timer clears itself back to
+    ``sleepoption=off``, so arming one leaves nothing configured behind.
+
+    Zero clears a pending timer rather than arming an immediate one.
+    """
+    if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 0:
+        raise ValueError(
+            f"Sleep timer seconds must be a whole number of seconds: {seconds!r}"
+        )
+    return [
+        ("option", "start" if seconds > 0 else "off", "str"),
+        ("sleeptime", seconds, "dec"),
+    ]
+
+
+def set_sleep_timer(
+    speaker_ip: str,
+    seconds: int,
+    *,
+    port: int = DEFAULT_PORT,
+    timeout: float = 5.0,
+) -> WamResponse:
+    """Arm the sleep timer, or clear it when ``seconds`` is zero."""
+    return request(
+        speaker_ip,
+        "SetSleepTimer",
+        sleep_timer_arguments(seconds),
+        port=port,
+        timeout=timeout,
+    )
+
+
 def get_mute(
     speaker_ip: str,
     *,

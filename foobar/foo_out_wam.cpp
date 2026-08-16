@@ -87,7 +87,27 @@ constexpr std::chrono::milliseconds kCounterInterval{1000};
 constexpr std::chrono::milliseconds kSteadyCounterInterval{30000};
 constexpr std::chrono::milliseconds kAcceptWaitSlice{50};
 constexpr std::chrono::milliseconds kFlushGrace{2000};
-constexpr DWORD kActiveShutdownGraceMs = 2000;
+// A ceiling, not a delay: the wait returns the moment the helper exits, so this
+// only ever costs time when one is genuinely stuck. It covers the part that
+// matters - stopping playback on the speaker and optionally arming a sleep
+// timer, which the helper does first and which takes about a second - because
+// terminating it half way through leaves exactly the state teardown exists to
+// prevent: a speaker still holding a dead playback session.
+//
+// It does not cover the whole teardown. Closing the local server can spend up
+// to 3 s terminating FFmpeg and 3 s joining the HTTP thread, then the socket
+// table read waits up to 1.5 s more, so a stuck encoder can still be killed
+// before the `WAMBRIDGE STOPPED` line is printed. What is lost then is the
+// diagnostic, not the release. Worse, if FFmpeg never exits, `request_finished`
+// never fires and the helper never leaves the block that releases at all: the
+// release needs a path that does not depend on the encoder before this ceiling
+// can be called sufficient.
+constexpr DWORD kActiveShutdownGraceMs = 6000;
+// How long to wait for a helper to actually die once it has been terminated,
+// which is any helper that outlived its graceful wait - not only one that never
+// reached playing. Nothing is released past this point; it is a reap, so the
+// only thing the ceiling buys is not leaving a zombie behind.
+constexpr DWORD kTerminatedShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
 
 // {B768F82C-A6B7-436F-965D-6C8D1B21B91D}
@@ -234,6 +254,19 @@ constexpr int kMaximumStartupSilenceMs = 10000;
 constexpr int kDefaultBufferExtraMs = 2000;
 constexpr int kMaximumBufferExtraMs = 10000;
 
+// Seconds of sleep timer the helper arms once a stream ends. Off by default,
+// because it powers the speaker down and that has to be asked for.
+//
+// A fallback, not the mechanism. The M5 sleeps by itself once every program
+// talking to it lets go, which is what releasing the stream is for; what this
+// firmware exposes no control over is that idle power-down, since
+// `GetPowerSaving` and `GetAutoPowerDown` do not exist. `SetSleepTimer` is the
+// only power lever it answers, and it is here for the case where a clean
+// release turns out not to be enough - which is how the M5 once stayed lit
+// overnight.
+constexpr int kDefaultSleepAfterStopSeconds = 0;
+constexpr int kMaximumSleepAfterStopSeconds = 86400;
+
 // Every key this component reads. A file may legitimately outlive the build that
 // understood it -- `hardware_volume` exists only on an unmerged branch -- and an
 // ignored key is indistinguishable from a working one from the outside.
@@ -248,6 +281,7 @@ constexpr const wchar_t* kKnownIniKeys[] = {
     L"hardware_volume",
     L"volume_max",
     L"start_volume_max",
+    L"sleep_after_stop",
 };
 
 void report_unknown_ini_keys(const std::wstring& path) {
@@ -334,6 +368,7 @@ struct Settings {
     bool hardwareVolume = false;
     int volumeMax = kDefaultVolumeMax;
     int startVolumeMax = kDefaultStartVolumeMax;
+    int sleepAfterStopSeconds = kDefaultSleepAfterStopSeconds;
 };
 
 bool truthy(const std::wstring& value) {
@@ -517,6 +552,30 @@ Settings load_settings() {
         }
     }
 
+    int sleepAfterStopSeconds = kDefaultSleepAfterStopSeconds;
+    auto rawSleep = environment_value(L"WAMBRIDGE_SLEEP_AFTER_STOP");
+    if (rawSleep.empty()) {
+        rawSleep = ini_value(L"sleep_after_stop", L"", path);
+    }
+    if (!rawSleep.empty()) {
+        wchar_t* end = nullptr;
+        const long parsed = std::wcstol(rawSleep.c_str(), &end, 10);
+        if (end != rawSleep.c_str() && *end == L'\0' && parsed >= 0 &&
+            parsed <= kMaximumSleepAfterStopSeconds) {
+            sleepAfterStopSeconds = static_cast<int>(parsed);
+        } else {
+            // Silence here would read as "the speaker still will not sleep",
+            // which is exactly the symptom this setting exists to end.
+            console::printf(
+                "%s: sleep_after_stop %s is not a number of seconds in 0..%u, "
+                "arming no sleep timer",
+                kComponentName,
+                narrowed(rawSleep).c_str(),
+                static_cast<unsigned>(kMaximumSleepAfterStopSeconds)
+            );
+        }
+    }
+
     return {
         std::move(helper),
         std::move(device),
@@ -528,6 +587,7 @@ Settings load_settings() {
         hardwareVolume,
         volumeMax,
         startVolumeMax,
+        sleepAfterStopSeconds,
     };
 }
 
@@ -1211,6 +1271,15 @@ private:
         command += L" --startup-timeout 45";
         command += L" --startup-silence " +
             std::to_wstring(m_settings.startupSilenceMs);
+        // Passed even when zero. Omitting it left the helper unable to tell
+        // "the feature is off" from "nobody said", and the two need different
+        // behaviour: the second still has to clear a timer an earlier helper
+        // armed under a setting that has since changed.
+        command += L" --sleep-after-stop " +
+            std::to_wstring(m_settings.sleepAfterStopSeconds);
+        if (m_sleepTimerArmed.load()) {
+            command += L" --clear-sleep-timer";
+        }
         // Three rules, in the order that makes them agree.
         //
         // With the slider routed, the slider is the answer: the helper mutes
@@ -1311,6 +1380,13 @@ private:
         // line - and the generation check cannot catch that, because by then
         // the generation is legitimately current.
         m_reportedStep = -1;
+        // Set before the command line is built, so the first helper of an
+        // arming configuration also clears on the way in. That matches what
+        // this did before the flag existed; what changes is that clearing
+        // survives the setting dropping to zero within the same session.
+        if (m_settings.sleepAfterStopSeconds > 0) {
+            m_sleepTimerArmed.store(true);
+        }
         {
             std::lock_guard lock(m_mutex);
             m_childExited = false;
@@ -1819,7 +1895,7 @@ private:
         if (process != nullptr &&
             WaitForSingleObject(process, gracefulWait) == WAIT_TIMEOUT) {
             TerminateProcess(process, 1);
-            WaitForSingleObject(process, kActiveShutdownGraceMs);
+            WaitForSingleObject(process, kTerminatedShutdownGraceMs);
         }
         if (m_protocolThread.joinable()) m_protocolThread.join();
         m_helperReady.store(false);
@@ -1884,6 +1960,16 @@ private:
     // after that thread has been joined for the outgoing helper and before the
     // next one exists - so the two never overlap and it needs no atomic.
     int m_reportedStep = -1;
+    // Also per playback session, and deliberately sticky rather than a reading
+    // of the current setting: once any helper has been told to arm a timer on
+    // its way out, every later helper clears one on its way in, so dropping the
+    // setting to zero mid-session still cleans up after itself. It cannot do
+    // more than that - the flag dies with the session, so a timer armed before
+    // a foobar restart outlives everything that knows about it and fires once.
+    // foobar.ini.example documents that gap; this flag does not close it.
+    // Only a configuration that arms timers ever clears them, so a default
+    // install still never touches a timer set from the Samsung app.
+    std::atomic<bool> m_sleepTimerArmed{false};
     std::atomic<double> m_gain{1.0};
     // -1 until foobar reports the slider position, which it does before the
     // first stream starts. Only meaningful when hardwareVolume is on.

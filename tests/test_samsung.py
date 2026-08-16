@@ -20,7 +20,9 @@ from wambridge.samsung import (
     resume_playback,
     set_mute,
     set_playback_control,
+    set_sleep_timer,
     set_volume,
+    sleep_timer_arguments,
     stop_playback,
 )
 
@@ -215,6 +217,37 @@ class SamsungCommandTests(TestCase):
             timeout=5.0,
             power_on=True,
         )
+
+    @patch("wambridge.samsung.request")
+    def test_arms_the_sleep_timer_in_seconds(self, request_mock) -> None:
+        request_mock.return_value = WamResponse(
+            method="SleepTime",
+            result="ok",
+            body="",
+        )
+
+        set_sleep_timer("10.0.0.118", 120)
+
+        # Seconds, measured: `sleeptime` 60 counted down to 0 in one minute.
+        # No `pwron`, which would wake the speaker this is putting to sleep.
+        request_mock.assert_called_once_with(
+            "10.0.0.118",
+            "SetSleepTimer",
+            [("option", "start", "str"), ("sleeptime", 120, "dec")],
+            port=55001,
+            timeout=5.0,
+        )
+
+    def test_zero_seconds_clears_the_timer_instead_of_arming_one(self) -> None:
+        self.assertEqual(
+            sleep_timer_arguments(0),
+            [("option", "off", "str"), ("sleeptime", 0, "dec")],
+        )
+
+    def test_rejects_a_sleep_timer_that_is_not_whole_seconds(self) -> None:
+        for value in (-1, 1.5, True, "60"):
+            with self.assertRaisesRegex(ValueError, "whole number of seconds"):
+                sleep_timer_arguments(value)
 
     @patch("wambridge.samsung.get_radio_info")
     @patch("wambridge.samsung.get_play_status")

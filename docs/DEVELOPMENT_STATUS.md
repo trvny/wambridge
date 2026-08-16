@@ -233,7 +233,8 @@ Each of these cost real time and each is closed by measurement, not by argument.
 | Does the SDK offer a hardware volume interface | `output_entry_v2::get_volume_control` exists but no public component implements it; not a foundation to build on | PR #30 |
 | Does `flag_needs_shims` affect volume | No. It means regular `update()` calls and end-of-stream padding | SDK `output.h` |
 | Can a command clear `cp` | Not observed. `SetPlaybackControl stop` is accepted and does not clear it | `WAM_PROTOCOL.md` |
-| Does the M5 auto-power-down | No configurable one exists. `SetSleepTimer` in **seconds** is the only lever | `WAM_PROTOCOL.md` |
+| Does the M5 auto-power-down | Yes, once every program lets go — but nothing can read or set it, so `SetSleepTimer` in **seconds** is the only lever a client has | `WAM_PROTOCOL.md` |
+| Does closing the stream end playback for the speaker | No. Nothing on the PCM path ever told it anything; every session left a URL session whose source vanished | `WAM_PROTOCOL.md` |
 
 ## Open, in the order that makes sense
 
@@ -260,10 +261,44 @@ Each of these cost real time and each is closed by measurement, not by argument.
    process.
 5. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
    reports `holding=<count>` for connections still attached to the speaker, but it still
-   sends no power command, so the name remains wrong until it arms a sleep timer.
-6. Reduce and reimplement the finite share path from its measured working form.
-7. Add a proper foobar preferences page while retaining legacy INI compatibility.
-8. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+   sends no power command, so the name remains wrong until it arms a sleep timer. The stream
+   path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
+6. **Offer the sleep timer as a menu command, not only as an automatic fallback.** This
+   component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
+   only power lever the firmware answers a client with — yet the only way to reach it is
+   `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
+   speaker asleep in twenty minutes cannot say so from foobar. Command shape is measured and
+   in `WAM_PROTOCOL.md`: `("option","start","str")` plus `("sleeptime", <seconds>, "dec")`,
+   seconds, self-clearing once it fires. Two constraints it has to respect: a configured
+   session clears pending timers before offering a stream, so starting playback must not
+   silently wipe a timer set from the menu; and the speaker never says who armed a timer, so
+   clearing one always risks removing one set from the Samsung app.
+7. **Move release onto the helper's control channel.** The component knows whether it is
+   replacing a helper (seek, format change) or ending a session; the helper does not, and
+   four separate review findings all reduce to that. A `release` command over the
+   `WAMBRIDGE CONTROL_PORT` channel from PR #47 would arm the sleep timer only on a real
+   stop, would survive an encoder that never exits, and would let a replacement skip the
+   teardown work it does not need. Two review findings name the same root concretely and
+   are deliberately deferred here rather than patched. The `55001` socket belongs to the
+   listener thread and its `with` block closes it when `_run` returns, so a session that
+   ends in failure reaches `release()` with nothing to send on and reports
+   `stop=unreachable` — the teardown that most needs to land is the one that cannot.
+   And `kActiveShutdownGraceMs` is a ceiling on a helper that may never get there at all:
+   if FFmpeg does not exit after its stdin closes, the HTTP handler stays blocked, the
+   drain never finishes, and the grace expires into a hard kill. Both need the release to
+   stop depending on the listener's lifetime, which is this item.
+8. **Tighten the window on a released speaker going dark.** Answered in outline on
+   2026-08-15 and no longer open in the form it was asked: a session ended
+   `stop=sent sleep=off holding=0` at 15:10:50 and the speaker was dark by roughly 16:00,
+   so releasing cleanly *is* enough. `docs/WAM_PROTOCOL.md` carries the reading. What
+   remains is the window rather than the answer — foobar was closed at 15:56, so whether
+   the LED went out before or after that is unknown, and a tighter figure needs a session
+   left running after the stop. The time is also not a constant: an earlier observation put
+   it near twenty minutes against the owner's memory of hours, which fits a firmware
+   stepping down through several states rather than one timeout.
+9. Reduce and reimplement the finite share path from its measured working form.
+10. Add a proper foobar preferences page while retaining legacy INI compatibility.
+11. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
 
 ## What the 7-8 s speaker figure was
 

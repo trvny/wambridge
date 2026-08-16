@@ -1,10 +1,14 @@
 """Count local TCP sockets still attached to the speaker.
 
 A leaked ``wambridge-pcm`` helper keeps both the persistent control socket and
-the speaker's audio pull alive. No idle power-down exists on this firmware, so
-whether releasing everything is enough to let the speaker sleep is unmeasured;
-a session that was killed rather than stopped is only the leading suspect for
-the M5 staying lit. The speaker cannot answer this itself either: ``MusicInfo``
+the speaker's audio pull alive, and the M5 only reaches the idle state its own
+power-down needs once everything has let go.
+
+This proves *this* end let go. It is not the explanation for a speaker that
+stays lit: on 2026-08-08 the M5 was still on in the morning after the whole
+computer had been shut down, and a powered-off host holds no sockets. What
+keeps the speaker awake outlives its peer, so it lives in the speaker's own
+state rather than in this table. The speaker cannot answer this itself either: ``MusicInfo``
 was measured returning mixed and stale state, so the local socket table is the
 only trustworthy view.
 
@@ -32,7 +36,15 @@ from __future__ import annotations
 import ctypes
 import socket
 import sys
+import time
 from ctypes import wintypes
+
+# How long a caller tearing a session down waits for sockets to fall away before
+# reporting what it sees. Both the standby action and the PCM helper's teardown
+# read the table right after closing their own sockets, and an orderly close is
+# not instant.
+STANDBY_RELEASE_TIMEOUT = 5.0
+STANDBY_RELEASE_POLL = 0.5
 
 _AF_INET = 2
 _TCP_TABLE_OWNER_PID_ALL = 5
@@ -60,6 +72,15 @@ _ATTACHED_STATES = frozenset(
     }
 )
 
+# The subset that means the local end has not asked to close yet. FIN_WAIT1,
+# FIN_WAIT2, CLOSING and LAST_ACK all follow a local close and are the kernel
+# finishing the exchange; CLOSE_WAIT is the opposite - the peer closed and this
+# end has not - so it stays. Used only for the caller's own sockets, where the
+# difference between "still holding" and "closing" is knowable. For any other
+# process it is not: a killed helper's sockets sit in FIN_WAIT because the
+# kernel closed them on its way out, and those are exactly the ones to count.
+_UNCLOSED_STATES = frozenset({3, 4, 5, 8})
+
 
 class _MIB_TCPROW_OWNER_PID(ctypes.Structure):
     _fields_ = [
@@ -80,13 +101,27 @@ def _packed_address(speaker_ip: str) -> int | None:
         return None
 
 
-def attached_connections_to(speaker_ip: str) -> int | None:
+def attached_connections_to(
+    speaker_ip: str,
+    *,
+    own_pid: int | None = None,
+) -> int | None:
     """Return how many local sockets are still attached to the speaker.
 
     Attached means any state from ``SYN_SENT`` through ``LAST_ACK``, so a
     half-closed socket left by a killed helper counts. ``None`` means the socket
     table could not be read, which is not the same as zero and must never be
     reported as "nothing is attached".
+
+    ``own_pid`` narrows what counts *for that one process* to sockets it has
+    not closed - measured against the M5 on 2026-08-15, a socket closed locally
+    sat in ``FIN_WAIT`` for a further 0.5 s to 1.5 s, so a caller reading the
+    table right after its own teardown waited that out and then reported itself
+    as a hold. Note what this deliberately does not do: it does not drop the
+    caller's sockets wholesale. One left ``ESTABLISHED`` or ``CLOSE_WAIT`` is a
+    connection this process failed to close, which is a leak worth exactly as
+    much attention as anyone else's, and hiding it would turn ``holding=0``
+    into the comforting lie this counter exists to prevent.
     """
     if not sys.platform.startswith("win"):
         return None
@@ -126,6 +161,39 @@ def attached_connections_to(speaker_ip: str) -> int | None:
             break
         row = _MIB_TCPROW_OWNER_PID.from_buffer_copy(buffer.raw[offset : offset + row_size])
         offset += row_size
-        if row.dwState in _ATTACHED_STATES and row.dwRemoteAddr == target:
-            held += 1
+        if row.dwRemoteAddr != target or row.dwState not in _ATTACHED_STATES:
+            continue
+        if (
+            own_pid is not None
+            and row.dwOwningPid == own_pid
+            and row.dwState not in _UNCLOSED_STATES
+        ):
+            continue
+        held += 1
+    return held
+
+
+def wait_until_released(
+    speaker_ip: str,
+    *,
+    timeout: float = STANDBY_RELEASE_TIMEOUT,
+    poll: float = STANDBY_RELEASE_POLL,
+    own_pid: int | None = None,
+) -> int | None:
+    """Wait for local sockets against the speaker to drop, and report the count.
+
+    Returns ``None`` when the socket table could not be read. That is reported
+    as unknown rather than as zero: claiming nothing is attached when it could
+    not be checked is the failure this exists to prevent.
+
+    ``own_pid`` is passed straight through, and a caller tearing its own session
+    down wants it: without it this waits out its own closing sockets, which is
+    time paid for a reading that was never in question. A socket that caller
+    failed to close still counts, and still holds this open until the deadline.
+    """
+    deadline = time.monotonic() + timeout
+    held = attached_connections_to(speaker_ip, own_pid=own_pid)
+    while held is not None and held > 0 and time.monotonic() < deadline:
+        time.sleep(poll)
+        held = attached_connections_to(speaker_ip, own_pid=own_pid)
     return held

@@ -396,6 +396,43 @@ class FoobarSourceTests(TestCase):
         # which would reject them and take the whole stream down.
         self.assertIn("parsed <= kMaximumStartupSilenceMs", source)
 
+    def test_sleep_timer_is_configurable_and_off_by_default(self) -> None:
+        # A fallback for when releasing the stream is not enough on its own:
+        # the speaker does sleep once every program lets go, but nothing can
+        # read or set that. Off by default - powering the speaker down is the
+        # listener's decision, and a surprise standby is worse than a lit LED.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kDefaultSleepAfterStopSeconds = 0;", source)
+        self.assertIn('L"sleep_after_stop",', source)
+        self.assertIn('environment_value(L"WAMBRIDGE_SLEEP_AFTER_STOP")', source)
+        self.assertIn('ini_value(L"sleep_after_stop", L"", path)', source)
+        self.assertIn('command += L" --sleep-after-stop " +', source)
+        # Passed unconditionally, zero included: the helper has to tell "the
+        # feature is off" apart from "nobody said", because only the second
+        # still has to clear a timer armed under a setting that has changed
+        # since. What is gated instead is the clear, on a marker that is sticky
+        # for the playback session rather than a reading of the setting.
+        self.assertIn('command += L" --clear-sleep-timer";', source)
+        self.assertIn("if (m_sleepTimerArmed.load()) {", source)
+        self.assertIn("m_sleepTimerArmed.store(true);", source)
+        self.assertIn("parsed <= kMaximumSleepAfterStopSeconds", source)
+        self.assertIn(
+            "sleep_after_stop %s is not a number of seconds in 0..%u",
+            source,
+        )
+
+    def test_shutdown_grace_outlasts_the_helper_releasing_the_speaker(self) -> None:
+        # The helper stops playback on the speaker, optionally arms a sleep
+        # timer and reads the socket table on its way out. Terminating it part
+        # way through leaves the speaker holding a dead playback session, which
+        # is the state that teardown exists to prevent. The wait returns as soon
+        # as the helper exits, so the larger ceiling costs nothing when it does.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr DWORD kActiveShutdownGraceMs = 6000;", source)
+        self.assertIn("WaitForSingleObject(process, kTerminatedShutdownGraceMs)", source)
+
     def test_clock_holds_back_by_the_configured_silence(self) -> None:
         # The clock must wait exactly as long as the silence FFmpeg prepends,
         # because that silence is what the speaker plays first. A hardcoded
