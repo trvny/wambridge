@@ -307,31 +307,73 @@ do not exist on this firmware and all three time out. A human has to look at the
 
 LED off is network standby, not power off. With the LED dark the M5 still answers `GetFunc`,
 `GetVolume` and `GetApInfo` on `55001`. Wi-Fi and the control port stay up; the amplifier and
-the display go down.
+the display go down. A device coming into range wakes it with an audible "connected".
 
-`SetSleepTimer` reaches that state on demand:
+### The M5 reaches standby on its own
+
+Measured 2026-08-16. Woken by a no-op `pwron` at 00:56:08 (`mute=off`), confirmed dark at
+01:13:14 (`mute=on`): **under 17 minutes of idling, with no timer armed** and
+`sleepoption=off` throughout. foobar2000 was running the whole time, idle — an open player
+does not hold the speaker awake.
+
+This corrects a claim that had spread through this repo in four places — two docstrings, a
+user-facing warning string, and the sleep-timer helper on the open teardown branch: that this
+firmware never reaches standby by itself and the sleep timer is the only way there.
+**It is not.** The sleep timer is the only way to
+reach standby *on demand*; left alone, the speaker gets there in about a quarter of an hour.
+What has no configurable knob is the delay — `GetPowerSaving` and `GetAutoPowerDown` do not
+exist, so the interval cannot be read or changed.
+
+### `GetMute` is the LED, without a human
+
+`mute=on` when the LED is dark, `mute=off` when it is lit — consistent across every
+observation on 2026-08-15 and 2026-08-16, including a timer firing live. Use it instead of
+asking someone to look at the speaker.
+
+Two properties that matter when measuring this:
+
+- **Read-only commands do not wake a dark speaker.** About 25 requests over 18 minutes left
+  it dark throughout.
+- **Whether polling resets the idle countdown on a *lit* speaker is unknown.** Until it is
+  settled, measure the idle interval with one late reading rather than a loop — a one-minute
+  poll could manufacture the answer "it never sleeps".
+
+A no-op `pwron` wakes it and is **silent**: no chime, confirmed by the person in the room.
+That makes it a usable instrument at any hour.
+
+`SetSleepTimer` reaches standby on demand:
 
 - `sleeptime` is in **seconds**, not minutes. `60` counted down to `0` in one minute.
 - On firing, the timer clears itself back to `sleepoption=off`, `sleeptime=0` and the speaker
   stays in standby. A fired timer leaves no trace, so `GetSleepTimer` cannot distinguish
   "asleep because a timer fired" from "asleep for any other reason".
-- There is no configurable idle power-down. `GetPowerSaving` and `GetAutoPowerDown` do not
-  exist either. The sleep timer is the only power lever this firmware exposes.
 
-The component's standby menu item is therefore misnamed. It sends a stop and a mute, which
-leaves the speaker lit and fully powered. Only the sleep timer produces the state a user
-recognises as the speaker having gone to sleep.
+The component's standby menu item is misnamed. It sends a stop and a mute, which leaves the
+speaker lit and fully powered.
 
-Something about a hard-killed session keeps the speaker awake. After a run whose helper and
-FFmpeg were killed by hand instead of stopped over the protocol, the M5 was still lit some
-hours later. The standby action now measures the leading suspect rather than assuming it:
-it waits for established TCP connections to the speaker to drop and reports
-`holding=<count>`. That turns "something was still attached" from a guess into a reading,
-but it has not yet caught the case in the act, so the cause remains open. `submode` was `cp`, but `cp` is not the cause: the sleep timer put the speaker
-into standby while it stayed in `cp`, and the speaker returns to `cp` on its own while idle.
-A `SetPlaybackControl stop` on the CPM API was accepted and reported `playstatus=stop`
-without clearing `cp`. The likelier explanation is a half-open HTTP pull the speaker never
-gave up on, since it cannot tell a dead local server from a slow one.
+### What actually keeps it lit — narrowed, not solved
+
+The speaker has been found still lit hours after a session ended. Two explanations have been
+tested and dropped:
+
+- **`submode` is not the cause.** The sleep timer put the speaker into standby while it
+  stayed in `cp`, and it returns to `cp` on its own while idle. A CPM `SetPlaybackControl
+  stop` was accepted and reported `playstatus=stop` without clearing `cp`.
+- **Hard-killed sessions do not accumulate damage.** Measured 2026-08-16: a helper killed
+  with `taskkill /F` was respawned by the component 78 times in roughly two minutes, leaving
+  29 sockets in `TIME_WAIT` and briefly making the speaker stop answering altogether. After
+  playback was stopped normally, the speaker went dark on its own within ten minutes and the
+  sockets drained to 4 unaided. **One clean ending is enough to undo any number of abrupt
+  ones.**
+
+That leaves a single untested case, and it is the one users hit: **no clean ending at all.**
+When foobar2000 closes mid-stream the last helper is terminated and nothing follows it,
+because the component is leaving too. On `main` nothing on the PCM path ever tells the
+speaker the stream is over — `PlaybackWatcher.__exit__` only stops its own listener thread.
+
+The standby action reports `holding=<count>` of established TCP connections to the speaker,
+which turns "something was still attached" from a guess into a reading. Note that a respawn
+storm inflates it: 78 dead sessions produced 29 `TIME_WAIT` entries.
 
 ## No AVTransport renderer
 

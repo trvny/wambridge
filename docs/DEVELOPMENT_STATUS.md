@@ -12,7 +12,9 @@ branch or implementing another timing layer.
   `GetPowerStatus` best-effort, capped at one second: the command does not exist on this
   firmware and answers with silence, and until 2026-08-15 letting that timeout propagate
   made the whole snapshot fail and reported a healthy speaker as unreachable. `power=` is
-  therefore always `unknown` here; the front LED remains the only power indicator.
+  therefore always `unknown` here. The front LED is the visible indicator, but it is no longer
+  the only one: `GetMute` tracks it exactly — `on` while dark, `off` while lit — so the power
+  state can be read without a person in the room.
 - Direct `SetUrlPlayback`, custom radio stations and native TuneIn preset playback.
 - Windows builds for bundled helpers and foobar2000 2.x x64.
 - Restricted helper handle inheritance from merged PR #2.
@@ -233,7 +235,9 @@ Each of these cost real time and each is closed by measurement, not by argument.
 | Does the SDK offer a hardware volume interface | `output_entry_v2::get_volume_control` exists but no public component implements it; not a foundation to build on | PR #30 |
 | Does `flag_needs_shims` affect volume | No. It means regular `update()` calls and end-of-stream padding | SDK `output.h` |
 | Can a command clear `cp` | Not observed. `SetPlaybackControl stop` is accepted and does not clear it | `WAM_PROTOCOL.md` |
-| Does the M5 auto-power-down | No configurable one exists. `SetSleepTimer` in **seconds** is the only lever | `WAM_PROTOCOL.md` |
+| Does the M5 auto-power-down | **Yes — under 17 minutes idle**, measured 2026-08-16 with no timer armed. Earlier "it never sleeps unaided" was wrong. The delay has no configurable knob; `SetSleepTimer` (seconds) is the only way to reach standby *on demand* | `WAM_PROTOCOL.md` |
+| How to tell whether the LED is lit | `GetMute`: `on` = dark, `off` = lit. Read-only commands do not wake a dark speaker; whether they reset the idle countdown on a lit one is unknown, so measure with one late reading, not a poll loop | `WAM_PROTOCOL.md` |
+| Do hard-killed sessions wedge the speaker | No. 78 killed helpers left 29 sockets in `TIME_WAIT`, then one normal stop and it went dark unaided within ten minutes | `WAM_PROTOCOL.md` |
 
 ## Open, in the order that makes sense
 
@@ -258,12 +262,29 @@ Each of these cost real time and each is closed by measurement, not by argument.
    silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and
    the HTTP connection times out - a 30 s pause did not disturb either socket or restart any
    process.
-5. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
-   reports `holding=<count>` for connections still attached to the speaker, but it still
-   sends no power command, so the name remains wrong until it arms a sleep timer.
-6. Reduce and reimplement the finite share path from its measured working form.
-7. Add a proper foobar preferences page while retaining legacy INI compatibility.
-8. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+5. **Stop the helper respawn storm.** Killing a helper while foobar is still playing makes the
+   component relaunch it immediately, measured 2026-08-16 at **78 restarts in about two
+   minutes** with no backoff and no give-up, continuing on its own once external killing
+   stopped. No FFmpeg ever appeared, so each attempt died before encoding. It left 29 sockets
+   in `TIME_WAIT` and briefly made the speaker stop answering `55001` altogether. Only
+   stopping playback ended it. This is reachable without anyone killing anything by hand —
+   any repeatedly failing start does it — so it outranks the items below.
+6. **Send the goodbye while the session is still healthy, not while it is dying.** On `main`
+   nothing on the PCM path ever tells the speaker the stream is over:
+   `PlaybackWatcher.__exit__` stops its own listener thread and sends nothing. PR #48 adds the
+   message but hangs it off teardown, where four separate things work against it: the graceful
+   wait is `kActiveShutdownGraceMs = 2000` when the helper reached PLAYING against
+   `kStartupShutdownGraceMs = 25000` when it did not (inverted — the short budget lands on the
+   case with something to close); `stop_child()` closes the control socket *before* waiting for
+   the process; `cancel_child()` can interrupt a write mid-flush; and the destructor runs
+   `cancel_child()` before `stop_child()`. Sending the release when playback ends sidesteps all
+   four. The hard part is that a seek also ends a helper — the component knows it is replacing
+   one, the helper does not, so the component has to say which kind of exit it is.
+7. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Arming a short
+   sleep timer would make the name true and is a useful stopgap while item 6 is open.
+8. Reduce and reimplement the finite share path from its measured working form.
+9. Add a proper foobar preferences page while retaining legacy INI compatibility.
+10. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
 
 ## What the 7-8 s speaker figure was
 

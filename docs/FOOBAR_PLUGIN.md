@@ -170,19 +170,27 @@ serialized so button presses cannot launch overlapping control processes. Physic
 commands operate in raw M5 steps.
 
 Standby is misnamed. It stops and mutes, which leaves the speaker lit and fully powered.
-The state a user recognises as the speaker sleeping comes only from `SetSleepTimer`, whose
-`sleeptime` is in seconds and which clears itself after firing. Renaming the item or
-switching it to a short sleep timer is open work; see the standby section of
+Clicking it and expecting the LED to go out is a reasonable expectation the item does not
+meet. Arming a short `SetSleepTimer` would make the name true — `sleeptime` is in seconds and
+the timer clears itself after firing — and that is open work; see the standby section of
 `docs/WAM_PROTOCOL.md`.
+
+Left alone the speaker reaches standby by itself in under 17 minutes (measured 2026-08-16),
+so the menu item is a convenience, not the only route. Earlier notes in this repo claimed the
+firmware never sleeps unaided; that was wrong.
 
 What standby does now guarantee is that nothing local is still attached. After the stop and
 the mute it waits up to `STANDBY_RELEASE_TIMEOUT` for established TCP connections to the
 speaker to drop, and reports `holding=<count>`, or `holding=unknown` when the socket table
 could not be read. A remaining hold adds a `warning=` line rather than failing the action:
 the mute and the stop did land, and the caller may have asked while something else was
-streaming. This targets the documented case of a hard-killed session leaving the M5 lit for
-hours — a leaked helper keeps both the control socket and the audio pull open. It is the
-best lead available, not a proven cause.
+streaming.
+
+Read `holding=` with one caveat: a helper respawn storm inflates it. Killing a helper while
+foobar is still playing makes the component relaunch it immediately — measured at 78 restarts
+in about two minutes, with no backoff and no give-up — and every dead session leaves a socket
+behind. Twenty-nine were in `TIME_WAIT` afterwards. That is a component bug in its own right,
+separate from anything the speaker does.
 
 `holding=unknown` is deliberately not `holding=0`. Reporting a speaker as released when it
 was never checked is the failure this exists to prevent.
