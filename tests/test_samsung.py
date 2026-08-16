@@ -27,6 +27,38 @@ from wambridge.samsung import (
 )
 
 
+class SleepTimerArgumentTests(TestCase):
+    def test_arms_the_timer_in_seconds(self) -> None:
+        # Measured, not assumed: sleeptime 60 counted down to zero in one
+        # minute on the M5, so these are seconds rather than minutes.
+        self.assertEqual(
+            sleep_timer_arguments(120),
+            [("option", "start", "str"), ("sleeptime", 120, "dec")],
+        )
+
+    def test_zero_seconds_clears_the_timer_instead_of_arming_one(self) -> None:
+        self.assertEqual(
+            sleep_timer_arguments(0),
+            [("option", "off", "str"), ("sleeptime", 0, "dec")],
+        )
+
+    def test_rejects_a_sleep_timer_that_is_not_whole_seconds(self) -> None:
+        for value in (-1, 1.5, True, "60"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "whole number of seconds"):
+                    sleep_timer_arguments(value)
+
+    def test_rejects_a_sleep_timer_longer_than_the_component_accepts(self) -> None:
+        # Unbounded, a mistyped value reaches the speaker as a plausible
+        # sleeptime that never fires, which looks exactly like a broken timer.
+        self.assertEqual(
+            sleep_timer_arguments(86400)[1],
+            ("sleeptime", 86400, "dec"),
+        )
+        with self.assertRaisesRegex(ValueError, "between 0 and 86400"):
+            sleep_timer_arguments(86401)
+
+
 class SamsungCommandTests(TestCase):
     def test_builds_get_command(self) -> None:
         self.assertEqual(build_command("GetSpkName"), "<name>GetSpkName</name>")
