@@ -156,8 +156,12 @@ prevent. A killed session's sockets are untouched by any of this — their owner
 its PID cannot match.
 
 `sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
-default. It is the only lever this firmware answers, and it is opt-in because powering the
-speaker down is the listener's decision.
+default. It is the only lever this firmware answers *on demand*, and it is opt-in because
+powering the speaker down is the listener's decision.
+
+In normal use it is not needed at all. Since the stream path tells the speaker the stream is
+over, a released speaker reaches its own idle standby unaided — measured at 17 min 4 s. The
+timer is worth arming when something might not let go, not as the way the speaker goes dark.
 
 It is **not finished**, and the gap is in the seek path. A seek restarts the helper
 mid-session, so the departing helper arms a timer that the stream replacing it never asked
