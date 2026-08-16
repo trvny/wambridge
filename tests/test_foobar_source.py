@@ -26,6 +26,31 @@ class FoobarSourceTests(TestCase):
             source,
         )
 
+    def test_failed_helper_starts_are_budgeted_outside_the_output_object(
+        self,
+    ) -> None:
+        # Reporting a failure throws exception_output_invalidated, and foobar
+        # answers that by building a fresh output object. A counter owned by
+        # that object is therefore back at zero on every retry, which is why 77
+        # restarts fitted into 90 seconds. File scope is the whole point here.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "std::atomic<int> g_consecutiveFailedStarts{0};",
+            source,
+        )
+        self.assertNotIn("m_consecutiveFailedStarts", source)
+        # Only a helper that never reached PLAYING counts as a failed start;
+        # one that played and then exited is the speaker ending a stream, and
+        # restarting it immediately is the recovery that works.
+        self.assertIn("const bool reachedPlaying = m_childReachedPlaying.load();", source)
+        self.assertIn("g_consecutiveFailedStarts.fetch_add(1);", source)
+        self.assertIn("g_consecutiveFailedStarts.store(0);", source)
+        # And the retry waits rather than spinning.
+        self.assertIn("wait_out_failed_start_backoff(", source)
+        self.assertIn("kFirstFailedStartBackoff", source)
+        self.assertIn("kMaxFailedStartBackoff", source)
+
     def test_clock_counters_are_logged_once_per_second(self) -> None:
         # A physical run showed foobar advancing at a median 11x while every
         # clock term stayed unmeasured. These counters are how the runaway

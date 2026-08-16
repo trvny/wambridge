@@ -116,6 +116,14 @@ constexpr DWORD kActiveShutdownGraceMs = 6000;
 // only thing the ceiling buys is not leaving a zombie behind.
 constexpr DWORD kTerminatedShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
+// How long to wait before launching another helper after one died without ever
+// reaching PLAYING. Doubling from half a second, capped, so a transient failure
+// costs almost nothing and a persistent one stops being a hammer: the first
+// retry is immediate, then 0.5 s, 1 s, 2 s, 4 s and so on up to the ceiling.
+// The wait is interruptible - stopping, seeking or changing format all cut it
+// short - so this never delays anything the listener asked for.
+constexpr std::chrono::milliseconds kFirstFailedStartBackoff{500};
+constexpr std::chrono::milliseconds kMaxFailedStartBackoff{30000};
 
 // {B768F82C-A6B7-436F-965D-6C8D1B21B91D}
 constexpr GUID kOutputGuid = {
@@ -234,6 +242,22 @@ SOCKET g_controlSocket = INVALID_SOCKET;
 // translation unit and has no access to the output's settings.
 std::atomic<bool> g_hardwareVolume{false};
 std::atomic<int> g_volumeMax{kDefaultVolumeMax};
+// Consecutive helpers that died before ever reporting PLAYING.
+//
+// This has to live at file scope rather than in the output object. Reporting a
+// failure throws exception_output_invalidated, and foobar answers that by
+// building a **fresh** output object and trying again - so a counter owned by
+// the object is back at zero for every retry, which is why the retries never
+// slowed down. Measured 2026-08-16: 77 restarts in 90 seconds while something
+// kept killing the helper, and it carried on by itself afterwards at one death
+// every 25 seconds. Each death left a socket in TIME_WAIT to port 55001; at 29
+// of them the speaker stopped answering commands altogether.
+//
+// A helper that reached PLAYING and then exited is a different thing entirely -
+// that is the speaker ending a stream, and restarting immediately is the
+// recovery that works and gets audio back in about two and a half seconds. Only
+// starts that never got there count here.
+std::atomic<int> g_consecutiveFailedStarts{0};
 
 // Moves foobar's own slider. playback_control is a main-thread interface and
 // the dispatcher runs on its own thread, so the change is handed over rather
@@ -869,6 +893,9 @@ private:
                 if (playing) {
                     m_playing.store(true);
                     m_childReachedPlaying.store(true);
+                    // Reaching PLAYING is the only thing that proves a start
+                    // worked, so it is the only thing that clears the budget.
+                    g_consecutiveFailedStarts.store(0);
                     // Not when the helper was launched: between the spawn and
                     // this line the level has not been applied yet, so a seek
                     // in that window would hand the replacement a raised clamp
@@ -986,6 +1013,39 @@ private:
                 std::to_wstring(m_settings.startVolumeMax);
         }
         return command;
+    }
+
+    // Hold off before launching another helper when the previous ones died
+    // without ever playing. Returns false when the wait ended because this
+    // start became obsolete - shutdown, a seek, a format change or a failure
+    // already recorded - so the caller loops round instead of spawning into a
+    // session that has moved on.
+    bool wait_out_failed_start_backoff(
+        uint64_t generation,
+        unsigned sampleRate,
+        unsigned channels
+    ) {
+        const int failures = g_consecutiveFailedStarts.load();
+        if (failures <= 0) return true;
+
+        auto backoff = kFirstFailedStartBackoff;
+        for (int step = 1; step < failures && backoff < kMaxFailedStartBackoff;
+             ++step) {
+            backoff *= 2;
+        }
+        if (backoff > kMaxFailedStartBackoff) backoff = kMaxFailedStartBackoff;
+
+        std::unique_lock lock(m_mutex);
+        m_cv.wait_for(
+            lock,
+            backoff,
+            [this, generation, sampleRate, channels] {
+                return m_shutdown || m_restart || !m_failure.empty() ||
+                    !session_matches_locked(generation, sampleRate, channels);
+            }
+        );
+        return !m_shutdown && !m_restart && m_failure.empty() &&
+            session_matches_locked(generation, sampleRate, channels);
     }
 
     bool start_child(
@@ -1309,11 +1369,16 @@ private:
             }
             const auto childState = child_state();
             if (childState == ChildState::exited) {
+                // Read before stop_child, which clears the flag.
+                const bool reachedPlaying = m_childReachedPlaying.load();
                 set_failure_if_current(
                     "wambridge-pcm exited unexpectedly",
                     generation
                 );
                 stop_child();
+                if (!reachedPlaying) {
+                    g_consecutiveFailedStarts.fetch_add(1);
+                }
                 continue;
             }
             if (flushing && childState == ChildState::none) {
@@ -1330,6 +1395,13 @@ private:
                     hasAudio = !m_queue.empty();
                 }
                 if (!hasAudio) continue;
+                if (!wait_out_failed_start_backoff(
+                        generation,
+                        sampleRate,
+                        channels
+                    )) {
+                    continue;
+                }
                 if (!start_child(sampleRate, channels, generation)) continue;
             }
 

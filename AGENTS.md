@@ -35,6 +35,15 @@ plausible explanation. This file keeps only easy-to-miss traps.
   answers in 0.14 s is the better test.
 - Terminate timed-out child processes. Runaway FFmpeg processes have already
   exhausted the 8 GB physical test machine.
+- **Reporting a failure throws `exception_output_invalidated`, and foobar
+  answers that by building a brand new output object.** Anything meant to bound
+  retries therefore cannot live in that object: it is constructed fresh for
+  every attempt. Measured 2026-08-16, before the budget moved to file scope: 77
+  helper restarts in 90 seconds, continuing on its own afterwards at one death
+  every 25 seconds, each leaving a socket in `TIME_WAIT` to port 55001 until at
+  29 of them the speaker stopped answering commands at all. A helper that
+  reached `PLAYING` and then exited is a different case - that is the speaker
+  ending a stream, and restarting at once is the recovery that works.
 
 ### Physical M5
 

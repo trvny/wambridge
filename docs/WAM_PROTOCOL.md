@@ -299,6 +299,28 @@ the ear about six seconds later. Volume that should feel immediate belongs on th
 matched `result="ng"` for `SetVolume` must be surfaced: startup mutes the speaker on purpose,
 so a rejected unmute leaves it silent while every other signal says it is playing.
 
+## The speaker's own radio, and reading it
+
+`GetApInfo` returns `ssid`, `mac`, `rssi`, `ch` and `connectiontype`, answers in 0.13 s and
+works with the LED dark. Note the asymmetry: the command is **`GetApInfo`**, the reply carries
+the method name `ApInfo`, and sending `ApInfo` costs a full timeout and looks exactly like an
+unimplemented command. `GetNetworkInfo` and `GetWifiInfo` do not exist here and time out;
+`GetSoftwareVersion` answers.
+
+Measured on the test M5, 2026-08-16: `ssid` on the household **2.4 GHz** network, `ch 1`,
+`rssi 4`, `connectiontype wireless`, while the host running foobar sat on the 5 GHz SSID. Every
+audio byte therefore crossed the access point from a 5 GHz leg to a 2.4 GHz one, and the second
+leg is the one that hurts: ping from the host averaged 2.2 ms to the access point and **176 ms
+to the speaker** while idle, 4.2 ms against **91 ms** during playback, with zero packet loss
+either way and only two networks visible in the area, both the owner's - so this is not
+neighbouring congestion.
+
+This matters because it is the first thing to check when the speaker tears down a stream
+mid-playback. The signature of that is in the `CLOCK` line: `submitted` stops advancing while
+`offered` keeps climbing and `queued` grows at roughly real time, with `buffered` still near
+capacity. A full buffer at the moment of the break means the encoder was feeding fine and the
+speaker stopped pulling, which puts the fault on the link or the speaker rather than here.
+
 ## Standby and the front LED
 
 Measured 2026-08-02. Nothing on the control port reports the power state **directly**:
