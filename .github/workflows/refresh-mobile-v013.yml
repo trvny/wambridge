@@ -14,10 +14,10 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     env:
-      WAMBRIDGE_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      WAMBRIDGE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      WAMBRIDGE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-      WAMBRIDGE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      WAMBRIDGE_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 || secrets.WAMBRIDGE_ANDROID_KEYSTORE_BASE64 }}
+      WAMBRIDGE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.WAMBRIDGE_ANDROID_KEYSTORE_PASSWORD }}
+      WAMBRIDGE_KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.WAMBRIDGE_ANDROID_KEY_ALIAS }}
+      WAMBRIDGE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.WAMBRIDGE_ANDROID_KEY_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v7
@@ -73,6 +73,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main
           git rm .github/workflows/refresh-mobile-v013.yml
           git commit -m "Remove one-shot release refresh"
-          git push
+          git push origin HEAD:main
