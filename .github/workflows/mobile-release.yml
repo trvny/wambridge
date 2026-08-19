@@ -85,30 +85,29 @@ jobs:
           test -x "$apksigner"
           "$apksigner" verify --verbose --print-certs "$APK"
 
-      - name: Publish release
+      - name: Upload unsigned preview artifact
+        if: steps.signing.outputs.signed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wambridge-${{ steps.apk.outputs.version }}
+          path: ${{ steps.apk.outputs.apk }}
+          if-no-files-found: error
+
+      - name: Publish signed mobile release
+        if: steps.signing.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.apk.outputs.version }}
           APK: ${{ steps.apk.outputs.apk }}
-          SIGNED: ${{ steps.signing.outputs.signed }}
         shell: bash
         run: |
           set -euo pipefail
-          tag="v${VERSION}"
-          if [[ "$SIGNED" == "true" ]]; then
-            notes="Signed Android release."
-            prerelease=()
-          else
-            notes="Android preview. APK is CI debug-signed; add the WAMBRIDGE_ANDROID_* secrets for a release-signed APK."
-            prerelease=(--prerelease)
-          fi
-
+          tag="mobile-v${VERSION}"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$APK" --clobber
           else
             gh release create "$tag" "$APK" \
               --target "$GITHUB_SHA" \
-              --title "WAMbridge ${VERSION}" \
-              "${prerelease[@]}" \
-              --notes "$notes"
+              --title "WAMbridge mobile ${VERSION}" \
+              --notes "Signed Android mobile adapter release."
           fi

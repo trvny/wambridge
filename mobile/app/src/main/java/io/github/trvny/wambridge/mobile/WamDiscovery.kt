@@ -1,9 +1,7 @@
 package io.github.trvny.wambridge.mobile
 
 import android.content.Context
-import android.net.ConnectivityManager
 import android.net.Network
-import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.wifi.WifiManager
 import java.io.BufferedInputStream
@@ -24,17 +22,12 @@ import java.util.concurrent.Executors
 internal object WamDiscovery {
     data class Speaker(val ip: String, val source: String)
 
-    private data class WifiTarget(
-        val network: Network,
-        val address: Inet4Address,
-    )
-
     fun discover(
         context: Context,
         allowScan: Boolean,
         ssdpTimeoutMs: Long = 2_500,
     ): List<Speaker> {
-        val targets = wifiTargets(context)
+        val targets = WifiLan.targets(context)
         if (targets.isEmpty()) return emptyList()
 
         val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
@@ -51,27 +44,7 @@ internal object WamDiscovery {
         }
     }
 
-    private fun wifiTargets(context: Context): List<WifiTarget> {
-        val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        val result = mutableListOf<WifiTarget>()
-
-        for (network in connectivity.allNetworks) {
-            val capabilities = connectivity.getNetworkCapabilities(network) ?: continue
-            if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
-            val properties = connectivity.getLinkProperties(network) ?: continue
-
-            for (linkAddress in properties.linkAddresses) {
-                val address = linkAddress.address as? Inet4Address ?: continue
-                if (address.isLoopbackAddress || address.isLinkLocalAddress) continue
-                if (result.none { it.network == network && it.address == address }) {
-                    result += WifiTarget(network, address)
-                }
-            }
-        }
-        return result
-    }
-
-    private fun discoverSsdp(targets: List<WifiTarget>, timeoutMs: Long): List<Speaker> {
+    private fun discoverSsdp(targets: List<WifiLan.Target>, timeoutMs: Long): List<Speaker> {
         val found = linkedMapOf<String, Speaker>()
         val payloads = SEARCH_TARGETS.map(::searchMessage)
 
@@ -111,16 +84,12 @@ internal object WamDiscovery {
         return found.values.sortedBy { it.ip }
     }
 
-    private fun scanLocalLan(targets: List<WifiTarget>): List<Speaker> {
+    private fun scanLocalLan(targets: List<WifiLan.Target>): List<Speaker> {
         val ownAddresses = targets.map { it.address.hostAddress }.toSet()
         val candidates = linkedMapOf<String, Network>()
 
         for (target in targets) {
-            val bytes = target.address.address
-            for (last in 1..254) {
-                val candidate = bytes.copyOf()
-                candidate[3] = last.toByte()
-                val ip = InetAddress.getByAddress(candidate).hostAddress ?: continue
+            for (ip in subnetHosts(target)) {
                 if (ip !in ownAddresses) candidates.putIfAbsent(ip, target.network)
             }
         }
@@ -145,6 +114,51 @@ internal object WamDiscovery {
             executor.shutdownNow()
         }
     }
+
+    private fun subnetHosts(target: WifiLan.Target): Sequence<String> {
+        val prefix = target.prefixLength.coerceIn(0, 32)
+        val hostBits = 32 - prefix
+        val addressCount = 1L shl hostBits
+        val usableCount = when {
+            prefix <= 30 -> (addressCount - 2).coerceAtLeast(0)
+            else -> addressCount
+        }
+        if (usableCount == 0L) return emptySequence()
+
+        val address = ipv4ToLong(target.address)
+        val mask = if (prefix == 0) 0L else (0xffff_ffffL shl hostBits) and 0xffff_ffffL
+        val network = address and mask
+        val broadcast = network + addressCount - 1
+        val subnetFirst = if (prefix <= 30) network + 1 else network
+        val subnetLast = if (prefix <= 30) broadcast - 1 else broadcast
+
+        if (usableCount <= MAX_SCAN_HOSTS) {
+            return (subnetFirst..subnetLast).asSequence().map(::longToIpv4)
+        }
+
+        // Do not spray tens of thousands of probes across a /16. On broad
+        // Wi-Fi prefixes, keep the fallback useful by probing the local /24
+        // window that contains this phone while SSDP remains the primary path.
+        val localWindow = address and LOCAL_WINDOW_MASK
+        val first = maxOf(subnetFirst, localWindow + 1)
+        val last = minOf(subnetLast, localWindow + 254)
+        return if (first <= last) {
+            (first..last).asSequence().map(::longToIpv4)
+        } else {
+            emptySequence()
+        }
+    }
+
+    private fun ipv4ToLong(address: Inet4Address): Long = address.address.fold(0L) { result, byte ->
+        (result shl 8) or (byte.toInt() and 0xff).toLong()
+    }
+
+    private fun longToIpv4(value: Long): String = listOf(
+        (value ushr 24) and 0xff,
+        (value ushr 16) and 0xff,
+        (value ushr 8) and 0xff,
+        value and 0xff,
+    ).joinToString(".")
 
     private fun probeWam(network: Network, ip: String, timeoutMs: Int): Boolean {
         val command = Uri.encode("<name>GetSpkName</name>")
@@ -215,6 +229,8 @@ internal object WamDiscovery {
     private const val SSDP_PORT = 1900
     private const val WAM_PORT = 55001
     private const val SCAN_TIMEOUT_MS = 220
+    private const val MAX_SCAN_HOSTS = 1_024L
+    private const val LOCAL_WINDOW_MASK = 0xffff_ff00L
     private const val WAM_SEARCH_TARGET = "urn:samsung.com:device:RemoteControlReceiver:1"
     private val SEARCH_TARGETS = listOf(WAM_SEARCH_TARGET, "ssdp:all")
 }

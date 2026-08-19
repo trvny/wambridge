@@ -52,12 +52,14 @@ internal class UpnpRenderer(
     private val context: Context,
     private val state: RendererState,
     private val callbacks: RendererCallbacks,
+    private val speakerIp: String,
 ) : AutoCloseable {
     private val executor = Executors.newCachedThreadPool()
     private val running = AtomicBoolean(false)
     private val clientSockets = ConcurrentHashMap.newKeySet<Socket>()
     private val streamSources = ConcurrentHashMap<Socket, HttpURLConnection>()
     private val activeStream = AtomicReference<Socket?>(null)
+    private val streamPath = "/stream/${UUID.randomUUID().toString().replace("-", "")}"
     private var httpServer: ServerSocket? = null
     private var ssdpSocket: MulticastSocket? = null
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -68,12 +70,13 @@ internal class UpnpRenderer(
         private set
 
     val streamUrl: String
-        get() = "http://${localAddress.hostAddress}:$port/stream"
+        get() = "http://${localAddress.hostAddress}:$port$streamPath"
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
         try {
-            localAddress = findLocalIpv4()
+            localAddress = WifiLan.targets(context).firstOrNull()?.address
+                ?: error("No active Wi-Fi IPv4 address found")
             startHttp()
             startSsdp()
         } catch (error: Exception) {
@@ -182,12 +185,16 @@ internal class UpnpRenderer(
     private fun handleClient(client: Socket) {
         client.use { socket ->
             try {
-                socket.soTimeout = 15_000
+                socket.soTimeout = CLIENT_TIMEOUT_MS
                 val request = readRequest(BufferedInputStream(socket.getInputStream()))
                 val output = BufferedOutputStream(socket.getOutputStream())
                 val localControl = isLocalControlPeer(socket.inetAddress)
+                val speakerPeer = socket.inetAddress.hostAddress == speakerIp
                 when {
-                    request.method == "GET" && request.path == "/stream" -> proxyStream(socket, output)
+                    request.method == "GET" && request.path == streamPath && speakerPeer ->
+                        proxyStream(socket, output)
+                    request.path == streamPath ->
+                        textResponse(output, 403, "text/plain", "Speaker stream only")
                     !localControl -> textResponse(output, 403, "text/plain", "Local control only")
                     request.method == "GET" && request.path == "/description.xml" ->
                         textResponse(output, 200, "text/xml; charset=utf-8", descriptionXml())
@@ -244,7 +251,7 @@ internal class UpnpRenderer(
             "Play" -> {
                 require(state.currentUri.isNotBlank()) { "No CurrentURI" }
                 callbacks.onPlay(streamUrl)
-                state.transportState = "PLAYING"
+                state.transportState = "TRANSITIONING"
                 soapOk(out, AV_TRANSPORT, action)
             }
             "Pause" -> {
@@ -375,8 +382,8 @@ internal class UpnpRenderer(
             val source = state.currentUri
             require(isLocalPlayerUri(source)) { "Only this phone's HTTP sources are accepted" }
             val connection = (URI(source).toURL().openConnection() as HttpURLConnection).apply {
-                connectTimeout = 5000
-                readTimeout = 0
+                connectTimeout = SOURCE_CONNECT_TIMEOUT_MS
+                readTimeout = SOURCE_READ_TIMEOUT_MS
                 useCaches = false
                 requestMethod = "GET"
                 instanceFollowRedirects = false
@@ -429,23 +436,29 @@ internal class UpnpRenderer(
 
     private fun copyL16(input: BufferedInputStream, out: BufferedOutputStream) {
         val buffer = ByteArray(64 * 1024)
-        var carry = -1
+        var carry: Byte? = null
         while (true) {
             val count = input.read(buffer)
             if (count < 0) return
-            var index = 0
-            if (carry >= 0 && count > 0) {
-                out.write(buffer[0].toInt() and 0xff)
-                out.write(carry)
-                carry = -1
-                index = 1
+            var start = 0
+
+            carry?.let { high ->
+                if (count > 0) {
+                    out.write(byteArrayOf(buffer[0], high))
+                    carry = null
+                    start = 1
+                }
             }
+
+            var index = start
             while (index + 1 < count) {
-                out.write(buffer[index + 1].toInt() and 0xff)
-                out.write(buffer[index].toInt() and 0xff)
+                val high = buffer[index]
+                buffer[index] = buffer[index + 1]
+                buffer[index + 1] = high
                 index += 2
             }
-            if (index < count) carry = buffer[index].toInt() and 0xff
+            if (index > start) out.write(buffer, start, index - start)
+            if (index < count) carry = buffer[index]
         }
     }
 
@@ -633,7 +646,13 @@ internal class UpnpRenderer(
         rawResponse(
             out,
             status,
-            when (status) { 200 -> "OK"; 404 -> "Not Found"; 503 -> "Service Unavailable"; else -> "Error" },
+            when (status) {
+                200 -> "OK"
+                403 -> "Forbidden"
+                404 -> "Not Found"
+                503 -> "Service Unavailable"
+                else -> "Error"
+            },
             mapOf("Content-Type" to type, "Content-Length" to body.size.toString()),
             body,
         )
@@ -671,20 +690,6 @@ internal class UpnpRenderer(
                 )
             }
         }
-    }
-
-    private fun findLocalIpv4(): Inet4Address {
-        val interfaces = NetworkInterface.getNetworkInterfaces()
-        while (interfaces.hasMoreElements()) {
-            val network = interfaces.nextElement()
-            if (!network.isUp || network.isLoopback) continue
-            val addresses = network.inetAddresses
-            while (addresses.hasMoreElements()) {
-                val address = addresses.nextElement()
-                if (address is Inet4Address && address.isSiteLocalAddress) return address
-            }
-        }
-        error("No private IPv4 LAN address found")
     }
 
     private fun descriptionXml(): String = """
@@ -801,6 +806,9 @@ internal class UpnpRenderer(
         private const val SSDP_PORT = 1900
         private const val MAX_HEADER = 64 * 1024
         private const val MAX_BODY = 1024 * 1024
+        private const val CLIENT_TIMEOUT_MS = 15_000
+        private const val SOURCE_CONNECT_TIMEOUT_MS = 5_000
+        private const val SOURCE_READ_TIMEOUT_MS = 15_000
         private const val AV_TRANSPORT = "urn:schemas-upnp-org:service:AVTransport:1"
         private const val RENDERING_CONTROL = "urn:schemas-upnp-org:service:RenderingControl:1"
         private const val CONNECTION_MANAGER = "urn:schemas-upnp-org:service:ConnectionManager:1"

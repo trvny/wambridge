@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class RendererService : Service(), RendererCallbacks {
+class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener {
     private var renderer: UpnpRenderer? = null
     private var wamChannel: SamsungWamChannel? = null
     private var rendererState: RendererState? = null
@@ -120,7 +120,7 @@ class RendererService : Service(), RendererCallbacks {
         var activeRenderer: UpnpRenderer? = null
         try {
             val state = RendererState(rendererUdn)
-            activeRenderer = UpnpRenderer(this, state, this)
+            activeRenderer = UpnpRenderer(this, state, this, target)
             activeRenderer.start()
             if (destroyed || Thread.currentThread().isInterrupted) return
 
@@ -150,7 +150,7 @@ class RendererService : Service(), RendererCallbacks {
         wamChannel?.let { return it }
         check(speakerIp.isNotBlank()) { "Speaker is not configured" }
         check(clientUuid.isNotBlank()) { "Client UUID is not configured" }
-        SamsungWamChannel(speakerIp, clientUuid).also {
+        SamsungWamChannel(applicationContext, speakerIp, clientUuid, this).also {
             it.connect()
             wamChannel = it
         }
@@ -244,13 +244,24 @@ class RendererService : Service(), RendererCallbacks {
         }
     }
 
+    private fun dispatchWamEvent(action: () -> Unit) {
+        if (destroyed) return
+        try {
+            worker.execute {
+                if (!destroyed) action()
+            }
+        } catch (_: RejectedExecutionException) {
+            // Service teardown won the race.
+        }
+    }
+
     override fun onPlay(rendererStreamUrl: String) = runOnWorker {
         cancelIdleRelease()
         val channel = ensureChannel()
 
         // Old WAM firmware may jump volume while switching into URL playback.
         // Keep it silent through SetUrlPlayback and only lift to the bounded
-        // start step after the speaker has actually requested /stream.
+        // start step after the speaker has actually requested the proxy stream.
         channel.setVolumeRaw(0)
         safeVolumeApplied = false
         ownsPlayback = true
@@ -262,8 +273,8 @@ class RendererService : Service(), RendererCallbacks {
             throw error
         }
 
-        rendererState?.transportState = "PLAYING"
-        publish("Streaming Neutron → M5")
+        rendererState?.transportState = "TRANSITIONING"
+        publish("Starting playback…")
     }
 
     override fun onStreamOpened() = runOnWorker {
@@ -271,6 +282,10 @@ class RendererService : Service(), RendererCallbacks {
         if (ownsPlayback && !safeVolumeApplied) {
             ensureChannel().setVolumeRaw(SAFE_START_VOLUME)
             safeVolumeApplied = true
+        }
+        if (ownsPlayback) {
+            rendererState?.transportState = "PLAYING"
+            publish("Streaming Neutron → M5")
         }
     }
 
@@ -330,6 +345,18 @@ class RendererService : Service(), RendererCallbacks {
         channel.setMute(muted)
         rendererState?.muted = muted
         if (!ownsPlayback) closeWamChannel()
+    }
+
+    override fun onPlaybackStarted() = dispatchWamEvent {
+        if (!ownsPlayback) return@dispatchWamEvent
+        rendererState?.transportState = "PLAYING"
+        publish("Streaming Neutron → M5 · confirmed")
+    }
+
+    override fun onReportedError(method: String?, code: String) = dispatchWamEvent {
+        val source = method?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+        rendererState?.lastError = "M5 error $code$source"
+        publish("M5 reported error $code$source")
     }
 
     private fun promoteToForeground(message: String) {

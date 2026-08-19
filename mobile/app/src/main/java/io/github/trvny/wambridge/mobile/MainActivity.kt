@@ -89,7 +89,7 @@ class MainActivity : Activity() {
         layout.addView(statusView)
 
         layout.addView(TextView(this).apply {
-            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. WAV is preferred. LPCM/L16 is also wrapped into an endless WAV stream by the adapter."
+            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Default output settings are supported; WAV and LPCM/L16 are handled by the adapter."
             textSize = 14f
         })
 
@@ -195,7 +195,7 @@ class MainActivity : Activity() {
 
         statusView.text = "Testing $value…"
         Thread({
-            val reachable = SamsungWamChannel.probe(value)
+            val reachable = SamsungWamChannel.probe(applicationContext, value)
             runOnUiThread {
                 statusView.text = if (reachable) {
                     "M5 answered at $value."

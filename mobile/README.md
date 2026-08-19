@@ -13,7 +13,7 @@ Android-first adapter for exposing Samsung WAM speakers to mobile players withou
 
 The Android adapter provides:
 
-- WAM speaker autodiscovery via SSDP with LAN fallback;
+- WAM speaker autodiscovery via SSDP with prefix-aware LAN fallback;
 - UPnP MediaRenderer services: AVTransport, RenderingControl and ConnectionManager;
 - a local WAV/LPCM proxy handed to the M5 through `SetUrlPlayback`;
 - safe first-start volume capped at M5 raw step `3`;
@@ -34,7 +34,7 @@ The release workflow becomes release-signed automatically when these GitHub Acti
 - `WAMBRIDGE_ANDROID_KEY_ALIAS`
 - `WAMBRIDGE_ANDROID_KEY_PASSWORD`
 
-`WAMBRIDGE_ANDROID_KEYSTORE_BASE64` is the base64-encoded keystore file. Without all four secrets the workflow publishes a clearly marked debug-signed preview instead.
+`WAMBRIDGE_ANDROID_KEYSTORE_BASE64` is the base64-encoded keystore file. Without all four secrets the workflow keeps the debug-signed APK as an Actions artifact only. With signing configured it publishes `wambridge-{version}.apk` under a `mobile-v{version}` release tag.
 
 ## Architecture
 
