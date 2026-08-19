@@ -17,7 +17,7 @@ but not integrated.
 Everything here was measured against one physical Shape M5 (`SPK-WAM550`,
 firmware `WAM550WWB-3117.1`). Other models in the family are untested.
 
-## Status: working alpha
+## Status: working [`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha)
 
 Both paths play audio on real hardware. The foobar component passed its full
 physical checklist on 2026-08-02: a complete 213-second track start to finish at
@@ -64,16 +64,12 @@ facts from a physical `SPK-WAM550` are in
 
 ## Foobar2000 output
 
-Everything ships from one rolling prerelease,
-[`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha), rebuilt whenever `main`
-moves. The link does not change and the two halves always come from the same commit:
+Rolling prerelease,
+[`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha)
 
 - `foo_out_wam.fb2k-component` - the foobar2000 output
 - `wambridge-alpha-<date>-<commit>.apk` - the Android adapter
 - a source archive
-
-The [`Build`](https://github.com/trvny/wambridge/actions/workflows/build.yml) workflow still
-produces the same component as a per-commit artifact if you need one that is not the tip.
 
 Open the `.fb2k-component` file with foobar2000 2.x x64, then select:
 
