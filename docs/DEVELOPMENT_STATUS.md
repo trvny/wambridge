@@ -299,8 +299,8 @@ operating system records.
 
 ## Open, in the order that makes sense
 
-1. **Physical checklist for PR #30** (routed volume slider). It changes `volume_set` and the
-   helper's startup volume, so the full gate applies before merging.
+1. ~~**Physical checklist for PR #30**~~ (routed volume slider). PR #30 is closed; the routed
+   slider is in `Stable on main` above. Struck 2026-08-19 during a claim-by-claim audit.
 2. **Find how small the host buffer can get.** It was dismissed as "2-3 s of thirteen" and is
    now the largest single term of six. `clamp(bufferLength, 2.0, 30.0)` plus a pad is a
    choice, not a measurement, and nothing has tested where the pipe starts to starve.
@@ -327,11 +327,12 @@ operating system records.
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer. The stream
    path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
-7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** Note first
-   that the sleep timer is **not** the only power lever: `GetNetworkStandByMode` was measured
-   answering on 2026-08-19 with `networkstandbymode=on`, on `UIC`, the socket this component
-   already holds open. `SetNetworkStandByMode` takes a `str` and is untried. That may be the
-   better menu item, or the better default. See `WAM_PROTOCOL.md`. This
+7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** A related
+   setting turned up but does not change this item yet: `GetNetworkStandByMode` answers
+   `networkstandbymode=on` on `UIC`, the socket this component already holds open. What writing
+   it does is unknown, and the name suggests it governs the network *during* standby rather
+   than entering it, so treat it as a hypothesis with a safe test attached rather than a second
+   power control. `WAM_PROTOCOL.md` has the order for settling that. This
    component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
    only power lever the firmware answers a client with — yet the only way to reach it is
    `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
@@ -363,7 +364,10 @@ operating system records.
    interval is roughly a quarter of an hour and it starts when the last program lets go, not
    when the audio stops.
 10. Reduce and reimplement the finite share path from its measured working form.
-11. Add a proper foobar preferences page while retaining legacy INI compatibility.
+11. ~~Add a proper foobar preferences page while retaining legacy INI compatibility.~~
+    **Done** - `foobar/wam_preferences.cpp` implements `preferences_page_instance` in 524
+    lines, and the INI keys still load. Struck 2026-08-19 during a claim-by-claim audit; it had
+    been false since the page landed.
 12. Extend the radio side. **This item was wrong and stayed wrong for a while:** it claimed
     nothing lists what the speaker holds and a preset can only be recalled by a known number.
     `wambridge --tunein-list` has listed them all along, paginated and with the service
@@ -373,6 +377,18 @@ operating system records.
     that still says no write API is known) and **browsing the catalogue** for stations not
     already saved (`GetUpperRadioList`, `GetCurrentRadioList`, `SetSelectRadio`,
     `GetGenreStations`, `SearchQuery`). A dockable panel still waits on output transport.
+
+    Order agreed for the mobile side, largest gain first: read-only browsing
+    (`GetUpperRadioList`, `GetCurrentRadioList`), then search, then a browsing UI once the
+    structure is understood, and only then writing or removing presets. That is a bigger step
+    than further cosmetic work on the renderer.
+
+    The concrete want behind this is the **physical Radio button**, which cycles the three
+    presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
+    already readable with `--tunein-list`; what is missing is putting a different station
+    there without Samsung's app. `WAM_PROTOCOL.md` has the three write commands, the shape of
+    `SetSavePreset` (no arguments - it stores whatever is selected), and an ordered way to
+    find out whether `SetMovePreset` can simply promote a `my` entry into slots 0-2.
 13. ~~**Take the Samsung Android app apart.**~~ **Done 2026-08-19.** 242 commands recovered
     and written up in `WAM_PROTOCOL.md`; 26 of them were already in use here. What follows from
     it is spread across items 7, 12 and the new item 15 rather than kept as one lump.
