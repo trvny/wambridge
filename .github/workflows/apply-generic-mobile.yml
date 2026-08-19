@@ -1,0 +1,66 @@
+name: Apply generic mobile renderer changes
+
+on:
+  push:
+    branches:
+      - mobile-generic-renderer
+    paths:
+      - ".github/workflows/apply-generic-mobile.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Broaden the mobile renderer
+        shell: python
+        run: |
+          from pathlib import Path
+
+          replacements = {
+              Path("mobile/app/src/main/java/io/github/trvny/wambridge/mobile/UpnpRenderer.kt"): [
+                  (
+                      'private const val SINK_PROTOCOLS = "http-get:*:audio/wav:*,http-get:*:audio/x-wav:*,http-get:*:audio/L16:*"',
+                      'private const val SINK_PROTOCOLS = "http-get:*:audio/wav:*,http-get:*:audio/x-wav:*,http-get:*:audio/L16:*,http-get:*:audio/mpeg:*,http-get:*:audio/flac:*,http-get:*:audio/x-flac:*"',
+                  ),
+              ],
+              Path("mobile/app/src/main/java/io/github/trvny/wambridge/mobile/RendererService.kt"): [
+                  ('publish("Streaming Neutron → M5")', 'publish("Streaming player → M5")'),
+                  ('publish("Streaming Neutron → M5 · confirmed")', 'publish("Streaming player → M5 · confirmed")'),
+              ],
+              Path("mobile/app/src/main/java/io/github/trvny/wambridge/mobile/MainActivity.kt"): [
+                  ('text = "\\nNeutron → UPnP/DLNA → WAM Bridge → Samsung M5"', 'text = "\\nUPnP/DLNA player → WAM Bridge → Samsung M5"'),
+                  (
+                      'text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Default output settings are supported; WAV and LPCM/L16 are handled by the adapter."',
+                      'text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Other local UPnP/DLNA players can use the same renderer; WAV/L16, MP3 and FLAC are advertised."',
+                  ),
+              ],
+              Path("mobile/README.md"): [
+                  ('- First target: Neutron Music Player -> UPnP/DLNA -> Samsung Shape M5.', '- Confirmed target: Neutron Music Player -> UPnP/DLNA -> Samsung Shape M5; other local UPnP/DLNA players can use the same renderer.'),
+                  ('- a local WAV/LPCM proxy handed to the M5 through `SetUrlPlayback`;', '- a local WAV/LPCM, MP3 and FLAC proxy handed to the M5 through `SetUrlPlayback`;'),
+                  ('Neutron / other UPnP-DLNA player', 'Local UPnP/DLNA player'),
+              ],
+          }
+
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding="utf-8")
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f"Expected text missing in {path}: {old}")
+                  text = text.replace(old, new)
+              path.write_text(text, encoding="utf-8")
+
+      - name: Commit result and remove helper workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-generic-mobile.yml
+          git add mobile
+          git commit -m "Broaden mobile UPnP renderer compatibility"
+          git push
