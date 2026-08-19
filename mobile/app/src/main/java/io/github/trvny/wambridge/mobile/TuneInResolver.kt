@@ -58,7 +58,62 @@ internal object TuneInResolver {
     /** Ask TuneIn for the current stream URLs of one station id. */
     fun resolve(context: Context, tuneInId: String): List<String> {
         validateTuneInId(tuneInId)
-        val url = URL("$TUNE_URL?id=$tuneInId&formats=$DIRECT_FORMATS")
+        val body = readText(context, URL("$TUNE_URL?id=$tuneInId&formats=$DIRECT_FORMATS"))
+        return parseAnswer(context, body, tuneInId)
+    }
+
+    private fun parseAnswer(context: Context, body: String, tuneInId: String): List<String> {
+        val urls = LinkedHashSet<String>()
+        for (line in body.lineSequence()) {
+            val candidate = line.trim()
+            if (candidate.isEmpty() || candidate.startsWith("#")) continue
+            if (!candidate.startsWith("http://") && !candidate.startsWith("https://")) continue
+            if (isHls(candidate)) {
+                Log.d(TAG, "Skipping HLS variant for $tuneInId: $candidate")
+                continue
+            }
+            // The HLS rule applies to whatever a PLS file holds as well, not
+            // only to the addresses TuneIn answers with directly.
+            for (expanded in expandPls(context, candidate)) {
+                if (isHls(expanded)) continue
+                urls += expanded
+            }
+        }
+        return urls.toList()
+    }
+
+    /**
+     * Return the stream URLs inside a PLS playlist, or the URL unchanged.
+     *
+     * TuneIn answers for some stations with a `.pls` file rather than a stream.
+     * The relay copies bytes straight through, so handing one over sends the M5
+     * a text file instead of audio - measured on Czworka, whose `listen.pls`
+     * holds a single `File1=` that plays fine.
+     *
+     * A playlist that cannot be fetched or holds nothing usable falls back to
+     * the original URL, so this can only ever add candidates, never remove one.
+     */
+    private fun expandPls(context: Context, url: String): List<String> {
+        if (!url.substringBefore('?').endsWith(".pls", ignoreCase = true)) return listOf(url)
+        val body = try {
+            readText(context, URL(url))
+        } catch (error: Exception) {
+            Log.d(TAG, "Could not read PLS playlist $url: ${error.message}")
+            return listOf(url)
+        }
+        val entries = LinkedHashSet<String>()
+        for (line in body.lineSequence()) {
+            val entry = line.trim()
+            if (!entry.startsWith("file", ignoreCase = true)) continue
+            val value = entry.substringAfter('=', "").trim()
+            if (value.startsWith("http://") || value.startsWith("https://")) entries += value
+        }
+        return if (entries.isEmpty()) listOf(url) else entries.toList()
+    }
+
+    private fun isHls(url: String): Boolean = url.contains(".m3u8", ignoreCase = true)
+
+    private fun readText(context: Context, url: URL): String {
         var lastError: Exception? = null
 
         for (connection in WifiLan.openHttpConnections(context.applicationContext, url)) {
@@ -72,9 +127,9 @@ internal object TuneInResolver {
             }
             try {
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                    throw IOException("TuneIn HTTP ${connection.responseCode}")
+                    throw IOException("HTTP ${connection.responseCode} from $url")
                 }
-                return parsePlaylist(connection.inputStream.use(::readLimited), tuneInId)
+                return connection.inputStream.use(::readLimited)
             } catch (error: Exception) {
                 lastError = error
             } finally {
@@ -82,21 +137,6 @@ internal object TuneInResolver {
             }
         }
         throw lastError ?: IOException("No active Wi-Fi network")
-    }
-
-    private fun parsePlaylist(body: String, tuneInId: String): List<String> {
-        val urls = LinkedHashSet<String>()
-        for (line in body.lineSequence()) {
-            val candidate = line.trim()
-            if (candidate.isEmpty() || candidate.startsWith("#")) continue
-            if (!candidate.startsWith("http://") && !candidate.startsWith("https://")) continue
-            if (candidate.contains(".m3u8", ignoreCase = true)) {
-                Log.d(TAG, "Skipping HLS variant for $tuneInId: $candidate")
-                continue
-            }
-            urls += candidate
-        }
-        return urls.toList()
     }
 
     private fun readLimited(input: InputStream): String {
