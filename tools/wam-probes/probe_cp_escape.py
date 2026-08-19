@@ -126,9 +126,24 @@ def main() -> None:
                 return
         print("\n   Zaden objazd nie pomogl - wtedy dopiero zostaje wyjecie z pradu.")
     finally:
-        if baseline.isdigit():
+        # Kolejnosc jest tu cala trescia. Pierwsza wersja oddawala glosnosc, nie
+        # zatrzymawszy strumienia - czyli podkrecala to, co wlasnie gralo, zamiast
+        # posprzatac. Najpierw wiec cisza: objazd SetFunc konczy odtwarzanie i wraca
+        # do `dlna`, co i tak jest stanem, w ktorym glosnik ma zostac.
+        call("UIC", "SetFunc", [("function", "bt", "str")])
+        time.sleep(2.0)
+        call("UIC", "SetFunc", [("function", "wifi", "str")])
+        time.sleep(1.0)
+        # I nie podnosimy glosnosci w gore na slepo. `baseline` bywa artefaktem: odczyt
+        # tuz po wyjeciu z pradu daje wartosc wlaczeniowa, nie to, co ktos ustawil.
+        if baseline.isdigit() and int(baseline) <= TEST_VOLUME:
             call("UIC", "SetVolume", [("volume", int(baseline), "dec")])
-            print(f"\nglosnosc przywrocona do {baseline}")
+            print(f"\nglosnosc oddana: {baseline}")
+        else:
+            print(
+                f"\nglosnosc zostaje na {TEST_VOLUME}; przed testem bylo "
+                f"{baseline or '?'}, a podnoszenie na koniec juz raz zrobilo krzywde"
+            )
 
 
 if __name__ == "__main__":
