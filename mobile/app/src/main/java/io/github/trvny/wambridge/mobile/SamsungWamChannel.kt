@@ -71,6 +71,13 @@ internal class SamsungWamChannel(
         )
     }
 
+    fun selectFunction(function: String) {
+        send(
+            method = "SetFunc",
+            arguments = listOf(Argument("function", function, Kind.STR)),
+        )
+    }
+
     fun setVolumeRaw(step: Int) {
         require(step in 0..30) { "M5 volume step must be 0..30" }
         send(

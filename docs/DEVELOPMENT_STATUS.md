@@ -388,10 +388,11 @@ operating system records.
     structure is understood, and only then writing or removing presets. That is a bigger step
     than further cosmetic work on the renderer.
 
-    **Open, small, and asked for while testing on 2026-08-19: the mobile radio screen has no
-    stop button.** A preset started from `wambridge-mobile` cannot be stopped from the same
-    screen. `RendererService` already has `ACTION_STOP` wired to a notification action, so the
-    gap is the radio UI rather than the transport.
+    ~~**Open, small, and asked for while testing on 2026-08-19: the mobile radio screen has no
+    stop button.**~~ **Wired up 2026-08-19, unmeasured on hardware.** `TuneInActivity` now
+    carries a Stop button beside Refresh, and it stops the preset the only way that works on
+    this firmware: `SetFunc bt`, a two-second pause, `SetFunc wifi`. Neither `SetPlaybackControl
+    stop` variant moves it - see the `cp` section of `WAM_PROTOCOL.md` for the measurements.
 
     **Next concrete step, agreed 2026-08-19: a TuneIn id in the station store.**
     `RadioStation` already carries `url` and `fallback_urls`. Adding the station's TuneIn id
