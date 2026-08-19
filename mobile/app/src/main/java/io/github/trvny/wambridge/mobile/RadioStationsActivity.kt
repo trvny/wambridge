@@ -1,10 +1,7 @@
 package io.github.trvny.wambridge.mobile
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.widget.Button
@@ -85,9 +82,9 @@ class RadioStationsActivity : Activity() {
     }
 
     private fun saveStation() {
-        val alias = aliasInput.text.toString()
-        val urls = urlsInput.text.toString().lines()
-        val result = runCatching { store.upsert(alias, urls) }
+        val result = runCatching {
+            store.upsert(aliasInput.text.toString(), urlsInput.text.toString().lines())
+        }
         result.fold(
             onSuccess = { station ->
                 aliasInput.text.clear()
@@ -156,7 +153,6 @@ class RadioStationsActivity : Activity() {
             return
         }
 
-        requestNotificationPermissionIfNeeded()
         startForegroundService(
             Intent(this, RadioService::class.java).apply {
                 action = RadioService.ACTION_PLAY
@@ -183,17 +179,5 @@ class RadioStationsActivity : Activity() {
         } else {
             "○ ${RadioService.lastStatus}"
         }
-    }
-
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
-        }
-    }
-
-    companion object {
-        private const val NOTIFICATION_PERMISSION_REQUEST = 502
     }
 }
