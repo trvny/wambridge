@@ -23,16 +23,6 @@ jobs:
 
           manifest = Path("mobile/app/src/main/AndroidManifest.xml")
           text = manifest.read_text(encoding="utf-8")
-          old = '''        <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <intent-filter>'''
-          new = '''        <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <intent-filter>'''
-          if old not in text:
-              raise SystemExit("MainActivity declaration not found")
           marker = '''        </activity>
 
         <activity-alias'''
