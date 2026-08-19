@@ -79,6 +79,7 @@
       <ForcedIncludeFiles>wam_write_probe.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ClCompile Include="wam_menu.cpp" />
+    <ClCompile Include="wam_preferences.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="$(FoobarSdkRoot)\pfc\pfc.vcxproj">
