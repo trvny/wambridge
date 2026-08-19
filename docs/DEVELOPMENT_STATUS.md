@@ -393,6 +393,8 @@ operating system records.
     carries a Stop button beside Refresh, and it stops the preset the only way that works on
     this firmware: `SetFunc bt`, a two-second pause, `SetFunc wifi`. Neither `SetPlaybackControl
     stop` variant moves it - see the `cp` section of `WAM_PROTOCOL.md` for the measurements.
+    Nothing on that channel acknowledges a command, so the screen reads the result back with
+    `GetFunc` and reports the `function` and `submode` it got rather than assuming a stop.
 
     **Next concrete step, agreed 2026-08-19: a TuneIn id in the station store.**
     `RadioStation` already carries `url` and `fallback_urls`. Adding the station's TuneIn id

@@ -22,6 +22,9 @@ internal class SamsungWamChannel(
         fun onReportedError(method: String?, code: String)
     }
 
+    /** What `GetFunc` answered: the selected source and, on wifi, its submode. */
+    data class FunctionState(val function: String?, val submode: String?)
+
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
     private val sendLock = Any()
@@ -304,8 +307,44 @@ internal class SamsungWamChannel(
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
         )
         private val SUCCESS_ERROR_CODES = setOf("0", "00", "000", "0000")
+        private val FUNCTION_REGEX = Regex("<function>([^<]*)</function>", RegexOption.IGNORE_CASE)
+        private val SUBMODE_REGEX = Regex("<submode>([^<]*)</submode>", RegexOption.IGNORE_CASE)
 
         fun newClientUuid(): String = UUID.randomUUID().toString()
+
+        /**
+         * Read the selected source back with `GetFunc`. Commands sent over the
+         * persistent channel are never acknowledged to the caller, so a refused
+         * `SetFunc` is indistinguishable from an accepted one until this is read.
+         */
+        fun readFunction(context: Context, speakerIp: String): FunctionState {
+            val command = Uri.encode("<name>GetFunc</name>")
+            val url = URL("http://$speakerIp:$PORT/UIC?cmd=$command")
+            var lastError: Exception? = null
+            for (connection in WifiLan.openHttpConnections(context.applicationContext, url)) {
+                connection.apply {
+                    connectTimeout = CONNECT_TIMEOUT_MS
+                    readTimeout = CONNECT_TIMEOUT_MS
+                    useCaches = false
+                    requestMethod = "GET"
+                }
+                try {
+                    if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                        throw IOException("WAM HTTP ${connection.responseCode}")
+                    }
+                    val body = connection.inputStream.use { it.bufferedReader().readText() }
+                    return FunctionState(
+                        function = FUNCTION_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim(),
+                        submode = SUBMODE_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim(),
+                    )
+                } catch (error: Exception) {
+                    lastError = error
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            throw lastError ?: IOException("No active Wi-Fi network")
+        }
 
         fun probe(context: Context, speakerIp: String): Boolean {
             val command = Uri.encode("<name>GetSpkName</name>")

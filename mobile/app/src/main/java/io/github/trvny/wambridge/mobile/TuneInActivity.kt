@@ -161,9 +161,7 @@ class TuneInActivity : Activity() {
             runOnUiThread {
                 setButtonsEnabled(true)
                 result.fold(
-                    onSuccess = {
-                        statusView.text = "Playback stopped; the speaker is back on wifi · dlna."
-                    },
+                    onSuccess = { report -> statusView.text = report },
                     onFailure = { error ->
                         statusView.text = "Could not stop playback: ${error.message ?: error.javaClass.simpleName}"
                     },
@@ -172,7 +170,7 @@ class TuneInActivity : Activity() {
         }, "wam-mobile-tunein-stop").start()
     }
 
-    private fun endSpeakerPlayback(target: String) {
+    private fun endSpeakerPlayback(target: String): String {
         val clientUuid = preferences.getString(KEY_CLIENT_UUID, null)
             ?: SamsungWamChannel.newClientUuid().also {
                 preferences.edit().putString(KEY_CLIENT_UUID, it).apply()
@@ -189,10 +187,35 @@ class TuneInActivity : Activity() {
             channel.selectFunction("bt")
             Thread.sleep(FUNCTION_SETTLE_MS)
             channel.selectFunction("wifi")
-            // Sends are fire-and-forget here, so let the last one leave before the close.
-            Thread.sleep(CHANNEL_DRAIN_MS)
+            // Sends are fire-and-forget here, so let the last one leave before the socket
+            // closes, and give the speaker the same moment to settle before it is asked.
+            Thread.sleep(FUNCTION_SETTLE_MS)
         } finally {
             channel.close()
+        }
+
+        // A write that left the phone is not a stop. Neither SetFunc is acknowledged to
+        // the caller on this channel, so the state is read back and only what GetFunc
+        // actually answered gets reported.
+        val state = runCatching { SamsungWamChannel.readFunction(applicationContext, target) }
+        val reading = state.fold(
+            onSuccess = { read ->
+                "function=${read.function.orEmpty().ifBlank { "?" }} · " +
+                    "submode=${read.submode.orEmpty().ifBlank { "(empty)" }}"
+            },
+            onFailure = { error ->
+                "GetFunc did not answer: ${error.message ?: error.javaClass.simpleName}"
+            },
+        )
+        val stopped = state.getOrNull()?.let { read ->
+            read.function.equals("wifi", ignoreCase = true) &&
+                !read.submode.isNullOrBlank() &&
+                !read.submode.equals("cp", ignoreCase = true)
+        } == true
+        return if (stopped) {
+            "Playback stopped · $reading"
+        } else {
+            "SetFunc bt/wifi sent, but the stop could not be confirmed · $reading"
         }
     }
 
@@ -240,7 +263,6 @@ class TuneInActivity : Activity() {
     companion object {
         private const val OWNER_STOP_TIMEOUT_MS = 2_500L
         private const val FUNCTION_SETTLE_MS = 2_000L
-        private const val CHANNEL_DRAIN_MS = 250L
         private const val KEY_CLIENT_UUID = "tunein_client_uuid"
     }
 }
