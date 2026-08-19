@@ -26,6 +26,68 @@ class FoobarSourceTests(TestCase):
             source,
         )
 
+    def test_failed_helper_starts_are_budgeted_outside_the_output_object(
+        self,
+    ) -> None:
+        # Reporting a failure throws exception_output_invalidated, and foobar
+        # answers that by building a fresh output object. A counter owned by
+        # that object is back at zero on every retry, which is why 77 restarts
+        # fitted into 90 seconds. File scope is the whole point here.
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertNotIn("m_consecutiveFailedStarts", source)
+        self.assertRegex(
+            source,
+            r"(?m)^std::atomic<int> g_consecutiveFailedStarts",
+            "the budget has to sit at file scope to survive the rebuild",
+        )
+
+        # Charged on the way into a start, not where a death is noticed. A dead
+        # helper surfaces in three different places and the protocol reader
+        # usually wins the race, so counting at the point of death left the
+        # budget at zero in exactly the case this exists for.
+        self.assertEqual(
+            source.count("g_consecutiveFailedStarts.fetch_add"),
+            1,
+            "exactly one place may charge the budget",
+        )
+        self.assertIn("static void note_start_attempt()", source)
+        # Charged at the spawn itself. flush() bumps the generation and zeroes
+        # the format, so the attempt that spawned a helper is routinely
+        # abandoned before any later verdict could be recorded; accounting that
+        # waited for one lost roughly two charges in three.
+        self.assertIn("note_start_attempt();", source)
+
+        # Reaching PLAYING is the only success, and a teardown the listener
+        # asked for is neither a success nor a failure.
+        self.assertIn("g_consecutiveFailedStarts.store(0);", source)
+        # Nothing exempts a start from the verdict except reaching PLAYING.
+        # flush() clears m_failure and raises m_restart, and foobar calls it on
+        # the failure path, so every other discriminator erased the verdict
+        # exactly when it was needed.
+        self.assertNotIn("forget_pending_start", source)
+        self.assertNotIn("g_startAwaitingVerdict", source)
+        # Two resets and no third: reaching PLAYING refunds the budget, and
+        # decay drops one nothing has topped up for a while. Anything else
+        # zeroing it silently is the bug this test exists for.
+        self.assertEqual(
+            source.count("g_consecutiveFailedStarts.store(0)"),
+            2,
+            "only PLAYING and the decay may zero the budget",
+        )
+        self.assertIn("static void decay_failed_starts()", source)
+
+        # The retry waits, the wait has a ceiling, and the ceiling is short
+        # enough that an ordinary press of play is never left in silence.
+        self.assertIn("wait_out_failed_start_backoff(", source)
+        ceiling = re.search(
+            r"kMaxFailedStartBackoff\{(\d+)\}",
+            source,
+        )
+        assert ceiling is not None
+        self.assertLessEqual(int(ceiling.group(1)), 10_000)
+        self.assertIn("decay_failed_starts", source)
+
     def test_clock_counters_are_logged_once_per_second(self) -> None:
         # A physical run showed foobar advancing at a median 11x while every
         # clock term stayed unmeasured. These counters are how the runaway

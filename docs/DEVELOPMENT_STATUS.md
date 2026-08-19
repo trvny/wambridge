@@ -242,6 +242,32 @@ Each of these cost real time and each is closed by measurement, not by argument.
 | How to tell whether the LED is lit | `GetMute`: `on` = dark, `off` = lit. Read-only commands do not wake a dark speaker; whether they reset the idle countdown on a lit one is unknown, so measure with one late reading, not a poll loop. Caveat: this component **also mutes deliberately** - `standby` sends `set_mute(True)` - so `mute=on` proves dark only when nothing has just muted it | `WAM_PROTOCOL.md` |
 | Do hard-killed sessions wedge the speaker | No. 78 killed helpers left 29 sockets in `TIME_WAIT`, then one normal stop and it went dark unaided within ten minutes | `WAM_PROTOCOL.md` |
 
+## Measured: the helper restart loop, and why a counter could not stop it
+
+Killing one `wambridge-pcm.exe` while foobar played produced **77 restarts in 90 seconds**,
+about one a second, and after the killing stopped the loop carried on by itself at one death
+every 25 seconds (2026-08-16). No FFmpeg process ever appeared - the helper died before
+encoding. Only stopping playback in foobar ended it.
+
+The damage was not confined to this side. Each death left a socket in `TIME_WAIT` to port
+55001, 29 of them at the peak, and at that point **the speaker stopped answering commands
+altogether** for the first time we have seen; it came back slower than usual, 0.14-0.26 s
+against the normal 0.02-0.12 s. The front LED was still lit four minutes after the last death.
+
+What kept it going is worth stating plainly, because it defeats the obvious fix: reporting a
+failure throws `exception_output_invalidated`, and foobar answers that by **constructing a new
+output object**. A retry counter held in that object is therefore zero again on every attempt,
+which is why the retries never slowed down. The budget has to outlive the rebuild, so it lives
+at file scope.
+
+The discriminator is `PLAYING`. A helper that reached it and then exited is the speaker ending
+a stream, and restarting immediately is the recovery that works - about two and a half seconds
+of silence and audio is back. Only starts that never got there are counted, and they are held
+off by a doubling wait from half a second up to a ceiling. The wait is interruptible, so
+stopping, seeking or changing format all cut it short.
+
+Not yet run against the physical M5.
+
 ## Open, in the order that makes sense
 
 1. **Physical checklist for PR #30** (routed volume slider). It changes `volume_set` and the
