@@ -823,6 +823,49 @@ entirely for 20-30 seconds while `UIC` keeps replying normally, then it recovers
 empty level is therefore not proof of an empty category, which is why the probe retries before
 believing it.
 
+### Searching the catalogue by name
+
+**Measured 2026-08-20** with `tools/wam-probes/probe_radio_search.py`. Command shapes from the
+official app's DEX; the app has four variants of `SearchQuery`, differing only in an extra
+`cat`, `searchtype` or `type` parameter.
+
+```text
+CPM?cmd=<name>SearchQuery</name>
+       <p type="str" name="query"      val="%s"/>
+       <p type="dec" name="startindex" val="%d"/>
+       <p type="dec" name="listcount"  val="%d"/>
+       [<p type="str" name="type" val="fast"/>]
+```
+
+It works, and it is paginated: `Trojka` returned `totallistcount=66`. Adding `type=fast` changed
+nothing measurable on that query, so nothing here depends on it.
+
+`GetGenreStations` takes no arguments and **refuses cleanly**: `GenreStations` with
+`"API not implemented for current service."` That is a real answer rather than the silence an
+unknown command produces, so the command exists and TuneIn simply does not serve it.
+
+`GlobalSearch` was not reached. It wants `cpnames` as `str_arr`, and `build_command` in
+`samsung.py` only emits `str`, `dec` and `cdata` - sending it as a plain `str` timed out. Adding
+array support is the prerequisite, not a bug in the call.
+
+**The result list mixes three things, and telling them apart matters:**
+
+```text
+[  0] type=0  (no mediaid)   Artist: Trojka          <- category, descend into it
+[  2] type=2  s15984         PR3 Trójka              <- a station
+[  5] type=2  t566837007     Vašo Patejdl            <- a podcast episode
+```
+
+`type="2"` covers both stations and episodes; the discriminator is the `mediaid` prefix, `s`
+against `t`. An episode is not a live stream, so a client filtering only on `type` will offer
+dead entries. This is the measurement behind `stations.py:validate_tunein_id` accepting `s…`
+alone - a rule that was written on the assumption and is now grounded.
+
+**What this completes.** Search returns `mediaid`, `mediaid` resolves through `Tune.ashx` to a
+stream URL, and that URL goes to `SetUrlPlayback`. Finding a station by name therefore needs
+neither the browse tree nor a preset write - the station the owner cares about, `s15984`, came
+back as the third hit for its own name.
+
 ### What can and cannot go under the physical Radio button
 
 **Measured 2026-08-19.** The button plays presets, presets are TuneIn catalogue entries, and
