@@ -40,6 +40,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
                 startPending.set(false)
                 execute {
                     stopRadio()
+                    lastStatus = "Stopped"
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -176,7 +177,8 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     override fun onProxyError(message: String) = execute {
         if (destroyed || !running) return@execute
         lastStatus = "Radio error: $message"
-        publish(lastStatus)
+        stopRadio()
+        stopSelf()
     }
 
     override fun onPlaybackStarted() = execute {
@@ -194,7 +196,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     }
 
     private fun stopRadio(removeForeground: Boolean = true) {
-        if (safeVolumeApplied) {
+        if (channel != null) {
             runCatching { channel?.pause() }
         }
         safeVolumeApplied = false
