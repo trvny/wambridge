@@ -32,7 +32,19 @@ ZIP member timestamps are UTC; installed Windows timestamps on the test machine 
 
 ## Configure
 
-Create `%LOCALAPPDATA%\WAMBridge\foobar.ini`:
+Open:
+
+```text
+Preferences -> Playback -> Output -> WAM Bridge
+```
+
+The page edits the existing `%LOCALAPPDATA%\WAMBridge\foobar.ini`, so existing manual
+configuration stays compatible. It exposes the device profile, stream format, startup
+volume, hardware volume routing and limits, startup silence, extra buffer, sleep-after-stop,
+diagnostics and the optional PCM helper override. Reset returns the page to component
+defaults and removes redundant default-valued keys from the INI.
+
+The file can still be edited directly:
 
 ```ini
 [wambridge]
@@ -40,17 +52,12 @@ device=M5
 volume=3
 ```
 
-The M5 uses raw volume steps `0..30`; `3` is roughly 10 percent. Values above 30 are
-silently clamped to maximum. Model-aware percentage conversion is not implemented.
+`WAMBRIDGE_*` environment overrides still take precedence over values saved by the page;
+the page calls this out when one is active. Changes take effect on the next playback
+session.
 
-Environment overrides:
-
-```text
-WAMBRIDGE_PCM
-WAMBRIDGE_CONTROL
-WAMBRIDGE_DEVICE
-WAMBRIDGE_VOLUME
-```
+The M5 uses raw volume steps `0..30`; `3` is roughly 10 percent. Model-aware percentage
+conversion is not implemented.
 
 ## WAM controls
 
