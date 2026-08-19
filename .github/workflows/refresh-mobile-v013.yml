@@ -1,5 +1,6 @@
 name: Refresh mobile v0.1.3 asset
 
+# One-shot release asset refresh.
 on:
   push:
     branches:
