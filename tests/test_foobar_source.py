@@ -31,25 +31,50 @@ class FoobarSourceTests(TestCase):
     ) -> None:
         # Reporting a failure throws exception_output_invalidated, and foobar
         # answers that by building a fresh output object. A counter owned by
-        # that object is therefore back at zero on every retry, which is why 77
-        # restarts fitted into 90 seconds. File scope is the whole point here.
+        # that object is back at zero on every retry, which is why 77 restarts
+        # fitted into 90 seconds. File scope is the whole point here.
         source = SOURCE.read_text(encoding="utf-8")
 
-        self.assertIn(
-            "std::atomic<int> g_consecutiveFailedStarts{0};",
+        self.assertNotIn("m_consecutiveFailedStarts", source)
+        self.assertRegex(
+            source,
+            r"(?m)^std::atomic<int> g_consecutiveFailedStarts",
+            "the budget has to sit at file scope to survive the rebuild",
+        )
+
+        # Charged on the way into a start, not where a death is noticed. A dead
+        # helper surfaces in three different places and the protocol reader
+        # usually wins the race, so counting at the point of death left the
+        # budget at zero in exactly the case this exists for.
+        self.assertEqual(
+            source.count("g_consecutiveFailedStarts.fetch_add"),
+            1,
+            "exactly one place may charge the budget",
+        )
+        charge = source.index("g_consecutiveFailedStarts.fetch_add")
+        helper = source.index("static void note_failed_start()")
+        self.assertLess(helper, charge)
+        self.assertIn("g_startAwaitingVerdict.exchange(false)", source)
+
+        # Reaching PLAYING is the only success, and a teardown the listener
+        # asked for is neither a success nor a failure.
+        self.assertIn("g_consecutiveFailedStarts.store(0);", source)
+        self.assertGreaterEqual(
+            source.count("forget_pending_start();"),
+            4,
+            "every deliberate teardown has to drop the pending verdict",
+        )
+
+        # The retry waits, the wait has a ceiling, and the ceiling is short
+        # enough that an ordinary press of play is never left in silence.
+        self.assertIn("wait_out_failed_start_backoff(", source)
+        ceiling = re.search(
+            r"kMaxFailedStartBackoff\{(\d+)\}",
             source,
         )
-        self.assertNotIn("m_consecutiveFailedStarts", source)
-        # Only a helper that never reached PLAYING counts as a failed start;
-        # one that played and then exited is the speaker ending a stream, and
-        # restarting it immediately is the recovery that works.
-        self.assertIn("const bool reachedPlaying = m_childReachedPlaying.load();", source)
-        self.assertIn("g_consecutiveFailedStarts.fetch_add(1);", source)
-        self.assertIn("g_consecutiveFailedStarts.store(0);", source)
-        # And the retry waits rather than spinning.
-        self.assertIn("wait_out_failed_start_backoff(", source)
-        self.assertIn("kFirstFailedStartBackoff", source)
-        self.assertIn("kMaxFailedStartBackoff", source)
+        assert ceiling is not None
+        self.assertLessEqual(int(ceiling.group(1)), 10_000)
+        self.assertIn("decay_failed_starts", source)
 
     def test_clock_counters_are_logged_once_per_second(self) -> None:
         # A physical run showed foobar advancing at a median 11x while every

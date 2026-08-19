@@ -117,13 +117,18 @@ constexpr DWORD kActiveShutdownGraceMs = 6000;
 constexpr DWORD kTerminatedShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
 // How long to wait before launching another helper after one died without ever
-// reaching PLAYING. Doubling from half a second, capped, so a transient failure
-// costs almost nothing and a persistent one stops being a hammer: the first
-// retry is immediate, then 0.5 s, 1 s, 2 s, 4 s and so on up to the ceiling.
-// The wait is interruptible - stopping, seeking or changing format all cut it
-// short - so this never delays anything the listener asked for.
+// reaching PLAYING. Doubling from half a second, capped: the first relaunch
+// waits 0.5 s, then 1 s, 2 s, 4 s, and everything after that sits at the
+// ceiling. The wait is interruptible - stopping, seeking or changing format all
+// cut it short - so nothing the listener asked for is delayed by it.
+//
+// The ceiling is deliberately low, and the decay is the other half of the same
+// argument: a run of failures that stopped mattering must not leave a later,
+// perfectly ordinary press of play sitting in silence. Once nothing has failed
+// for kFailedStartDecay the budget is forgotten and the next start is free.
 constexpr std::chrono::milliseconds kFirstFailedStartBackoff{500};
-constexpr std::chrono::milliseconds kMaxFailedStartBackoff{30000};
+constexpr std::chrono::milliseconds kMaxFailedStartBackoff{8000};
+constexpr std::chrono::milliseconds kFailedStartDecay{60000};
 
 // {B768F82C-A6B7-436F-965D-6C8D1B21B91D}
 constexpr GUID kOutputGuid = {
@@ -258,6 +263,16 @@ std::atomic<int> g_volumeMax{kDefaultVolumeMax};
 // recovery that works and gets audio back in about two and a half seconds. Only
 // starts that never got there count here.
 std::atomic<int> g_consecutiveFailedStarts{0};
+// Set the moment a helper process exists, cleared by whatever settles its fate:
+// reaching PLAYING clears it as a success, a deliberate teardown clears it as
+// nothing at all, and anything else leaves it set so the next start_child
+// charges it. That indirection is the point. A dead helper is noticed in three
+// different places and the protocol reader usually gets there first, so a
+// counter maintained where the death is seen stayed at zero in exactly the
+// scenario it was written for.
+std::atomic<bool> g_startAwaitingVerdict{false};
+// steady_clock milliseconds of the last charged failure, 0 when there is none.
+std::atomic<long long> g_lastFailedStartMs{0};
 
 // Moves foobar's own slider. playback_control is a main-thread interface and
 // the dispatcher runs on its own thread, so the change is handed over rather
@@ -354,6 +369,14 @@ public:
         cancel_child();
         m_cv.notify_all();
         if (m_worker.joinable()) m_worker.join();
+        {
+            // Asked rather than always forgotten: foobar destroys and rebuilds
+            // the output object after every reported failure, and surviving
+            // that rebuild is the entire reason the budget lives at file
+            // scope. Only a teardown with nothing wrong behind it is free.
+            std::lock_guard lock(m_mutex);
+            if (m_failure.empty()) forget_pending_start();
+        }
         stop_child();
     }
 
@@ -895,7 +918,9 @@ private:
                     m_childReachedPlaying.store(true);
                     // Reaching PLAYING is the only thing that proves a start
                     // worked, so it is the only thing that clears the budget.
+                    g_startAwaitingVerdict.store(false);
                     g_consecutiveFailedStarts.store(0);
+                    g_lastFailedStartMs.store(0);
                     // Not when the helper was launched: between the spawn and
                     // this line the level has not been applied yet, so a seek
                     // in that window would hand the replacement a raised clamp
@@ -1015,6 +1040,36 @@ private:
         return command;
     }
 
+    static long long steady_now_ms() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    }
+
+    // Drop a budget nothing has topped up for a while. Without this a burst of
+    // failures would still be taxing an unrelated press of play an hour later.
+    static void decay_failed_starts() {
+        const long long last = g_lastFailedStartMs.load();
+        if (last == 0) return;
+        if (steady_now_ms() - last <= kFailedStartDecay.count()) return;
+        g_consecutiveFailedStarts.store(0);
+        g_lastFailedStartMs.store(0);
+    }
+
+    // The previous helper existed and never proved itself. Charge it.
+    static void note_failed_start() {
+        decay_failed_starts();
+        g_consecutiveFailedStarts.fetch_add(1);
+        g_lastFailedStartMs.store(steady_now_ms());
+    }
+
+    // The previous helper is being put down on purpose - the listener stopped,
+    // seeked, changed format, or foobar is closing. That is not a failed start
+    // and must not be charged as one.
+    static void forget_pending_start() {
+        g_startAwaitingVerdict.store(false);
+    }
+
     // Hold off before launching another helper when the previous ones died
     // without ever playing. Returns false when the wait ended because this
     // start became obsolete - shutdown, a seek, a format change or a failure
@@ -1025,6 +1080,7 @@ private:
         unsigned sampleRate,
         unsigned channels
     ) {
+        decay_failed_starts();
         const int failures = g_consecutiveFailedStarts.load();
         if (failures <= 0) return true;
 
@@ -1060,6 +1116,15 @@ private:
                 !session_matches_locked(generation, sampleRate, channels)) {
                 return false;
             }
+        }
+
+        // Settle the previous launch here rather than where its death was
+        // noticed. start_child is the single funnel every helper passes
+        // through, so charging on the way in covers all three teardown paths
+        // and does not care which thread saw the corpse first.
+        if (g_startAwaitingVerdict.exchange(false)) note_failed_start();
+        if (!wait_out_failed_start_backoff(generation, sampleRate, channels)) {
+            return false;
         }
 
         m_childStopping.store(false);
@@ -1218,13 +1283,22 @@ private:
             m_childStdout = stdoutRead;
         }
 
+        // A helper process exists from here on, so from here on its fate is
+        // owed to the budget.
+        g_startAwaitingVerdict.store(true);
+
         bool stale = false;
+        bool alreadyFailed = false;
         {
             std::lock_guard lock(m_mutex);
-            stale = m_shutdown || m_restart || !m_failure.empty() ||
+            alreadyFailed = !m_failure.empty();
+            stale = m_shutdown || m_restart || alreadyFailed ||
                 !session_matches_locked(generation, sampleRate, channels);
         }
         if (stale) {
+            // Abandoning a helper because the session moved on is not the
+            // helper failing to start - unless a failure is what moved it on.
+            if (!alreadyFailed) forget_pending_start();
             m_childStopping.store(true);
             stop_child();
             return false;
@@ -1359,7 +1433,11 @@ private:
                 generation = m_generation;
             }
 
-            if (restart) stop_child();
+            if (restart) {
+                // A seek or a format change, asked for by the listener.
+                forget_pending_start();
+                stop_child();
+            }
             if (sampleRate == 0 || channels == 0) continue;
 
             bool flushing = false;
@@ -1369,16 +1447,14 @@ private:
             }
             const auto childState = child_state();
             if (childState == ChildState::exited) {
-                // Read before stop_child, which clears the flag.
-                const bool reachedPlaying = m_childReachedPlaying.load();
+                // Nothing is charged here on purpose. This is only one of the
+                // three ways a dead helper surfaces, and usually the loser of
+                // the race; the verdict is settled by the next start_child.
                 set_failure_if_current(
                     "wambridge-pcm exited unexpectedly",
                     generation
                 );
                 stop_child();
-                if (!reachedPlaying) {
-                    g_consecutiveFailedStarts.fetch_add(1);
-                }
                 continue;
             }
             if (flushing && childState == ChildState::none) {
@@ -1395,13 +1471,6 @@ private:
                     hasAudio = !m_queue.empty();
                 }
                 if (!hasAudio) continue;
-                if (!wait_out_failed_start_backoff(
-                        generation,
-                        sampleRate,
-                        channels
-                    )) {
-                    continue;
-                }
                 if (!start_child(sampleRate, channels, generation)) continue;
             }
 
@@ -1472,6 +1541,7 @@ private:
             }
 
             if (stopAfterFlush) {
+                forget_pending_start();
                 stop_child();
                 continue;
             }
