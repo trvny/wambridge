@@ -9,6 +9,7 @@ Current implementation and remaining control-surface work for `foo_out_wam`.
   environment is required after installation.
 - PCM pipeline: foobar `f32le` -> FFmpeg FLAC -> local HTTP -> Samsung M5.
 - `%LOCALAPPDATA%\WAMBridge\foobar.ini` configuration with environment overrides.
+- Native `Preferences -> Playback -> Output -> WAM Bridge` page editing the same INI.
 - `Playback -> WAM Bridge` submenu containing:
   - Emergency stop,
   - Standby,
@@ -20,7 +21,6 @@ Current implementation and remaining control-surface work for `foo_out_wam`.
 
 ## Not implemented
 
-- Native preferences page.
 - Discovery and connection test UI.
 - TuneIn/radio submenu.
 - Dockable panel.
@@ -28,7 +28,12 @@ Current implementation and remaining control-surface work for `foo_out_wam`.
 
 ## Configuration
 
-The component currently reads:
+The native preferences page writes the existing INI rather than introducing a second
+configuration store. Existing files remain valid, and `WAMBRIDGE_*` environment variables
+continue to take precedence. Changes are marked as requiring a playback restart and are used
+by the next output session.
+
+The component reads:
 
 ```ini
 [wambridge]
@@ -280,16 +285,16 @@ was never checked is the failure this exists to prevent.
 Do not restore the old `cp` warning. `cp` is normal for `SetUrlPlayback`; it is not evidence
 that emergency stop should request a speaker power cycle.
 
-## Preferences page, next
+## Preferences page
 
-Add `preferences_page_v3` under Playback and keep INI compatibility for at least one
-release. It should expose:
+`Preferences -> Playback -> Output -> WAM Bridge` edits the same INI keys the output already
+reads: device, format, startup volume, hardware slider routing, volume ceiling, safe start
+cap, startup silence, extra buffer, sleep-after-stop, diagnostics and the optional PCM helper
+override. Reset restores component defaults; default-valued settings are removed rather than
+written redundantly. If any `WAMBRIDGE_*` override is active the page says so, because those
+values continue to win over the INI.
 
-- speaker alias/IP and discovery,
-- startup and maximum startup volume (`0..30` raw until conversion exists),
-- output format,
-- bundled/development helper selection,
-- a test button showing model, firmware and connection result.
+Discovery, a connection test and model/firmware reporting remain future UI work.
 
 ## Later UI
 
