@@ -79,6 +79,39 @@ TUNEIN_TUNE_URL = "http://opml.radiotime.com/Tune.ashx"
 TUNEIN_DIRECT_FORMATS = "mp3,aac"
 
 
+def _read_text(url: str, timeout: float) -> str:
+    with LOCAL_OPENER.open(url, timeout=timeout) as response:  # nosec B310
+        return response.read(MAX_TUNE_RESPONSE_BYTES).decode("utf-8", errors="replace")
+
+
+def _expand_pls(url: str, timeout: float) -> tuple[str, ...]:
+    """Return the stream URLs inside a PLS playlist, or the URL unchanged.
+
+    TuneIn answers for some stations with a `.pls` file rather than a stream.
+    FFmpeg will not open one, so a caller that passes it straight through loses
+    a station that works perfectly once the playlist is read - measured on
+    Czwórka, whose `listen.pls` holds a single `File1=` that plays fine.
+
+    A playlist that cannot be fetched or holds nothing usable falls back to the
+    original URL, so this can only ever add candidates, never remove them.
+    """
+    if not url.lower().split("?", 1)[0].endswith(".pls"):
+        return (url,)
+    try:
+        body = _read_text(url, timeout)
+    except OSError as error:
+        LOGGER.debug("Could not read PLS playlist %s: %s", url, error)
+        return (url,)
+    entries = [
+        value.strip()
+        for line in body.splitlines()
+        if line.strip().lower().startswith("file")
+        for _, _, value in [line.partition("=")]
+        if value.strip().startswith(("http://", "https://"))
+    ]
+    return tuple(dict.fromkeys(entries)) or (url,)
+
+
 def resolve_tunein_station(
     tunein_id: str,
     *,
@@ -118,8 +151,11 @@ def resolve_tunein_station(
         if ".m3u8" in candidate:
             LOGGER.debug("Skipping HLS variant for %s: %s", tunein_id, candidate)
             continue
-        if candidate not in urls:
-            urls.append(candidate)
+        for expanded in _expand_pls(candidate, timeout):
+            if ".m3u8" in expanded:
+                continue
+            if expanded not in urls:
+                urls.append(expanded)
     return tuple(urls)
 
 
