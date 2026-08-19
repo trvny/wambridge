@@ -74,7 +74,7 @@ class TuneInActivity : Activity() {
 
         Thread({
             val result = runCatching {
-                releaseRenderer()
+                releasePlaybackOwners()
                 SamsungTuneIn.getPresets(applicationContext, target)
             }
             runOnUiThread {
@@ -119,7 +119,7 @@ class TuneInActivity : Activity() {
 
         Thread({
             val result = runCatching {
-                releaseRenderer()
+                releasePlaybackOwners()
                 SamsungTuneIn.playSafely(applicationContext, target, preset)
             }
             runOnUiThread {
@@ -143,6 +143,11 @@ class TuneInActivity : Activity() {
         }
     }
 
+    private fun releasePlaybackOwners() {
+        releaseRenderer()
+        releaseRadio()
+    }
+
     private fun releaseRenderer() {
         if (!RendererService.running) return
         startService(
@@ -150,14 +155,28 @@ class TuneInActivity : Activity() {
                 action = RendererService.ACTION_STOP
             },
         )
-        val deadline = SystemClock.elapsedRealtime() + RENDERER_STOP_TIMEOUT_MS
+        val deadline = SystemClock.elapsedRealtime() + OWNER_STOP_TIMEOUT_MS
         while (RendererService.running && SystemClock.elapsedRealtime() < deadline) {
             Thread.sleep(50)
         }
         check(!RendererService.running) { "Renderer did not release the WAM control channel" }
     }
 
+    private fun releaseRadio() {
+        if (!RadioService.running) return
+        startService(
+            Intent(this, RadioService::class.java).apply {
+                action = RadioService.ACTION_STOP
+            },
+        )
+        val deadline = SystemClock.elapsedRealtime() + OWNER_STOP_TIMEOUT_MS
+        while (RadioService.running && SystemClock.elapsedRealtime() < deadline) {
+            Thread.sleep(50)
+        }
+        check(!RadioService.running) { "Radio did not release the WAM control channel" }
+    }
+
     companion object {
-        private const val RENDERER_STOP_TIMEOUT_MS = 2_500L
+        private const val OWNER_STOP_TIMEOUT_MS = 2_500L
     }
 }
