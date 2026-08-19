@@ -539,11 +539,23 @@ CPM?cmd=<name>GetUpperRadioList</name>
        <p type="dec" name="listcount"  val="%s"/>
 ```
 
-Two details this project does not currently carry: `GetPresetList` is **paginated**, so a
-client has to walk it rather than ask once; and `SetPlayPreset` sends a `presettype` alongside
-the index, which we do not send at all. `GetUpperRadioList` and `GetCurrentRadioList` together
-suggest the speaker exposes a browsable tree rather than a flat list, with
-`SetSelectRadio` descending into it.
+**Correction, same day.** An earlier revision of this section claimed the pagination and the
+`presettype` argument were missing here. Both were already implemented: `src/wambridge/tunein.py`
+selects the service first, pages `GetPresetList`, and sends `presettype` with `SetPlayPreset`,
+all reachable as `wambridge --tunein-list` and `--tunein-play`. Listing saved presets is a solved
+problem and the open list said otherwise for longer than it was true.
+
+What the app has and this project does not is on either side of that:
+
+- **Writing presets.** `README.md` says changing the preset list "still belongs to Samsung's
+  plugin because no reliable write API is known". The app has `SetSavePreset`,
+  `SetRemovePreset` (`presetindex`) and `SetMovePreset`. Untested here, but they are not
+  unknown any more.
+- **Finding stations that are not already saved.** `GetUpperRadioList` and
+  `GetCurrentRadioList` are both paginated and together imply a browsable tree rather than a
+  flat list, with `SetSelectRadio` descending into it; `GetGenreStations`, `SearchQuery` and
+  `GlobalSearch` sit beside them. Nothing here browses the catalogue - only what the speaker
+  already holds.
 
 ### A second power lever, on the port we already hold open
 
@@ -556,21 +568,99 @@ UIC?cmd=<name>SetNetworkStandByMode</name>
 UIC?cmd=<name>GetNetworkStandByMode</name>
 ```
 
-Worth probing before the sleep-timer menu item is built, because if it works it is a cleaner
-answer to the standby question than arming a timer. The `Get` form costs nothing to try.
+**Measured 2026-08-19, and it answers.** A plain read against the physical M5 at rest:
+
+```xml
+<method>NetworkStandByMode</method>
+<response result="ok"><networkstandbymode>on</networkstandbymode></response>
+```
+
+So the sleep timer is not the only power lever after all, and the "almost standby" state the
+speaker was long observed to have now has a name and a command. The response method drops the
+`Get`, the same way `GetApInfo` answers as `ApInfo`. `SetNetworkStandByMode` takes a `str`
+argument `networkstandbymode` and has not been tried.
 
 ### Content providers and search
 
 `BrowseMain`, `Browse`, `GetCpList`, `GetCpInfo`, `GetCpSubmenu`, `SetSelectCpSubmenu`,
 `SetCpService`, `GlobalSearch`, `SearchQuery`, `SearchUniversalQuery`, `GetStationData`,
 `GetGenreStations`, `SetCreateNewStation`, `SetDeleteStation`, `BookmarkStation`. This is the
-whole TuneIn-and-friends surface. Most of it will need a signed-in service to answer.
+whole TuneIn-and-friends surface. Most of it needs a service selected first.
+
+Measured the same day, all read-only:
+
+- `GetCpList` answers with `liststartindex` and `listcount` - **not** `startindex`, which is
+  what the preset call takes; guessing the wrong one returns `errcode 53`,
+  "Input parameter/parameters not found".
+- It lists **20 providers** (Pandora, Spotify, Deezer, Qobuz, Tidal HiFi, SiriusXM, Amazon
+  Prime and so on), every one `signinstatus=0`, while reporting `listtotalcount=24`. TuneIn is
+  **not among them** - it is reached through the radio surface, not as a content provider.
+- `GetPresetList` without a service selected returns `errcode 67`, "No service Selected", which
+  is why `tunein.py` calls `select_tunein()` first.
+- `GetRadioInfo` answers `ok` with `playstatus=stop` and `cpname=Unknown` when nothing is
+  selected.
+- Anonymous reads come back with `user_identifier=public`, and errors arrive as child elements
+  (`<errcode>`, `<errmessage>`), both as this file already records.
 
 ### Sound shaping
 
 Bass, treble, balance, DRC, woofer and rear levels, a seven-band EQ with saved custom modes,
 and `GetAudioQuality`/`SetAudioQuality`. None of it is needed to play audio, all of it is
 reachable from the same socket.
+
+### Adopting any of this, safest first
+
+The vocabulary is large and the speaker is the only one there is. This is the order to take
+things in, and the reason each rung is where it is. Nothing below has been implemented.
+
+**Rung 1 - reads, no state touched.** A read costs a socket and answers or times out; a command
+this firmware does not know simply stays silent. Everything here can be run today, with one
+constraint that already applies to every probe in this file: **not while PCM playback is
+running**, because a second connection on `55001` competes with the helper and has knocked the
+player over before.
+
+- `GetUpperRadioList`, `GetCurrentRadioList` - settles whether the radio surface is a tree or a
+  flat list, which decides what browsing would even look like.
+- `GetCurrentEQMode`, `Get7BandEQList`, `GetEQBass`, `GetEQTreble`, `GetEQBalance`, `GetEQDrc`,
+  `GetWooferLevel`, `GetRearLevel`, `GetAudioQuality` - the whole sound-shaping surface, read.
+- `GetSpeakerStatus`, `GetPlayStatus`, `GetAvSourceAll`, `GetLed`, `GetBatteryStatus`,
+  `GetGroupName`, `SpkInGroup`, `GetAlarmInfo`.
+
+**Rung 2 - writes that restore themselves.** Read the current value, write, write it back. Safe
+because the old value is known before anything changes, and none of it survives being set back.
+
+- `SetNetworkStandByMode` - read `on` first, so there is something to return to.
+- `SetEQBass`, `SetEQTreble`, `SetEQBalance`, `SetEQDrc`, `SetWooferLevel`, `SetRearLevel`.
+
+**Rung 3 - writes that change something the listener owns.** The preset list is the obvious one,
+and it is the reason `README.md` still hands preset editing to Samsung's app. Before the first
+`SetSavePreset`, dump the existing list with `wambridge --tunein-list` and keep it: there is no
+undo, and `SetRemovePreset` takes only an index.
+
+- `SetSavePreset`, `SetRemovePreset`, `SetMovePreset`, `SetCreateNewStation`,
+  `SetDeleteStation`, `BookmarkStation`.
+
+**Rung 4 - needs hardware we do not have.** Grouping, stereo pairing, multi-channel positioning
+and their test tones all assume a second speaker. `SetGroup`, `SetUngroup`, `SetMultispkGroup`,
+`SetStereo`, `SetMultichGroup`, `PositionedSpkInGroupMultiCh`, the four `*Testtone*` calls.
+
+**Never, on the only speaker in the house.** These are in the app because the app ships to
+service technicians and factories as well as listeners. None of them has a use here and several
+have no visible undo:
+
+```text
+FactoryReset            SetBuyer                SetSwuServerType      SetUartOnOff
+SetShopMode             SetLocale               SetSwuTestServer      SetBtDut
+SetDebugMode            SetSpeakerTime          SetManualSpeakerUpgrade
+SetAp / SetApManual     SetIpInfo               RegisterDevice / UnregisterDevice
+```
+
+`SetAp`, `SetApManual` and `SetIpInfo` reconfigure the speaker's network from underneath the
+connection carrying the command, which is how a speaker stops being reachable. `SetBuyer`,
+`SetLocale` and the `Swu*` pair point it at different regional and firmware-update servers.
+`SetManualSpeakerUpgrade` starts a firmware write. There is no reason to send any of them and
+no way to test them safely.
+
 
 ### The full vocabulary
 
