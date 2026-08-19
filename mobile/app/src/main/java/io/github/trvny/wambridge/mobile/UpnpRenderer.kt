@@ -1,0 +1,751 @@
+package io.github.trvny.wambridge.mobile
+
+import android.content.Context
+import android.net.wifi.WifiManager
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.DatagramPacket
+import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.MulticastSocket
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URI
+import java.nio.charset.StandardCharsets
+import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal interface RendererCallbacks {
+    fun onPlay(rendererStreamUrl: String)
+    fun onPause()
+    fun onStop()
+    fun onVolume(percent: Int)
+    fun onMute(muted: Boolean)
+}
+
+internal class RendererState(val udn: String) {
+    @Volatile var currentUri = ""
+    @Volatile var currentMetadata = ""
+    @Volatile var nextUri = ""
+    @Volatile var nextMetadata = ""
+    @Volatile var transportState = "STOPPED"
+    @Volatile var volumePercent = 20
+    @Volatile var muted = false
+    @Volatile var lastError = ""
+}
+
+internal class UpnpRenderer(
+    private val context: Context,
+    private val state: RendererState,
+    private val callbacks: RendererCallbacks,
+) : AutoCloseable {
+    private val executor = Executors.newCachedThreadPool()
+    private val running = AtomicBoolean(false)
+    private val streamActive = AtomicBoolean(false)
+    private var httpServer: ServerSocket? = null
+    private var ssdpSocket: MulticastSocket? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    lateinit var localAddress: Inet4Address
+        private set
+    var port: Int = 0
+        private set
+
+    val streamUrl: String
+        get() = "http://${localAddress.hostAddress}:$port/stream"
+
+    fun start() {
+        if (!running.compareAndSet(false, true)) return
+        try {
+            localAddress = findLocalIpv4()
+            startHttp()
+            startSsdp()
+        } catch (error: Exception) {
+            running.set(false)
+            closeResources()
+            throw error
+        }
+    }
+
+    private fun startHttp() {
+        val server = ServerSocket(0)
+        httpServer = server
+        port = server.localPort
+        Thread({
+            while (running.get()) {
+                try {
+                    val socket = server.accept()
+                    executor.execute { handleClient(socket) }
+                } catch (_: IOException) {
+                    if (running.get()) state.lastError = "UPnP HTTP listener stopped"
+                }
+            }
+        }, "wam-upnp-http").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun startSsdp() {
+        val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
+        multicastLock = wifi.createMulticastLock("wambridge-upnp").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+
+        val lanInterface = NetworkInterface.getByInetAddress(localAddress)
+            ?: error("No interface for ${localAddress.hostAddress}")
+        val group = InetAddress.getByName(SSDP_GROUP)
+        val socket = MulticastSocket(null).apply {
+            reuseAddress = true
+            bind(InetSocketAddress(SSDP_PORT))
+            this.networkInterface = lanInterface
+            joinGroup(InetSocketAddress(group, SSDP_PORT), lanInterface)
+            soTimeout = 1000
+        }
+        ssdpSocket = socket
+        Thread({ ssdpLoop(socket) }, "wam-upnp-ssdp").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun ssdpLoop(socket: MulticastSocket) {
+        val buffer = ByteArray(32 * 1024)
+        while (running.get()) {
+            val packet = DatagramPacket(buffer, buffer.size)
+            try {
+                socket.receive(packet)
+                val text = String(packet.data, packet.offset, packet.length, StandardCharsets.UTF_8)
+                if (!text.startsWith("M-SEARCH", ignoreCase = true)) continue
+                val headers = parseHeaders(text)
+                if (!headers["man"].orEmpty().contains("ssdp:discover", ignoreCase = true)) continue
+                val requested = headers["st"].orEmpty().trim()
+                val targets = when {
+                    requested.equals("ssdp:all", ignoreCase = true) -> SSDP_TARGETS
+                    requested.equals("uuid:${state.udn}", ignoreCase = true) -> listOf("uuid:${state.udn}")
+                    SSDP_TARGETS.any { it.equals(requested, ignoreCase = true) } -> listOf(requested)
+                    else -> emptyList()
+                }
+                targets.forEach { sendSearchResponse(socket, packet, it) }
+            } catch (_: java.net.SocketTimeoutException) {
+                continue
+            } catch (_: IOException) {
+                if (running.get()) state.lastError = "SSDP listener stopped"
+            }
+        }
+    }
+
+    private fun sendSearchResponse(socket: MulticastSocket, request: DatagramPacket, target: String) {
+        val bytes = buildString {
+            append("HTTP/1.1 200 OK\r\n")
+            append("CACHE-CONTROL: max-age=1800\r\n")
+            append("EXT:\r\n")
+            append("LOCATION: http://${localAddress.hostAddress}:$port/description.xml\r\n")
+            append("SERVER: Android/1.0 UPnP/1.1 WAMBridge/0.1\r\n")
+            append("ST: $target\r\n")
+            append("USN: ${usn(target)}\r\n\r\n")
+        }.toByteArray(StandardCharsets.UTF_8)
+        socket.send(DatagramPacket(bytes, bytes.size, request.address, request.port))
+    }
+
+    private fun usn(target: String): String = if (target.startsWith("uuid:")) {
+        "uuid:${state.udn}"
+    } else {
+        "uuid:${state.udn}::$target"
+    }
+
+    private fun handleClient(client: Socket) {
+        client.use { socket ->
+            try {
+                socket.soTimeout = 15_000
+                val request = readRequest(BufferedInputStream(socket.getInputStream()))
+                val output = BufferedOutputStream(socket.getOutputStream())
+                when {
+                    request.method == "GET" && request.path == "/description.xml" ->
+                        textResponse(output, 200, "text/xml; charset=utf-8", descriptionXml())
+                    request.method == "GET" && request.path == "/upnp/avtransport.xml" ->
+                        textResponse(output, 200, "text/xml; charset=utf-8", avTransportScpd())
+                    request.method == "GET" && request.path == "/upnp/renderingcontrol.xml" ->
+                        textResponse(output, 200, "text/xml; charset=utf-8", renderingControlScpd())
+                    request.method == "GET" && request.path == "/upnp/connectionmanager.xml" ->
+                        textResponse(output, 200, "text/xml; charset=utf-8", connectionManagerScpd())
+                    request.method == "POST" && request.path == "/upnp/control/avtransport" ->
+                        handleAvTransport(output, request)
+                    request.method == "POST" && request.path == "/upnp/control/renderingcontrol" ->
+                        handleRenderingControl(output, request)
+                    request.method == "POST" && request.path == "/upnp/control/connectionmanager" ->
+                        handleConnectionManager(output, request)
+                    request.method == "SUBSCRIBE" && request.path.startsWith("/upnp/event/") ->
+                        subscriptionResponse(output, request)
+                    request.method == "UNSUBSCRIBE" && request.path.startsWith("/upnp/event/") ->
+                        rawResponse(output, 200, "OK", emptyMap(), ByteArray(0))
+                    request.method == "GET" && request.path == "/stream" -> proxyStream(output)
+                    else -> textResponse(output, 404, "text/plain", "Not found")
+                }
+            } catch (error: Exception) {
+                state.lastError = error.message ?: error.javaClass.simpleName
+                try {
+                    textResponse(
+                        BufferedOutputStream(socket.getOutputStream()),
+                        500,
+                        "text/plain",
+                        state.lastError,
+                    )
+                } catch (_: Exception) {
+                    // Peer already disconnected.
+                }
+            }
+        }
+    }
+
+    private fun handleAvTransport(out: BufferedOutputStream, request: HttpRequest) {
+        val action = soapAction(request)
+        when (action) {
+            "SetAVTransportURI" -> {
+                state.currentUri = soapValue(request.body, "CurrentURI")
+                state.currentMetadata = soapValue(request.body, "CurrentURIMetaData")
+                state.transportState = "STOPPED"
+                state.lastError = ""
+                soapOk(out, AV_TRANSPORT, action)
+            }
+            "SetNextAVTransportURI" -> {
+                state.nextUri = soapValue(request.body, "NextURI")
+                state.nextMetadata = soapValue(request.body, "NextURIMetaData")
+                soapOk(out, AV_TRANSPORT, action)
+            }
+            "Play" -> {
+                require(state.currentUri.isNotBlank()) { "No CurrentURI" }
+                callbacks.onPlay(streamUrl)
+                state.transportState = "PLAYING"
+                soapOk(out, AV_TRANSPORT, action)
+            }
+            "Pause" -> {
+                callbacks.onPause()
+                state.transportState = "PAUSED_PLAYBACK"
+                soapOk(out, AV_TRANSPORT, action)
+            }
+            "Stop" -> {
+                callbacks.onStop()
+                state.transportState = "STOPPED"
+                soapOk(out, AV_TRANSPORT, action)
+            }
+            "GetTransportInfo" -> soapOk(
+                out,
+                AV_TRANSPORT,
+                action,
+                "<CurrentTransportState>${state.transportState}</CurrentTransportState>" +
+                    "<CurrentTransportStatus>OK</CurrentTransportStatus><CurrentSpeed>1</CurrentSpeed>",
+            )
+            "GetMediaInfo" -> soapOk(
+                out,
+                AV_TRANSPORT,
+                action,
+                "<NrTracks>1</NrTracks><MediaDuration>00:00:00</MediaDuration>" +
+                    "<CurrentURI>${xml(state.currentUri)}</CurrentURI>" +
+                    "<CurrentURIMetaData>${xml(state.currentMetadata)}</CurrentURIMetaData>" +
+                    "<NextURI>${xml(state.nextUri)}</NextURI>" +
+                    "<NextURIMetaData>${xml(state.nextMetadata)}</NextURIMetaData>" +
+                    "<PlayMedium>NETWORK</PlayMedium><RecordMedium>NOT_IMPLEMENTED</RecordMedium>" +
+                    "<WriteStatus>NOT_IMPLEMENTED</WriteStatus>",
+            )
+            "GetPositionInfo" -> soapOk(
+                out,
+                AV_TRANSPORT,
+                action,
+                "<Track>1</Track><TrackDuration>00:00:00</TrackDuration>" +
+                    "<TrackMetaData>${xml(state.currentMetadata)}</TrackMetaData>" +
+                    "<TrackURI>${xml(state.currentUri)}</TrackURI>" +
+                    "<RelTime>00:00:00</RelTime><AbsTime>00:00:00</AbsTime>" +
+                    "<RelCount>2147483647</RelCount><AbsCount>2147483647</AbsCount>",
+            )
+            "GetTransportSettings" -> soapOk(
+                out,
+                AV_TRANSPORT,
+                action,
+                "<PlayMode>NORMAL</PlayMode><RecQualityMode>NOT_IMPLEMENTED</RecQualityMode>",
+            )
+            "Seek", "SetPlayMode" -> soapOk(out, AV_TRANSPORT, action)
+            else -> soapError(out, 401, "Invalid Action")
+        }
+    }
+
+    private fun handleRenderingControl(out: BufferedOutputStream, request: HttpRequest) {
+        val action = soapAction(request)
+        when (action) {
+            "SetVolume" -> {
+                val volume = soapValue(request.body, "DesiredVolume").toInt().coerceIn(0, 100)
+                callbacks.onVolume(volume)
+                state.volumePercent = volume
+                soapOk(out, RENDERING_CONTROL, action)
+            }
+            "GetVolume" -> soapOk(
+                out,
+                RENDERING_CONTROL,
+                action,
+                "<CurrentVolume>${state.volumePercent}</CurrentVolume>",
+            )
+            "SetMute" -> {
+                val value = soapValue(request.body, "DesiredMute").lowercase(Locale.ROOT)
+                val muted = value == "1" || value == "true"
+                callbacks.onMute(muted)
+                state.muted = muted
+                soapOk(out, RENDERING_CONTROL, action)
+            }
+            "GetMute" -> soapOk(
+                out,
+                RENDERING_CONTROL,
+                action,
+                "<CurrentMute>${if (state.muted) 1 else 0}</CurrentMute>",
+            )
+            "ListPresets" -> soapOk(
+                out,
+                RENDERING_CONTROL,
+                action,
+                "<CurrentPresetNameList>FactoryDefaults</CurrentPresetNameList>",
+            )
+            "SelectPreset" -> soapOk(out, RENDERING_CONTROL, action)
+            else -> soapError(out, 401, "Invalid Action")
+        }
+    }
+
+    private fun handleConnectionManager(out: BufferedOutputStream, request: HttpRequest) {
+        val action = soapAction(request)
+        when (action) {
+            "GetProtocolInfo" -> soapOk(
+                out,
+                CONNECTION_MANAGER,
+                action,
+                "<Source></Source><Sink>${xml(SINK_PROTOCOLS)}</Sink>",
+            )
+            "GetCurrentConnectionIDs" -> soapOk(
+                out,
+                CONNECTION_MANAGER,
+                action,
+                "<ConnectionIDs>0</ConnectionIDs>",
+            )
+            "GetCurrentConnectionInfo" -> soapOk(
+                out,
+                CONNECTION_MANAGER,
+                action,
+                "<RcsID>0</RcsID><AVTransportID>0</AVTransportID>" +
+                    "<ProtocolInfo></ProtocolInfo><PeerConnectionManager></PeerConnectionManager>" +
+                    "<PeerConnectionID>-1</PeerConnectionID><Direction>Input</Direction><Status>OK</Status>",
+            )
+            else -> soapError(out, 401, "Invalid Action")
+        }
+    }
+
+    private fun proxyStream(out: BufferedOutputStream) {
+        if (!streamActive.compareAndSet(false, true)) {
+            textResponse(out, 503, "text/plain", "Stream already active")
+            return
+        }
+        try {
+            val source = state.currentUri
+            require(isLanHttpUri(source)) { "Only LAN HTTP sources are accepted" }
+            val connection = (URI(source).toURL().openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 0
+                useCaches = false
+                requestMethod = "GET"
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "WAMBridge-Mobile/0.1")
+            }
+            try {
+                connection.connect()
+                require(connection.responseCode in 200..299) {
+                    "UPnP source HTTP ${connection.responseCode}"
+                }
+                val contentType = connection.contentType.orEmpty()
+                val baseType = contentType.substringBefore(';').trim().lowercase(Locale.ROOT)
+                val l16 = baseType == "audio/l16"
+                val outgoing = if (l16) "audio/wav" else contentType.ifBlank { "application/octet-stream" }
+                headers(
+                    out,
+                    200,
+                    "OK",
+                    mapOf("Content-Type" to outgoing, "Connection" to "close", "Cache-Control" to "no-store"),
+                )
+                connection.inputStream.use { raw ->
+                    val input = BufferedInputStream(raw, 64 * 1024)
+                    if (l16) {
+                        val rate = parameter(contentType, "rate")?.toIntOrNull() ?: 44_100
+                        val channels = parameter(contentType, "channels")?.toIntOrNull() ?: 2
+                        out.write(wavHeader(rate, channels, 16))
+                        copyL16(input, out)
+                    } else {
+                        input.copyTo(out, 64 * 1024)
+                    }
+                    out.flush()
+                }
+            } finally {
+                connection.disconnect()
+            }
+        } finally {
+            streamActive.set(false)
+            if (state.nextUri.isNotBlank()) {
+                state.currentUri = state.nextUri
+                state.currentMetadata = state.nextMetadata
+                state.nextUri = ""
+                state.nextMetadata = ""
+            }
+        }
+    }
+
+    private fun copyL16(input: BufferedInputStream, out: BufferedOutputStream) {
+        val buffer = ByteArray(64 * 1024)
+        var carry = -1
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) return
+            var index = 0
+            if (carry >= 0 && count > 0) {
+                out.write(buffer[0].toInt() and 0xff)
+                out.write(carry)
+                carry = -1
+                index = 1
+            }
+            while (index + 1 < count) {
+                out.write(buffer[index + 1].toInt() and 0xff)
+                out.write(buffer[index].toInt() and 0xff)
+                index += 2
+            }
+            if (index < count) carry = buffer[index].toInt() and 0xff
+        }
+    }
+
+    private fun wavHeader(rate: Int, channels: Int, bits: Int): ByteArray {
+        val bytesPerSample = bits / 8
+        val byteRate = rate * channels * bytesPerSample
+        val blockAlign = channels * bytesPerSample
+        return ByteArrayOutputStream(44).apply {
+            write("RIFF".toByteArray(StandardCharsets.US_ASCII)); le32(0xffffffffL)
+            write("WAVEfmt ".toByteArray(StandardCharsets.US_ASCII)); le32(16)
+            le16(1); le16(channels); le32(rate.toLong()); le32(byteRate.toLong())
+            le16(blockAlign); le16(bits)
+            write("data".toByteArray(StandardCharsets.US_ASCII)); le32(0xffffffffL)
+        }.toByteArray()
+    }
+
+    private fun ByteArrayOutputStream.le16(value: Int) {
+        write(value and 0xff); write((value ushr 8) and 0xff)
+    }
+
+    private fun ByteArrayOutputStream.le32(value: Long) {
+        write((value and 0xff).toInt())
+        write(((value ushr 8) and 0xff).toInt())
+        write(((value ushr 16) and 0xff).toInt())
+        write(((value ushr 24) and 0xff).toInt())
+    }
+
+    private fun isLanHttpUri(value: String): Boolean = try {
+        val uri = URI(value)
+        if (!uri.scheme.equals("http", ignoreCase = true) || uri.host.isNullOrBlank()) false
+        else InetAddress.getAllByName(uri.host).all {
+            it.isSiteLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress
+        }
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun parameter(contentType: String, name: String): String? = contentType
+        .split(';')
+        .drop(1)
+        .map(String::trim)
+        .firstOrNull { it.substringBefore('=').equals(name, ignoreCase = true) }
+        ?.substringAfter('=', "")
+        ?.trim()
+        ?.trim('"')
+
+    private fun subscriptionResponse(out: BufferedOutputStream, request: HttpRequest) {
+        rawResponse(
+            out,
+            200,
+            "OK",
+            mapOf(
+                "SID" to (request.headers["sid"] ?: "uuid:${UUID.randomUUID()}"),
+                "TIMEOUT" to "Second-1800",
+            ),
+            ByteArray(0),
+        )
+    }
+
+    private fun soapAction(request: HttpRequest): String = request.headers["soapaction"]
+        ?.trim()
+        ?.trim('"')
+        ?.substringAfterLast('#')
+        ?.takeIf(String::isNotBlank)
+        ?: error("Missing SOAPAction")
+
+    private fun soapValue(body: String, name: String): String {
+        val regex = Regex(
+            "<(?:[A-Za-z0-9_.-]+:)?${Regex.escape(name)}(?:\\s[^>]*)?>(.*?)</(?:[A-Za-z0-9_.-]+:)?${Regex.escape(name)}>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+        return unxml(regex.find(body)?.groupValues?.get(1).orEmpty().trim())
+    }
+
+    private fun unxml(value: String): String = value
+        .replace("&lt;", "<", true)
+        .replace("&gt;", ">", true)
+        .replace("&quot;", "\"", true)
+        .replace("&apos;", "'", true)
+        .replace("&amp;", "&", true)
+
+    private fun xml(value: String): String = value
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+
+    private fun soapOk(out: BufferedOutputStream, service: String, action: String, inner: String = "") {
+        textResponse(
+            out,
+            200,
+            "text/xml; charset=utf-8",
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
+                "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" " +
+                "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body>" +
+                "<u:${action}Response xmlns:u=\"$service\">$inner</u:${action}Response>" +
+                "</s:Body></s:Envelope>",
+        )
+    }
+
+    private fun soapError(out: BufferedOutputStream, code: Int, description: String) {
+        textResponse(
+            out,
+            500,
+            "text/xml; charset=utf-8",
+            "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">" +
+                "<s:Body><s:Fault><faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring>" +
+                "<detail><UPnPError xmlns=\"urn:schemas-upnp-org:control-1-0\">" +
+                "<errorCode>$code</errorCode><errorDescription>${xml(description)}</errorDescription>" +
+                "</UPnPError></detail></s:Fault></s:Body></s:Envelope>",
+        )
+    }
+
+    private fun readRequest(input: BufferedInputStream): HttpRequest {
+        val header = ByteArrayOutputStream()
+        var stateIndex = 0
+        val end = byteArrayOf(13, 10, 13, 10)
+        while (header.size() < MAX_HEADER) {
+            val next = input.read()
+            require(next >= 0) { "Connection closed before headers" }
+            header.write(next)
+            stateIndex = if (next.toByte() == end[stateIndex]) stateIndex + 1 else if (next == 13) 1 else 0
+            if (stateIndex == 4) break
+        }
+        require(stateIndex == 4) { "HTTP headers too large" }
+        val lines = header.toString(StandardCharsets.ISO_8859_1.name()).split("\r\n")
+        val first = lines.first().split(' ', limit = 3)
+        require(first.size >= 2) { "Bad HTTP request line" }
+        val headers = mutableMapOf<String, String>()
+        lines.drop(1).forEach { line ->
+            val separator = line.indexOf(':')
+            if (separator > 0) {
+                headers[line.substring(0, separator).trim().lowercase(Locale.ROOT)] =
+                    line.substring(separator + 1).trim()
+            }
+        }
+        val length = headers["content-length"]?.toIntOrNull() ?: 0
+        require(length in 0..MAX_BODY) { "HTTP request body too large" }
+        val body = ByteArray(length)
+        var read = 0
+        while (read < length) {
+            val count = input.read(body, read, length - read)
+            require(count >= 0) { "Incomplete HTTP body" }
+            read += count
+        }
+        return HttpRequest(
+            first[0].uppercase(Locale.ROOT),
+            first[1].substringBefore('?'),
+            headers,
+            String(body, StandardCharsets.UTF_8),
+        )
+    }
+
+    private fun textResponse(out: BufferedOutputStream, status: Int, type: String, text: String) {
+        val body = text.toByteArray(StandardCharsets.UTF_8)
+        rawResponse(
+            out,
+            status,
+            when (status) { 200 -> "OK"; 404 -> "Not Found"; 503 -> "Service Unavailable"; else -> "Error" },
+            mapOf("Content-Type" to type, "Content-Length" to body.size.toString()),
+            body,
+        )
+    }
+
+    private fun rawResponse(
+        out: BufferedOutputStream,
+        status: Int,
+        reason: String,
+        responseHeaders: Map<String, String>,
+        body: ByteArray,
+    ) {
+        headers(out, status, reason, responseHeaders + ("Connection" to "close"))
+        if (body.isNotEmpty()) out.write(body)
+        out.flush()
+    }
+
+    private fun headers(out: BufferedOutputStream, status: Int, reason: String, values: Map<String, String>) {
+        val text = buildString {
+            append("HTTP/1.1 $status $reason\r\n")
+            values.forEach { (key, value) -> append("$key: $value\r\n") }
+            append("\r\n")
+        }
+        out.write(text.toByteArray(StandardCharsets.ISO_8859_1))
+        out.flush()
+    }
+
+    private fun parseHeaders(text: String): Map<String, String> = buildMap {
+        text.split("\r\n").drop(1).forEach { line ->
+            val separator = line.indexOf(':')
+            if (separator > 0) {
+                put(
+                    line.substring(0, separator).trim().lowercase(Locale.ROOT),
+                    line.substring(separator + 1).trim(),
+                )
+            }
+        }
+    }
+
+    private fun findLocalIpv4(): Inet4Address {
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        while (interfaces.hasMoreElements()) {
+            val network = interfaces.nextElement()
+            if (!network.isUp || network.isLoopback) continue
+            val addresses = network.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val address = addresses.nextElement()
+                if (address is Inet4Address && address.isSiteLocalAddress) return address
+            }
+        }
+        error("No private IPv4 LAN address found")
+    }
+
+    private fun descriptionXml(): String = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <root xmlns="urn:schemas-upnp-org:device-1-0"><specVersion><major>1</major><minor>0</minor></specVersion>
+        <device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
+        <friendlyName>WAM Bridge · M5</friendlyName><manufacturer>WAM Bridge</manufacturer>
+        <modelName>WAM Bridge Mobile</modelName><modelNumber>0.1</modelNumber><UDN>uuid:${state.udn}</UDN>
+        <serviceList>
+        ${serviceXml(AV_TRANSPORT, "AVTransport", "avtransport")}
+        ${serviceXml(RENDERING_CONTROL, "RenderingControl", "renderingcontrol")}
+        ${serviceXml(CONNECTION_MANAGER, "ConnectionManager", "connectionmanager")}
+        </serviceList></device></root>
+    """.trimIndent()
+
+    private fun serviceXml(type: String, id: String, path: String): String =
+        "<service><serviceType>$type</serviceType><serviceId>urn:upnp-org:serviceId:$id</serviceId>" +
+            "<SCPDURL>/upnp/$path.xml</SCPDURL><controlURL>/upnp/control/$path</controlURL>" +
+            "<eventSubURL>/upnp/event/$path</eventSubURL></service>"
+
+    private fun avTransportScpd(): String = scpd(
+        listOf(
+            action("SetAVTransportURI", inArg("InstanceID", "InstanceID"), inArg("CurrentURI", "AVTransportURI"), inArg("CurrentURIMetaData", "AVTransportURIMetaData")),
+            action("SetNextAVTransportURI", inArg("InstanceID", "InstanceID"), inArg("NextURI", "AVTransportURI"), inArg("NextURIMetaData", "AVTransportURIMetaData")),
+            action("Play", inArg("InstanceID", "InstanceID"), inArg("Speed", "TransportPlaySpeed")),
+            action("Pause", inArg("InstanceID", "InstanceID")),
+            action("Stop", inArg("InstanceID", "InstanceID")),
+            action("Seek", inArg("InstanceID", "InstanceID"), inArg("Unit", "A_ARG_TYPE_SeekMode"), inArg("Target", "A_ARG_TYPE_SeekTarget")),
+            action("SetPlayMode", inArg("InstanceID", "InstanceID"), inArg("NewPlayMode", "CurrentPlayMode")),
+            action("GetTransportInfo", inArg("InstanceID", "InstanceID"), outArg("CurrentTransportState", "TransportState"), outArg("CurrentTransportStatus", "TransportStatus"), outArg("CurrentSpeed", "TransportPlaySpeed")),
+            action("GetPositionInfo", inArg("InstanceID", "InstanceID"), outArg("Track", "CurrentTrack"), outArg("TrackDuration", "CurrentTrackDuration"), outArg("TrackMetaData", "CurrentTrackMetaData"), outArg("TrackURI", "CurrentTrackURI"), outArg("RelTime", "RelativeTimePosition"), outArg("AbsTime", "AbsoluteTimePosition"), outArg("RelCount", "RelativeCounterPosition"), outArg("AbsCount", "AbsoluteCounterPosition")),
+            action("GetMediaInfo", inArg("InstanceID", "InstanceID")),
+            action("GetTransportSettings", inArg("InstanceID", "InstanceID")),
+        ),
+        listOf(
+            variable("InstanceID", "ui4"), variable("AVTransportURI"), variable("AVTransportURIMetaData"),
+            variable("TransportPlaySpeed"), variable("TransportState", events = true), variable("TransportStatus"),
+            variable("CurrentTrack", "ui4"), variable("CurrentTrackDuration"), variable("CurrentTrackMetaData"), variable("CurrentTrackURI"),
+            variable("RelativeTimePosition"), variable("AbsoluteTimePosition"), variable("RelativeCounterPosition", "i4"), variable("AbsoluteCounterPosition", "i4"),
+            variable("A_ARG_TYPE_SeekMode"), variable("A_ARG_TYPE_SeekTarget"), variable("CurrentPlayMode"),
+        ),
+    )
+
+    private fun renderingControlScpd(): String = scpd(
+        listOf(
+            action("SetVolume", inArg("InstanceID", "InstanceID"), inArg("Channel", "Channel"), inArg("DesiredVolume", "Volume")),
+            action("GetVolume", inArg("InstanceID", "InstanceID"), inArg("Channel", "Channel"), outArg("CurrentVolume", "Volume")),
+            action("SetMute", inArg("InstanceID", "InstanceID"), inArg("Channel", "Channel"), inArg("DesiredMute", "Mute")),
+            action("GetMute", inArg("InstanceID", "InstanceID"), inArg("Channel", "Channel"), outArg("CurrentMute", "Mute")),
+            action("ListPresets", inArg("InstanceID", "InstanceID")),
+            action("SelectPreset", inArg("InstanceID", "InstanceID"), inArg("PresetName", "PresetName")),
+        ),
+        listOf(variable("InstanceID", "ui4"), variable("Channel"), variable("Volume", "ui2", true), variable("Mute", "boolean", true), variable("PresetName")),
+    )
+
+    private fun connectionManagerScpd(): String = scpd(
+        listOf(
+            action("GetProtocolInfo", outArg("Source", "SourceProtocolInfo"), outArg("Sink", "SinkProtocolInfo")),
+            action("GetCurrentConnectionIDs", outArg("ConnectionIDs", "CurrentConnectionIDs")),
+            action("GetCurrentConnectionInfo", inArg("ConnectionID", "A_ARG_TYPE_ConnectionID")),
+        ),
+        listOf(variable("SourceProtocolInfo"), variable("SinkProtocolInfo"), variable("CurrentConnectionIDs"), variable("A_ARG_TYPE_ConnectionID", "i4")),
+    )
+
+    private fun scpd(actions: List<String>, variables: List<String>): String =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><scpd xmlns=\"urn:schemas-upnp-org:service-1-0\">" +
+            "<specVersion><major>1</major><minor>0</minor></specVersion><actionList>${actions.joinToString("")}</actionList>" +
+            "<serviceStateTable>${variables.joinToString("")}</serviceStateTable></scpd>"
+
+    private fun action(name: String, vararg args: String): String =
+        "<action><name>$name</name>${if (args.isEmpty()) "" else "<argumentList>${args.joinToString("")}</argumentList>"}</action>"
+
+    private fun inArg(name: String, related: String) = arg(name, "in", related)
+    private fun outArg(name: String, related: String) = arg(name, "out", related)
+    private fun arg(name: String, direction: String, related: String) =
+        "<argument><name>$name</name><direction>$direction</direction><relatedStateVariable>$related</relatedStateVariable></argument>"
+
+    private fun variable(name: String, type: String = "string", events: Boolean = false) =
+        "<stateVariable sendEvents=\"${if (events) "yes" else "no"}\"><name>$name</name><dataType>$type</dataType></stateVariable>"
+
+    override fun close() {
+        if (!running.getAndSet(false)) return
+        closeResources()
+    }
+
+    private fun closeResources() {
+        try { ssdpSocket?.close() } catch (_: Exception) { }
+        try { httpServer?.close() } catch (_: Exception) { }
+        ssdpSocket = null
+        httpServer = null
+        multicastLock?.let { if (it.isHeld) it.release() }
+        multicastLock = null
+        executor.shutdownNow()
+    }
+
+    private data class HttpRequest(
+        val method: String,
+        val path: String,
+        val headers: Map<String, String>,
+        val body: String,
+    )
+
+    companion object {
+        private const val SSDP_GROUP = "239.255.255.250"
+        private const val SSDP_PORT = 1900
+        private const val MAX_HEADER = 64 * 1024
+        private const val MAX_BODY = 1024 * 1024
+        private const val AV_TRANSPORT = "urn:schemas-upnp-org:service:AVTransport:1"
+        private const val RENDERING_CONTROL = "urn:schemas-upnp-org:service:RenderingControl:1"
+        private const val CONNECTION_MANAGER = "urn:schemas-upnp-org:service:ConnectionManager:1"
+        private const val SINK_PROTOCOLS = "http-get:*:audio/wav:*,http-get:*:audio/x-wav:*,http-get:*:audio/L16:*"
+        private val SSDP_TARGETS = listOf(
+            "upnp:rootdevice",
+            "urn:schemas-upnp-org:device:MediaRenderer:1",
+            AV_TRANSPORT,
+            RENDERING_CONTROL,
+            CONNECTION_MANAGER,
+        )
+    }
+}
