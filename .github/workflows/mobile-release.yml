@@ -105,9 +105,11 @@ jobs:
           tag="mobile-v${VERSION}"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$APK" --clobber
+            gh release edit "$tag" --latest
           else
             gh release create "$tag" "$APK" \
               --target "$GITHUB_SHA" \
               --title "WAMbridge mobile ${VERSION}" \
-              --notes "Signed Android mobile adapter release."
+              --notes "Signed Android mobile adapter release." \
+              --latest
           fi
