@@ -855,11 +855,23 @@ Half still hand out a plain HTTP stream, which this firmware plays.
 Resolved by station id straight from TuneIn, using the speaker's own partner credentials:
 
 ```text
-s15984   PR3 Trójka 98.8   -> http://stream3.polskieradio.pl:8954/          plays
-s118200  Czwórka           -> http://stream3.polskieradio.pl:8956/listen.pls  plays
-s44392   PR4 Czwórka 92.0  -> http://stream3.polskieradio.pl:8906           plays
-s25176   Radio RAM 89.8    -> http://stream2.prw.pl:8000/radioram           plays
+s15984   PR3 Trójka 98.8   -> http://stream3.polskieradio.pl:8954/
+s118200  Czwórka           -> http://stream3.polskieradio.pl:8956/listen.pls
+s44392   PR4 Czwórka 92.0  -> http://stream3.polskieradio.pl:8906
+s25176   Radio RAM 89.8    -> http://stream2.prw.pl:8000/radioram
 ```
+
+**These are plain HTTP, which is not the same as verified playing, and an earlier revision of
+this table said "plays" against each one.** Nothing here was listened to; the column was a
+classification of the URL scheme. Since then, `s15984`'s address has been checked properly and
+is worse than it looked: `curl` gets `200 text/html` from it - a Shoutcast status page, not
+audio - and FFmpeg refuses it outright with `Stream ends prematurely at 0`. Appending the usual
+`;stream` or `;` does not help either.
+
+The audible confirmations tonight were all on `;`-suffixed addresses -
+`http://stream3.polskieradio.pl:8906/;stream` and `http://mp3.polskieradio.pl:8956/;` - which is
+also the form the station pack already carried. Whether the speaker's own player copes with the
+bare `:8954/` form is untested; it was assumed, not heard.
 
 `s15984` is the exact entry sitting in preset 0. So `SetPlayPreset` answering
 `StopPlaybackEvent` on a station whose stream is plain HTTP is **not** a format problem, and an
