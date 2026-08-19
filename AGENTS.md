@@ -44,5 +44,4 @@ stop/change, and clean process shutdown pass on the physical M5.
 
 ## Code review rules
 
-- Focus on functional bugs, regressions, security issues, data loss, and broken behavior.
 - Do not comment on README-only, documentation-only, changelog, formatting, or cosmetic changes unless they introduce a factual error or break generated/validated content.
