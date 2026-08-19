@@ -1,6 +1,5 @@
 package io.github.trvny.wambridge.mobile
 
-import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.StatusBarManager
@@ -222,7 +221,6 @@ class MainActivity : Activity() {
 
     private fun startRenderer() {
         saveSpeakerIp() ?: return
-        requestNotificationPermissionIfNeeded()
         val intent = Intent(this, RendererService::class.java).apply {
             action = RendererService.ACTION_START
         }
@@ -236,14 +234,6 @@ class MainActivity : Activity() {
             "● ${RendererService.lastStatus}"
         } else {
             "○ ${RendererService.lastStatus}"
-        }
-    }
-
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
         }
     }
 
@@ -329,9 +319,5 @@ class MainActivity : Activity() {
         } else {
             "Hide launcher icon"
         }
-    }
-
-    companion object {
-        private const val NOTIFICATION_PERMISSION_REQUEST = 501
     }
 }
