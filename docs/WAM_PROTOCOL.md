@@ -798,6 +798,81 @@ entirely for 20-30 seconds while `UIC` keeps replying normally, then it recovers
 empty level is therefore not proof of an empty category, which is why the probe retries before
 believing it.
 
+### What can and cannot go under the physical Radio button
+
+**Measured 2026-08-19.** The button plays presets, presets are TuneIn catalogue entries, and
+that chain has no opening for a URL of our own. Every command in the app that creates or
+bookmarks a station takes an index into the provider's own list:
+
+```text
+CPM?cmd=<name>SetCreateNewStation</name><p type="dec" name="itemid" val="%s"/>
+CPM?cmd=<name>BookmarkStation</name><p type="dec" name="selectitemid" val="%s"/>
+CPM?cmd=<name>AddToFavorite</name><p type="dec" name="selectitemid" val="%s"/>
+CPM?cmd=<name>SetSavePreset</name>                     (no arguments - saves what is selected)
+```
+
+No command anywhere in the 242 accepts a stream URL. So a station from a personal playlist can
+be played with `SetUrlPlayback`, and can never be placed under the physical button. If the
+button matters, the station has to exist in TuneIn.
+
+**Which is survivable, because TuneIn is not uniformly unplayable.** Ten stations resolved from
+`Local Radio` through `GetStationData` and fetched from a PC:
+
+```text
+plain HTTP   5     e.g. PR3 Trójka 99.7 -> http://stream3.polskieradio.pl:8954/
+HLS          3     e.g. ESKA Kraków     -> https://liveradio.timesa.pl/2070-1.aac/playlist.m3u8
+HTTPS        2
+```
+
+Half still hand out a plain HTTP stream, which this firmware plays.
+
+**And the stations actually in the presets are mostly fine, which kills the tidy explanation.**
+Resolved by station id straight from TuneIn, using the speaker's own partner credentials:
+
+```text
+s15984   PR3 Trójka 98.8   -> http://stream3.polskieradio.pl:8954/          plays
+s118200  Czwórka           -> http://stream3.polskieradio.pl:8956/listen.pls  plays
+s44392   PR4 Czwórka 92.0  -> http://stream3.polskieradio.pl:8906           plays
+s25176   Radio RAM 89.8    -> http://stream2.prw.pl:8000/radioram           plays
+```
+
+`s15984` is the exact entry sitting in preset 0. So `SetPlayPreset` answering
+`StopPlaybackEvent` on a station whose stream is plain HTTP is **not** a format problem, and an
+earlier revision of this section guessed that it was. Cause unknown; what is ruled out is the
+station. BBC Radio 1 remains genuinely unplayable here - HLS from TuneIn and HLS in the
+personal playlists in `trvny/stuff/playlists` alike - so a preset holding it cannot work whatever
+else is fixed.
+
+**And the owner's history closes the question.** Preset playback started roughly **one attempt
+in five** even years ago, with the official app and TuneIn both in good health. So
+`SetPlayPreset` answering `StopPlaybackEvent` is not a regression, not something this project
+broke, and not worth chasing: the speaker's own preset path has always been that unreliable.
+
+Which settles the design. Browsing to a station, reading `stationurl` and handing it to
+`SetUrlPlayback` is not merely an alternative to the preset path - it is **more reliable than
+the speaker's own**, and it starts on the first try. Preset writing buys nothing except the
+physical button, and the button inherits the one-in-five behaviour anyway.
+
+**Overwriting a preset is therefore not a fix.** Swapping a playable station for another
+playable station changes nothing while the failure sits in the call, and `SetRemovePreset` has
+no undo.
+
+**What the speaker cannot reach directly, it can reach through us.** BBC Radio 1 plays instantly
+in a browser and never on this speaker, because the modern stream is HTTPS and HLS and the 2015
+firmware takes neither. The local HTTP server this project already runs for foobar is the way
+across: fetch upstream, re-serve as plain HTTP. The cost is that the PC or phone has to be
+running, which the plain-HTTP stations do not require.
+
+This is the one thing that keeps preset writing on the table. For this project's own playback
+it is unnecessary - browse, take `stationurl`, `SetUrlPlayback`. For the physical button it is
+the only route there is.
+
+**A trap for anything that browses.** The browse cursor lives in the speaker and **survives
+across client processes**. A fresh run that calls `GetSelectRadioList` assuming it starts at the
+root will descend from wherever the last run stopped - which produced an empty level and looked
+exactly like the CPM wedge described above. Normalise with `GetUpperRadioList` until
+`<category isroot="1">` before descending.
+
 ### The three presets behind the physical Radio button
 
 `README.md` says the WAM Bridge station list "does not overwrite the three presets selected by
