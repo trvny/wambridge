@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-16.
+Last reviewed: 2026-08-19.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -29,6 +29,12 @@ branch or implementing another timing layer.
   may depend on that submode.
 - Speaker-facing output profiles `flac` (default), `wav` and `mp3`, selected by `format` in
   the INI or `--format` on the helper. Only `flac` has played a full track on hardware.
+- A bounded helper restart loop from merged PR #55, measured on hardware. A spawn that never
+  reaches `PLAYING` is charged and the next one waits 0.5 s, then 1 s, 2 s, 4 s, up to an 8 s
+  ceiling; the budget is forgotten after a minute with nothing failing. A helper that reached
+  `PLAYING` and then died restarts immediately, which is the recovery that works.
+- An Android adapter under `mobile/`, exposing the speaker to phone players over UPnP.
+  Physical Neutron playback to the M5 is confirmed.
 
 The stable universal transport is local HTTP started through `SetUrlPlayback`. The speaker
 paces the HTTP side through TCP backpressure. Finite share/DLNA playback is proven as a
@@ -262,11 +268,34 @@ at file scope.
 
 The discriminator is `PLAYING`. A helper that reached it and then exited is the speaker ending
 a stream, and restarting immediately is the recovery that works - about two and a half seconds
-of silence and audio is back. Only starts that never got there are counted, and they are held
-off by a doubling wait from half a second up to a ceiling. The wait is interruptible, so
-stopping, seeking or changing format all cut it short.
+of silence and audio is back. Only spawns that never got there are counted, and each one pushes
+the next attempt further out: 0.5 s, 1 s, 2 s, 4 s, up to an 8 s ceiling, with the whole budget
+forgotten after a minute in which nothing failed.
 
-Not yet run against the physical M5.
+**Where the count is taken decided whether any of this worked, and two placements failed on
+hardware before the third held.** Both failures share a shape worth remembering: the accounting
+leaned on state that the failure itself resets.
+
+- *At the point of death.* A dead helper surfaces in three places, and the protocol reader
+  usually wins the race - it sets `m_failure` and the worker never reaches the `exited` branch
+  that held the counter. The brake never engaged at all.
+- *At a verdict settled later.* A flag armed on spawn, cleared by `PLAYING`, charged by the next
+  `start_child`, with deliberate teardowns exempted. Two separate leaks: `flush()` clears
+  `m_failure` and raises `m_restart`, and foobar calls it after a failure is reported and before
+  it destroys the output object, so every "this teardown was deliberate" test fired on the
+  failure path; and `flush()` also calls `retire_stream_locked()`, which bumps the generation and
+  zeroes the format, so the attempt holding the pending verdict was routinely abandoned and took
+  the charge with it. Measured: relaunches 0.76, 0.73, 0.74, 1.25, 1.23 s apart where the
+  schedule calls for 0.5, 1, 2, 4, 8 - roughly two charges in three lost.
+- *At the spawn.* Charged the moment `CreateProcessW` succeeds, refunded by `PLAYING`. Nothing
+  has to survive in between, so nothing can erase it.
+
+Measured on the physical M5 on 2026-08-19, killing each helper before it could play: gaps of
+0.5, 0.5, 1, 2 and 4 s, doubling as designed. Killing a helper that *had* played gave a restart
+0.22 s later, so stream-end recovery is untouched. Beware the measurement itself: a kill loop
+that timestamps its own `Stop-Process` calls reports its own polling period - the first run
+showed a flat 0.33 s that was the loop, not the component. Use the process `StartTime` the
+operating system records.
 
 ## Open, in the order that makes sense
 
@@ -291,16 +320,9 @@ Not yet run against the physical M5.
    silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and
    the HTTP connection times out - a 30 s pause did not disturb either socket or restart any
    process.
-5. **Stop the helper respawn storm.** Killing a helper while foobar is still playing makes the
-   component relaunch it immediately, measured 2026-08-16 at **78 restarts in about two
-   minutes** with no backoff and no give-up, continuing on its own once external killing
-   stopped. No FFmpeg ever appeared, so each attempt died before encoding. It left 29 sockets
-   in `TIME_WAIT` and briefly made the speaker stop answering `55001` altogether. Reachable
-   without anyone killing anything by hand, since any repeatedly failing start does it.
-   PR #55 is a draft attempt and **does not work**: it counts failures in the one place out of
-   three where a dead helper is noticed, and not the one that wins the race in this scenario,
-   so the brake never engages. The counter has to sit at the single point every launch passes
-   through, which is `start_child`, rather than wherever the death happens to be observed.
+5. ~~**Stop the helper respawn storm.**~~ **Merged and measured 2026-08-19**, PR #55. The
+   backoff is charged at the spawn and refunded by `PLAYING`; see the section above for the two
+   placements that failed first and why. Nothing is left open here.
 6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer. The stream
@@ -338,7 +360,20 @@ Not yet run against the physical M5.
    when the audio stops.
 10. Reduce and reimplement the finite share path from its measured working form.
 11. Add a proper foobar preferences page while retaining legacy INI compatibility.
-12. Add TuneIn/radio UI and a dockable panel only after output transport is stable.
+12. Extend the radio side. Native TuneIn preset playback and custom stations already work
+    from the CLI and the foobar menu; what is missing is browsing rather than recalling -
+    nothing lists what the speaker has, and a preset can only be played by the number a person
+    already knows. A dockable panel still waits on output transport being stable.
+13. Take the Samsung Android app apart the way the desktop app was taken apart, and compare it
+    with `mobile/`. Two versions of it exist on Google Play; the questions worth answering are
+    which commands it uses for browsing and presets, how it groups speakers, and what it does
+    that this bridge does not. Needs the APKs pulled from a phone - `adb shell pm path <pkg>`
+    then `adb pull` - since neither is downloadable from a workstation.
+14. Finish the mobile adapter's own list: it currently has discovery, an AVTransport facade,
+    the WAV/LPCM proxy, a Quick Settings tile, a 1x1 widget and TuneIn presets. The LAN scan
+    goes quiet on subnets wider than /22 and reports "nothing found" rather than
+    "not scanned", and the renderer still serves its stream to any host on the Wi-Fi that
+    guesses the per-session path.
 
 ## What the 7-8 s speaker figure was
 

@@ -64,12 +64,16 @@ facts from a physical `SPK-WAM550` are in
 
 ## Foobar2000 output
 
-The [`Build`](https://github.com/trvny/wambridge/actions/workflows/build.yml)
-workflow produces the `foo_out_wam-x64` artifact containing:
+Everything ships from one rolling prerelease,
+[`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha), rebuilt whenever `main`
+moves. The link does not change and the two halves always come from the same commit:
 
-- `foo_out_wam.fb2k-component`
-- `foo_out_wam.dll`
+- `foo_out_wam.fb2k-component` - the foobar2000 output
+- `wambridge-alpha-<date>-<commit>.apk` - the Android adapter
 - a source archive
+
+The [`Build`](https://github.com/trvny/wambridge/actions/workflows/build.yml) workflow still
+produces the same component as a per-commit artifact if you need one that is not the tip.
 
 Open the `.fb2k-component` file with foobar2000 2.x x64, then select:
 

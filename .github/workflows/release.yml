@@ -1,9 +1,36 @@
 name: Release
 
+# Two shapes, one pipeline.
+#
+# While everything is alpha the useful thing is a single rolling prerelease:
+# one tag, one permanent download link, assets replaced whenever main moves.
+# Nobody has to invent a version number to ship a fix.
+#
+# Pushing a v* tag still cuts a fixed, versioned release for when a build is
+# worth pinning.
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/mobile.yml"
+      - "foobar/**"
+      - "mobile/**"
+      - "src/**"
+      - "tools/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Cut a fixed, versioned release instead of refreshing the rolling one,
+          e.g. 0.2.0. Leave empty for the rolling alpha.
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -16,36 +43,45 @@ jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
+      tag: ${{ steps.parse.outputs.tag }}
       name: ${{ steps.parse.outputs.name }}
       code: ${{ steps.parse.outputs.code }}
-      prerelease: ${{ steps.parse.outputs.prerelease }}
+      title: ${{ steps.parse.outputs.title }}
+      rolling: ${{ steps.parse.outputs.rolling }}
     steps:
-      - name: Derive the version from the tag
+      - name: Decide what is being published
         id: parse
         shell: bash
         env:
-          TAG: ${{ github.ref_name }}
+          REQUESTED: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          name="${TAG#v}"
-          core="${name%%-*}"
-          if [[ ! "$core" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "Tag $TAG carries no major.minor.patch version" >&2
-            exit 1
+          # versionCode has to rise on its own, for ever, without anyone
+          # maintaining it. Whole hours since the epoch does that: it is
+          # monotonic, unique per hour, comfortably inside Android's limit and
+          # already far above every code shipped by hand before this.
+          code=$(( $(date -u +%s) / 3600 ))
+
+          if [[ -n "${REQUESTED:-}" ]]; then
+            name="${REQUESTED#v}"
+            core="${name%%-*}"
+            if [[ ! "$core" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Version $REQUESTED is not major.minor.patch" >&2
+              exit 1
+            fi
+            echo "tag=v${name}" >> "$GITHUB_OUTPUT"
+            echo "name=$name" >> "$GITHUB_OUTPUT"
+            echo "title=WAMbridge ${name}" >> "$GITHUB_OUTPUT"
+            echo "rolling=false" >> "$GITHUB_OUTPUT"
+          else
+            name="alpha-$(date -u +%Y%m%d)-${SHA:0:7}"
+            echo "tag=alpha" >> "$GITHUB_OUTPUT"
+            echo "name=$name" >> "$GITHUB_OUTPUT"
+            echo "title=WAM Bridge alpha" >> "$GITHUB_OUTPUT"
+            echo "rolling=true" >> "$GITHUB_OUTPUT"
           fi
-          major="${BASH_REMATCH[1]}"
-          minor="${BASH_REMATCH[2]}"
-          patch="${BASH_REMATCH[3]}"
-          if (( minor > 99 || patch > 99 )); then
-            echo "minor and patch must stay below 100, or versionCode stops increasing" >&2
-            exit 1
-          fi
-          code=$(( major * 10000 + minor * 100 + patch ))
-          if [[ "$name" == *-* ]]; then prerelease=true; else prerelease=false; fi
-          echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          echo "Releasing $name as versionCode $code (prerelease: $prerelease)"
 
   component:
     uses: ./.github/workflows/build.yml
@@ -75,14 +111,15 @@ jobs:
           name: wambridge-apk
           path: apk
 
-      - name: Publish one release carrying both halves
+      - name: Publish the component and the APK together
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.name }}
-          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          TITLE: ${{ needs.version.outputs.title }}
+          ROLLING: ${{ needs.version.outputs.rolling }}
         run: |
           set -euo pipefail
           assets=(
@@ -94,17 +131,27 @@ jobs:
             test -f "$asset"
           done
 
-          flags=()
-          if [[ "$PRERELEASE" == "true" ]]; then
-            flags+=(--prerelease)
+          if [[ "$ROLLING" == "true" ]]; then
+            {
+              echo "Rolling alpha, rebuilt from main. Currently ${VERSION}."
+              echo
+              echo "The foobar2000 component and the Android APK always come from the same commit. The tag is replaced in place, so these download links keep working."
+            } > release-notes.md
+            # Move the rolling tag onto this commit, creating it the first time.
+            if ! gh api --method PATCH "repos/${GH_REPO}/git/refs/tags/${TAG}" -f sha="$GITHUB_SHA" -F force=true >/dev/null 2>&1; then
+              gh api --method POST "repos/${GH_REPO}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$GITHUB_SHA" >/dev/null
+            fi
+          else
+            echo "foobar2000 component and signed Android APK for ${VERSION}." > release-notes.md
           fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file release-notes.md --prerelease --target "$GITHUB_SHA"
             gh release upload "$TAG" "${assets[@]}" --clobber
+            # A rolling release keeps one APK, not a growing pile of them.
+            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -E '^wambridge-.*[.]apk$' | grep -vxF "wambridge-${VERSION}.apk" | while read -r stale; do
+              gh release delete-asset "$TAG" "$stale" --yes
+            done
           else
-            gh release create "$TAG" "${assets[@]}" \
-              --target "$GITHUB_SHA" \
-              --title "WAMbridge ${VERSION}" \
-              "${flags[@]}" \
-              --notes "foobar2000 component and signed Android APK for ${VERSION}."
+            gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" --title "$TITLE" --prerelease --notes-file release-notes.md
           fi
