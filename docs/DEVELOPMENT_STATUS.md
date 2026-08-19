@@ -388,6 +388,19 @@ operating system records.
     structure is understood, and only then writing or removing presets. That is a bigger step
     than further cosmetic work on the renderer.
 
+    **Next concrete step, agreed 2026-08-19: a TuneIn id in the station store.**
+    `RadioStation` already carries `url` and `fallback_urls`. Adding the station's TuneIn id
+    gives each entry a **dynamic** address - `GetStationData` resolves it to whatever stream the
+    broadcaster serves today - with the existing static URLs as the loose fallbacks underneath.
+    That covers the two ways this breaks: a broadcaster moving its endpoint, which kills a
+    hardcoded URL, and TuneIn answering with HLS or not at all, which the fallbacks absorb.
+
+    Both halves are measured. `s15984` resolves to `http://stream3.polskieradio.pl:8954/`, and
+    the `czworka` pack entry plays on its primary `http://stream3.polskieradio.pl:8906/;stream`
+    and on its fallback `http://mp3.polskieradio.pl:8956/;` alike, both confirmed by ear.
+    Note the resolution has to happen on the PC: the speaker cannot fetch `Tune.ashx` itself in
+    any useful way, and the resolved URL is what `SetUrlPlayback` receives.
+
     **Browsing is measured as of 2026-08-19** and the first rung is done: the catalogue is a
     tree, descended with `GetSelectRadioList` and a `contentid`, and `GetStationData` hands
     back a playable `stationurl`. Writing presets may therefore never be needed - browse, take
