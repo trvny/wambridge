@@ -8,7 +8,7 @@ plugins {
 // debug builds and should be kept equal to it.
 val wamVersionName = (findProperty("wamVersionName") as String?)
     ?.takeIf { it.isNotBlank() }
-    ?: "0.1.3"
+    ?: "0.0.5"
 val wamVersionCode = (findProperty("wamVersionCode") as String?)
     ?.toIntOrNull()
     ?: 103
