@@ -112,4 +112,4 @@ class FoobarPreferencesSourceTests(TestCase):
         source = SOURCE.read_text(encoding="utf-8")
 
         self.assertIn("constexpr int kRowPitch = 27;", source)
-        self.assertIn("kRowBase + 10 * kRowPitch", source)
+        self.assertIn("place_row(m_helperLabel, m_helper, 10);", source)
