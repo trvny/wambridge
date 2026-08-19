@@ -492,6 +492,154 @@ without evidence from different firmware.
   transport while it keeps the connection. `holding=<count>` reads the local end of that,
   which is the same socket seen from this side, but the speaker's own view is unmeasured.
 
+## What the official app can say, and we cannot
+
+Read this section differently from the rest of the file: **nothing here is measured.** Every
+other claim in this document came off a physical `SPK-WAM550`; this one came out of a
+decompiled APK and is a list of things worth *trying*, not things known to work. A command
+appearing here does not mean this firmware answers it - `GetFeature` is in the list and is
+already known to answer with silence on `WAM550WWB-3117.1`.
+
+**Provenance.** `com.samsung.roomspeaker3` version 4164 (January 2026), decompiled 2026-08-19.
+The templates live in one obfuscated constants class, `h2.b`, as `String.format` patterns.
+Note before trusting the binary further: the copies available from mirrors are signed
+`CN=r.savuschuk`, a self-signed personal key rather than a Samsung corporate one, and the same
+fingerprint appears on two independent mirrors, so it is the real distribution key rather than
+a mirror stamping its own. The Java is Samsung's; who builds and signs it is a separate
+question. Nothing from it was installed or run.
+
+**242 commands, of which this project already uses 26.** The gap is not a to-do list - most of
+it is grouping, multi-channel test tones, alarms and EQ that a foobar output has no use for.
+Four clusters are worth attention:
+
+### Presets and radio browsing - the gap that is actually blocking something
+
+`DEVELOPMENT_STATUS.md` records that a preset can only be recalled by a number the listener
+already knows, because nothing lists what the speaker holds. The app does list it, and pages
+through it:
+
+```text
+CPM?cmd=<name>GetPresetList</name>
+       <p type="dec" name="startindex" val="%s"/>
+       <p type="dec" name="listcount"  val="%s"/>
+
+CPM?cmd=<name>SetPlayPreset</name>
+       <p type="dec" name="presetindex" val="%s"/>
+       <p type="dec" name="presettype"  val="%s"/>
+
+CPM?cmd=<name>SetRemovePreset</name>
+       <p type="dec" name="presetindex" val="%s"/>
+
+CPM?cmd=<name>GetCurrentRadioList</name>
+       <p type="dec" name="startindex" val="%s"/>
+       <p type="dec" name="listcount"  val="%s"/>
+
+CPM?cmd=<name>GetUpperRadioList</name>
+       <p type="dec" name="startindex" val="0"/>
+       <p type="dec" name="listcount"  val="%s"/>
+```
+
+Two details this project does not currently carry: `GetPresetList` is **paginated**, so a
+client has to walk it rather than ask once; and `SetPlayPreset` sends a `presettype` alongside
+the index, which we do not send at all. `GetUpperRadioList` and `GetCurrentRadioList` together
+suggest the speaker exposes a browsable tree rather than a flat list, with
+`SetSelectRadio` descending into it.
+
+### A second power lever, on the port we already hold open
+
+`SetSleepTimer` has been treated here as the only power control the firmware answers. The app
+also has, on `UIC` rather than `CPM`:
+
+```text
+UIC?cmd=<name>SetNetworkStandByMode</name>
+       <p type="str" name="networkstandbymode" val="%s"/>
+UIC?cmd=<name>GetNetworkStandByMode</name>
+```
+
+Worth probing before the sleep-timer menu item is built, because if it works it is a cleaner
+answer to the standby question than arming a timer. The `Get` form costs nothing to try.
+
+### Content providers and search
+
+`BrowseMain`, `Browse`, `GetCpList`, `GetCpInfo`, `GetCpSubmenu`, `SetSelectCpSubmenu`,
+`SetCpService`, `GlobalSearch`, `SearchQuery`, `SearchUniversalQuery`, `GetStationData`,
+`GetGenreStations`, `SetCreateNewStation`, `SetDeleteStation`, `BookmarkStation`. This is the
+whole TuneIn-and-friends surface. Most of it will need a signed-in service to answer.
+
+### Sound shaping
+
+Bass, treble, balance, DRC, woofer and rear levels, a seven-band EQ with saved custom modes,
+and `GetAudioQuality`/`SetAudioQuality`. None of it is needed to play audio, all of it is
+reachable from the same socket.
+
+### The full vocabulary
+
+`*` marks the 26 already used or documented by this project.
+
+```text
+  AddCustomEQMode               GetEQMode                     RegisterDevice                SetMultiHopSetting
+  AddSongBookmark               GetEQTreble                   RemoveFromFavorite            SetMultiPlaybackControl
+  AddSongsToMultiQueue *        GetFeature *                  RemoveFromFavoriteCurrentPlayingSetMultispkGroup
+  AddSongToQueue                GetFunc *                     RemoveFromLibraryCurrentPlayingSetMute *
+  AddToFavorite                 GetGenreStations              RemoveFromListenLaterCurrentPlayingSetNetworkStandByMode
+  AddToFavoriteCurrentPlaying   GetGroupName                  RemoveFromPlaylist            SetNewFolderPlaybackControl *
+  AddToLibrary                  GetHtsMainInfo                Reset7bandEQValue             SetNewPlaylistPlaybackControl
+  AddToListenLaterCurrentPlayingGetHtsMute                    Save7bandEQMode               SetPartyMode
+  AddToPlaylist                 GetHtsVolume                  ScrollPlay                    SetPlaybackControl *
+  AddToPlaylistCurrentPlaying   GetIcon                       SearchQuery                   SetPlayCpPlaylistTrack
+  AddTracksToCpPlaylist         GetKPI                        SearchUniversalQuery          SetPlayFolder
+  BanCurrentTrack               GetLed *                      SelectedSpkInGroupMultiCh     SetPlaylistPlaybackControl
+  BookmarkStation               GetLinkMateOutput             SelectSpk                     SetPlayPreset *
+  Browse                        GetMainInfo                   SendVoiceText                 SetPlaySelect
+  BrowseMain                    GetMultiHopCount              Set7bandEQMode                SetPreviousTrack
+  Cancel7bandEQMode             GetMultiHopInfo               Set7bandEQValue               SetQueuelist
+  CancelDeviceRegistration      GetMultiHopSetting            SetAcmMode                    SetRadioAutoPlay
+  CheckRegistrationComplete     GetMusicInfo *                SetAlarmInfo                  SetRearLevel
+  ConnectBluetoothSpeaker       GetMusicListByCategory        SetAlarmOnOff                 SetRemovePreset
+  CreatePlaylist                GetMusicListByID              SetAp                         SetRepeatMode
+  DelAlarm                      GetMusicListByMultiID         SetApManual                   SetRMServerType
+  DelCustomEQMode               GetMusicListBySongs           SetAudioQuality               SetSavePreset
+  DeletePlaylist                GetMute *                     SetAudioUI                    SetSearchTime
+  DelSongsFromMultiQueue        GetMyPlaylists                SetAutoUpdate                 SetSelectAmazonCp
+  DelSongsFromQueue             GetNetworkStandByMode         SetBtDut                      SetSelectCpSubmenu
+  DisconnectBluetooth           GetPlayStatus *               SetBuyer                      SetSelectRadio *
+  EditSpkName                   GetPresetList *               SetChVolMultich               SetSettings
+  FactoryReset                  GetRadioInfo *                SetContinueListen             SetSharePlaybackControl *
+  Get7BandEQList                GetRearLevel                  SetCpService                  SetShopMode
+  GetAcmMode                    GetRepeatMode                 SetCreateNewStation           SetShuffleMode
+  GetAlarmInfo                  GetRMServerType               SetDebugMode                  SetSignIn
+  GetAlarmSoundList             GetSelectRadioList            SetDeleteStation              SetSignOut
+  GetApInfo *                   GetSettings                   SetDeviceInfoForKPI           SetSkipCurrentTrack
+  GetApList                     GetShopMode                   SetDms                        SetSleepTimer *
+  GetApPasswordInfo             GetShuffleMode                SetEQBalance                  SetSpeakerTime
+  GetAudioQuality               GetSleepTimer *               SetEQBass                     SetSpkName
+  GetAudioUI                    GetSoftwareVersion *          SetEQDrc                      SetStartApp
+  GetAutoUpdate                 GetSpeakerBuyer               SetEQTreble                   SetStereo
+  GetAvSourceAll                GetSpeakerStatus              SetEqualizeVolMultich         SetSwuServerType
+  GetAvSourceInGroup            GetSpeakerWifiRegion          SetFolderPlaybackByArtistControlSetSwuTestServer
+  GetBatteryStatus              GetSpkName *                  SetFolderPlaybackControl      SetTesttoneChVolMultich
+  GetBtDut                      GetStationData                SetFunc *                     SetToggleShuffle
+  GetBuyer                      GetStereo                     SetGroup                      SetTrickMode
+  GetCaptcha                    GetSubSoftwareVersion         SetGroupName                  SetUartOnOff
+  GetChVolMultich               GetSwuServerType              SetHtsMultispkGroup           SetUngroup
+  GetCpInfo                     GetSwuTestServer              SetHtsMute                    SetUsbPlaybackControl
+  GetCpList                     GetUartOnOff                  SetHtsUngroup                 SetUsbRepeatMode
+  GetCpPlayerPlaylist           GetUpperRadioList             SetHtsVolume                  SetUsbTrickMode
+  GetCpSubmenu                  GetUsbRepeatMode              SetIcon                       SetVoiceText
+  GetCurrentEQMode              GetValidAppVersion            SetIpInfo *                   SetVolume *
+  GetCurrentMultiQueuelist      GetVolume *                   SetKPI                        SetVVIPMasterSpk
+  GetCurrentPlaylist            GetVVIPMasterSpk              SetLed                        SetWooferLevel
+  GetCurrentPlayTime            GetWheel                      SetLikeMix                    SpkInGroup
+  GetCurrentQueuelist           GetWooferLevel                SetLikeStatus                 StartTesttoneGroupInMultich
+  GetCurrentRadioList           GlobalSearch                  SetLikeStatusSelected         StartTesttoneSpkInMultich
+  GetDebugMode                  GoLive                        SetLinkMateOutput             StopTesttoneGroupInMultich
+  GetDeviceId *                 MoveSongFromMultiQueue        SetLocale                     StopTesttoneSpkInMultich
+  GetDmsList *                  PlayById                      SetManualSpeakerUpgrade       UnregisterDevice
+  GetEQBalance                  PopupAction                   SetMovePreset                 WhyThisTrack
+  GetEQBass                     PositionedSpkInGroupMultiCh   SetMultichGroup
+  GetEQDrc                      Promotions                    SetMultiHopPairingMode
+```
+
 ## Safety and acceptance
 
 - Keep control and HTTP/DMS ports inside the trusted LAN.
