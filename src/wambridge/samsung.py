@@ -569,25 +569,32 @@ def require_local_playback_mode(
     port: int = DEFAULT_PORT,
     timeout: float = 5.0,
 ) -> str:
-    """Fail fast when the speaker cannot start locally offered playback.
+    """Fail fast when the DLNA share path cannot start.
 
-    In submode ``cp`` the speaker keeps serving a native content provider. It
-    still fetches an offered URL or DLNA object over HTTP and then stays silent,
-    which looks like a protocol bug but is a mode problem.
+    The DLNA renderer wants ``submode=dlna``. In ``cp`` the speaker is running
+    its content player instead, and a share offered to it has been fetched over
+    HTTP and then stayed silent.
 
-    The speaker also returns to ``cp`` on its own after a failed attempt or while
-    idle, so this must be checked immediately before each attempt rather than
-    once per session. Nothing observed clears it from software:
-    ``SetPlaybackControl stop`` refuses, ``SetFunc wifi`` is accepted without
-    effect, ``SetUrlPlayback`` does nothing and a full standby leaves it as is.
+    **This is a guard for the share path only.** ``cp`` is the submode
+    ``SetUrlPlayback`` itself runs in - measured 2026-08-19, an internet stream
+    played audibly for its whole run with ``GetFunc`` reporting ``cp``, and a
+    second ``SetUrlPlayback`` switched streams without leaving it. Gating the URL
+    path on this submode refuses a start that would have worked, which is why
+    ``docs/DEVELOPMENT_STATUS.md`` records that no URL startup gate may depend on
+    it.
+
+    Recovery is two commands, not a power cycle: ``SetFunc`` to another source
+    and back to ``wifi`` lands in ``dlna``. Aiming ``SetFunc wifi`` at a speaker
+    already on ``wifi`` does nothing, which is how it earned a reputation for
+    being inert. ``SetPlaybackControl stop`` does not shift it on either API.
     """
 
     submode = get_play_status(speaker_ip, port=port, timeout=timeout).submode
     if submode == "cp":
         raise WamModeError(
-            "Speaker is in content-provider mode (submode=cp). Locally offered "
-            "playback would be fetched and never started, and no command clears "
-            "this state - power-cycle the speaker and retry."
+            "Speaker is running its content player (submode=cp), so the DLNA "
+            "share would be fetched and never started. Send SetFunc for another "
+            "source and then SetFunc wifi to return it to dlna, then retry."
         )
     return submode or ""
 

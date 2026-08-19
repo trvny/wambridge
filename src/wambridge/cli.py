@@ -31,7 +31,6 @@ from .samsung import (
     pause_playback,
     play_url,
     probe,
-    require_local_playback_mode,
     resume_playback,
     set_mute,
     set_volume,
@@ -393,10 +392,11 @@ def run(args: argparse.Namespace) -> int:
     restore_volume: int | None = None
     startup_complete = False
     try:
-        # Checked here, not once per session: the speaker drifts back into
-        # content-provider mode on its own, and from there it fetches the
-        # stream and stays silent.
-        require_local_playback_mode(speaker_ip, port=speaker_port)
+        # No submode gate here on purpose. This is the URL path, and `cp` is the
+        # submode SetUrlPlayback runs in - so gating on it refused the start that
+        # follows every previous URL playback, and told the user to power-cycle a
+        # speaker that was working. `docs/DEVELOPMENT_STATUS.md` has recorded the
+        # rule since before that gate was added; measured again 2026-08-19.
         server.prepare()
         current_volume = get_volume(speaker_ip, port=speaker_port)
         restore_volume = current_volume

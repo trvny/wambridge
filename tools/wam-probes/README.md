@@ -29,7 +29,8 @@ cover them.
 | `probe_backpressure.py` | Speaker HTTP throughput converges toward real time without `-re` |
 | `probe_clock_drift.py` | A run settles near 1.00x; the old `+21..23 s` number includes startup and is not a speaker-buffer target |
 | `probe_rung1_reads.py` | Rung 1 read sweep; three EQ commands and `SpkInGroup` are silent on this firmware |
-| `probe_radio_browse.py` | The radio catalogue is a tree walked with `GetSelectRadioList`, and browsing strands the speaker in `submode=cp` |
+| `probe_radio_browse.py` | The radio catalogue is a tree walked with `GetSelectRadioList`; browsing leaves the submode untouched |
+| `probe_cp_escape.py` | `cp` is the submode URL playback runs in, and `SetFunc bt` then `SetFunc wifi` returns the speaker to `dlna` |
 | `capture.py` | Produced the preserved official-client session in `capture.log` |
 | `wamtap.py` | Standalone event and port diagnostics |
 
@@ -40,9 +41,12 @@ cover them.
   `AUDIO_STARTED` without a matching event before the former timeout.
 - Do not run `probe_clock_drift.py`, `wamtap sniff` or another 55001 listener beside active
   `pcm_cli`; the extra connection can disrupt playback.
-- `probe_radio_browse.py` costs a power cycle. It leaves the speaker in `submode=cp`, where
-  foobar output and DLNA push connect, transfer and stay silent. Do not run it on a speaker
-  somebody is about to use.
+- `cp` is not damage. It is the submode `SetUrlPlayback` runs in, audible playback and all, and
+  `SetFunc bt` then `SetFunc wifi` returns the speaker to `dlna`. An earlier revision of this
+  file blamed `probe_radio_browse.py` for stranding the speaker there; re-measured, the whole
+  browse leaves the submode alone.
+- While in `cp`, `GetPlayStatus` omits `playstatus` entirely and `GetMusicInfo` answers
+  `errCode: Wifi Sub Mode is CP`. Neither means playback failed.
 - The CPM endpoint wedges under a fast series of calls: empty lists first, then 20-30 s of
   silence on `CPM` while `UIC` still answers. An empty list is not evidence of an empty level.
 - A process-start-relative drift value includes discovery, URL handoff and helper startup.

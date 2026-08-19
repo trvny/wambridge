@@ -26,7 +26,12 @@ branch or implementing another timing layer.
 - PCM HTTP server keeps the first FFmpeg and refuses duplicate stream requests, so one
   encoder owns stdin.
 - `cp` is documented as normal for the URL path; no URL startup gate or power-cycle advice
-  may depend on that submode.
+  may depend on that submode. That rule was broken once by a gate in `cli.py` and is now held
+  by `tests/test_docs_match_code.py`. Re-measured 2026-08-19: an internet stream played
+  audibly for its whole run with `GetFunc` reporting `cp`, and leaving `cp` is `SetFunc` to
+  another source and back to `wifi` - not a power cycle. In `cp`, `GetPlayStatus` omits
+  `playstatus` and `GetMusicInfo` answers `errCode: Wifi Sub Mode is CP`; neither means the
+  playback failed.
 - Speaker-facing output profiles `flac` (default), `wav` and `mp3`, selected by `format` in
   the INI or `--format` on the helper. Only `flac` has played a full track on hardware.
 - A bounded helper restart loop from merged PR #55, measured on hardware. A spawn that never
@@ -383,6 +388,13 @@ operating system records.
     structure is understood, and only then writing or removing presets. That is a bigger step
     than further cosmetic work on the renderer.
 
+    **Browsing is measured as of 2026-08-19** and the first rung is done: the catalogue is a
+    tree, descended with `GetSelectRadioList` and a `contentid`, and `GetStationData` hands
+    back a playable `stationurl`. Writing presets may therefore never be needed - browse, take
+    the URL, `SetUrlPlayback`. Browsing also costs nothing: it does not move the submode, a
+    claim this file and `WAM_PROTOCOL.md` briefly carried in the opposite direction. What is
+    still untried is **search** (`SearchQuery`, `GlobalSearch`, `GetGenreStations`) and the UI.
+
     The concrete want behind this is the **physical Radio button**, which cycles the three
     presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
     already readable with `--tunein-list`; what is missing is putting a different station
@@ -397,9 +409,16 @@ operating system records.
 14. **Probe the recovered commands against the physical M5, cheapest first.** They are
     inferred from a decompiled app, so each one is a hypothesis until the speaker answers.
     First round done 2026-08-19: `GetNetworkStandByMode`, `GetCpList`, `GetPresetList` and
-    `GetRadioInfo` all answered and are written up. Next, still read-only:
-    `GetCurrentRadioList` and `GetUpperRadioList`, to settle whether the radio surface is a
-    tree or a flat list; only then anything with `Set`.
+    `GetRadioInfo` all answered and are written up. Second round the same day: the whole rung-1
+    read sweep plus the radio tree, by `tools/wam-probes/probe_rung1_reads.py` and
+    `probe_radio_browse.py`. Silent on this firmware: `GetWooferLevel`, `GetRearLevel`,
+    `GetAudioQuality`, `SpkInGroup`. Next, still read-only: `SearchQuery` and
+    `GetGenreStations`; only then anything with `Set`.
+
+    Open and worth one run: **`SetPlayPreset` answers `StopPlaybackEvent` and nothing plays**,
+    on both the hand-built command and `tunein.py:play_tunein_preset`, while `--tunein-list`
+    still returns all 15 presets. Whether TuneIn preset playback is broken on the service side
+    or the call needs state this project does not set is unsettled.
     Record each as measured or as silent in `WAM_PROTOCOL.md`, the same way the rest of that
     file distinguishes them - a command that exists in the app and dies on this firmware is
     worth writing down exactly once.
