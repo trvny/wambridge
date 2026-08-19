@@ -608,6 +608,60 @@ Bass, treble, balance, DRC, woofer and rear levels, a seven-band EQ with saved c
 and `GetAudioQuality`/`SetAudioQuality`. None of it is needed to play audio, all of it is
 reachable from the same socket.
 
+### Adopting any of this, safest first
+
+The vocabulary is large and the speaker is the only one there is. This is the order to take
+things in, and the reason each rung is where it is. Nothing below has been implemented.
+
+**Rung 1 - reads, no state touched.** A read costs a socket and answers or times out; a command
+this firmware does not know simply stays silent. Everything here can be run today, with one
+constraint that already applies to every probe in this file: **not while PCM playback is
+running**, because a second connection on `55001` competes with the helper and has knocked the
+player over before.
+
+- `GetUpperRadioList`, `GetCurrentRadioList` - settles whether the radio surface is a tree or a
+  flat list, which decides what browsing would even look like.
+- `GetCurrentEQMode`, `Get7BandEQList`, `GetEQBass`, `GetEQTreble`, `GetEQBalance`, `GetEQDrc`,
+  `GetWooferLevel`, `GetRearLevel`, `GetAudioQuality` - the whole sound-shaping surface, read.
+- `GetSpeakerStatus`, `GetPlayStatus`, `GetAvSourceAll`, `GetLed`, `GetBatteryStatus`,
+  `GetGroupName`, `SpkInGroup`, `GetAlarmInfo`.
+
+**Rung 2 - writes that restore themselves.** Read the current value, write, write it back. Safe
+because the old value is known before anything changes, and none of it survives being set back.
+
+- `SetNetworkStandByMode` - read `on` first, so there is something to return to.
+- `SetEQBass`, `SetEQTreble`, `SetEQBalance`, `SetEQDrc`, `SetWooferLevel`, `SetRearLevel`.
+
+**Rung 3 - writes that change something the listener owns.** The preset list is the obvious one,
+and it is the reason `README.md` still hands preset editing to Samsung's app. Before the first
+`SetSavePreset`, dump the existing list with `wambridge --tunein-list` and keep it: there is no
+undo, and `SetRemovePreset` takes only an index.
+
+- `SetSavePreset`, `SetRemovePreset`, `SetMovePreset`, `SetCreateNewStation`,
+  `SetDeleteStation`, `BookmarkStation`.
+
+**Rung 4 - needs hardware we do not have.** Grouping, stereo pairing, multi-channel positioning
+and their test tones all assume a second speaker. `SetGroup`, `SetUngroup`, `SetMultispkGroup`,
+`SetStereo`, `SetMultichGroup`, `PositionedSpkInGroupMultiCh`, the four `*Testtone*` calls.
+
+**Never, on the only speaker in the house.** These are in the app because the app ships to
+service technicians and factories as well as listeners. None of them has a use here and several
+have no visible undo:
+
+```text
+FactoryReset            SetBuyer                SetSwuServerType      SetUartOnOff
+SetShopMode             SetLocale               SetSwuTestServer      SetBtDut
+SetDebugMode            SetSpeakerTime          SetManualSpeakerUpgrade
+SetAp / SetApManual     SetIpInfo               RegisterDevice / UnregisterDevice
+```
+
+`SetAp`, `SetApManual` and `SetIpInfo` reconfigure the speaker's network from underneath the
+connection carrying the command, which is how a speaker stops being reachable. `SetBuyer`,
+`SetLocale` and the `Swu*` pair point it at different regional and firmware-update servers.
+`SetManualSpeakerUpgrade` starts a firmware write. There is no reason to send any of them and
+no way to test them safely.
+
+
 ### The full vocabulary
 
 `*` marks the 26 already used or documented by this project.
