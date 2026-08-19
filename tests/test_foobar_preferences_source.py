@@ -63,7 +63,7 @@ class FoobarPreferencesSourceTests(TestCase):
             "WAMBRIDGE_SLEEP_AFTER_STOP",
         ):
             self.assertIn(f'L"{name}"', source)
-        self.assertIn("environment overrides are active and take precedence", source)
+        self.assertIn("overrides are active and take precedence", source)
 
     def test_apply_is_marked_as_a_playback_restart_change(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
@@ -79,6 +79,8 @@ class FoobarPreferencesSourceTests(TestCase):
         self.assertIn("const wchar_t* stored = value == defaultValue ? nullptr", source)
         self.assertIn('write_setting(path, L"device", values.device, L"M5")', source)
         self.assertIn('write_setting(path, L"format", values.format, L"flac")', source)
+        self.assertIn("std::to_wstring(kDefaultVolumeMax)", source)
+        self.assertIn("std::to_wstring(kDefaultStartupSilenceMs)", source)
 
     def test_startup_volume_uses_the_speakers_raw_range(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
@@ -86,3 +88,28 @@ class FoobarPreferencesSourceTests(TestCase):
         self.assertIn("Startup volume (raw 0-30, blank = unchanged)", source)
         self.assertIn("parsed >= 0 && parsed <= 30", source)
         self.assertIn("clamped_int(volume, 0, 0, 30)", source)
+
+    def test_nested_controls_are_keyboard_navigable(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("WS_EX_CONTROLPARENT", source)
+        self.assertIn("WS_TABSTOP", source)
+
+    def test_new_ini_files_are_created_as_unicode(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("ensure_unicode_config_file()", source)
+        self.assertIn("constexpr BYTE bom[] = {0xFF, 0xFE};", source)
+        self.assertIn("CREATE_NEW", source)
+
+    def test_save_failure_is_visible_to_the_user(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("popup_message::g_show(", source)
+        self.assertIn("popup_message::icon_error", source)
+
+    def test_layout_stays_compact(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("constexpr int kRowPitch = 27;", source)
+        self.assertIn("kRowBase + 10 * kRowPitch", source)
