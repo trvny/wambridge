@@ -10,6 +10,7 @@
 #include <foobar2000/SDK/foobar2000.h>
 
 #include "wam_control.h"
+#include "wam_settings.h"
 
 #include <algorithm>
 #include <atomic>
@@ -33,13 +34,20 @@ constexpr char kComponentName[] = "WAM Bridge Output";
 constexpr char kOutputName[] = "WAM Bridge";
 constexpr char kDeviceName[] = "Samsung M5 (Wi-Fi)";
 constexpr size_t kWriteBatchFrames = 4096;
+using wam_settings::kDefaultBufferExtraMs;
+using wam_settings::kDefaultSleepAfterStopSeconds;
+using wam_settings::kDefaultStartVolumeMax;
+using wam_settings::kDefaultStartupSilenceMs;
+using wam_settings::kDefaultVolumeMax;
+using wam_settings::kMaximumBufferExtraMs;
+using wam_settings::kMaximumRawVolume;
+using wam_settings::kMaximumSleepAfterStopSeconds;
+using wam_settings::kMaximumStartupSilenceMs;
 // The M5's measured raw scale. Step 30 is its maximum and is very loud, so the
 // slider maps onto 0..volume_max rather than onto the whole range: a fresh
 // foobar sits at 0 dB, and that must not mean "as loud as the speaker goes".
 // Also used to lift the helper's start-volume clamp when a helper is being
 // replaced mid-session rather than started.
-constexpr int kMaximumRawVolume = 30;
-constexpr int kDefaultVolumeMax = 10;
 // The highest raw step the first helper of a playback session may start at,
 // however high the slider is sitting. The slider governs everything after it.
 //
@@ -55,7 +63,6 @@ constexpr int kDefaultVolumeMax = 10;
 // exactly what the next session started from. So the start is capped and the
 // listener raises it, which is the shape they asked for: "not a global limit,
 // just don't scare me every single time".
-constexpr int kDefaultStartVolumeMax = 3;
 // Below this the slider is treated as silence. Amplitude at -60 dB is 0.001,
 // which rounds to step 0 for every ceiling in range anyway.
 constexpr double kSilenceDecibels = -60.0;
@@ -126,22 +133,6 @@ constexpr GUID kDeviceGuid = {
     {0xa7, 0xb4, 0xfd, 0x01, 0x37, 0xcd, 0x4b, 0x4b},
 };
 
-std::wstring environment_value(const wchar_t* name) {
-    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
-    if (needed == 0) return {};
-    std::wstring value(needed, L'\0');
-    const DWORD written = GetEnvironmentVariableW(name, value.data(), needed);
-    if (written == 0 || written >= needed) return {};
-    value.resize(written);
-    return value;
-}
-
-std::wstring config_path() {
-    const auto localAppData = environment_value(L"LOCALAPPDATA");
-    if (localAppData.empty()) return L"foobar.ini";
-    return localAppData + L"\\WAMBridge\\foobar.ini";
-}
-
 bool file_exists(const std::wstring& path) {
     const DWORD attributes = GetFileAttributesW(path.c_str());
     return attributes != INVALID_FILE_ATTRIBUTES &&
@@ -177,23 +168,6 @@ std::wstring bundled_helper_path() {
 
     return modulePath.substr(0, separator) +
         L"\\wambridge-pcm\\wambridge-pcm.exe";
-}
-
-std::wstring ini_value(
-    const wchar_t* key,
-    const wchar_t* fallback,
-    const std::wstring& path
-) {
-    std::vector<wchar_t> buffer(32768);
-    const DWORD size = GetPrivateProfileStringW(
-        L"wambridge",
-        key,
-        fallback,
-        buffer.data(),
-        static_cast<DWORD>(buffer.size()),
-        path.c_str()
-    );
-    return std::wstring(buffer.data(), size);
 }
 
 // Key names are ASCII by construction; anything else in the file is a typo and
@@ -232,363 +206,20 @@ std::wstring quoted(const std::wstring& value) {
     return result;
 }
 
-// Formats the helper accepts. Anything else would reach its CLI as a rejected
-// argument and take the whole stream down with it.
-constexpr const wchar_t* kStreamFormats[] = {L"flac", L"wav", L"wav24", L"mp3"};
-constexpr const wchar_t* kDefaultStreamFormat = L"flac";
-
-// Milliseconds of silence FFmpeg prepends to the stream. Straight added delay
-// on a path about 6 s long; kept configurable so the hardware can say whether
-// it is still load-bearing. Measured at 0 on 2026-08-08: startup still reaches
-// WAMBRIDGE PLAYING.
-constexpr int kDefaultStartupSilenceMs = 1500;
-constexpr int kMaximumStartupSilenceMs = 10000;
-
-// Milliseconds of queue this output keeps on top of foobar's own buffer length.
-// Measured 2026-08-08: the queue runs almost exactly full - 3.79 to 3.99 s of a
-// 4.0 s capacity - so every millisecond of capacity is a millisecond of delay,
-// and this term plus the 2 s clamp floor below it is the largest single share
-// of the roughly six seconds that reach the ear. It was chosen, never measured.
-// Configurable so the hardware can say where the pipe starts to starve; the
-// default deliberately keeps today's behaviour until it has.
-constexpr int kDefaultBufferExtraMs = 2000;
-constexpr int kMaximumBufferExtraMs = 10000;
-
-// Seconds of sleep timer the helper arms once a stream ends. Off by default,
-// because it powers the speaker down and that has to be asked for.
-//
-// A fallback, not the mechanism. The M5 sleeps by itself once every program
-// talking to it lets go, which is what releasing the stream is for; what this
-// firmware exposes no control over is that idle power-down, since
-// `GetPowerSaving` and `GetAutoPowerDown` do not exist. `SetSleepTimer` is the
-// only power lever it answers, and it is here for the case where a clean
-// release turns out not to be enough - which is how the M5 once stayed lit
-// overnight.
-constexpr int kDefaultSleepAfterStopSeconds = 0;
-constexpr int kMaximumSleepAfterStopSeconds = 86400;
-
-// Every key this component reads. A file may legitimately outlive the build that
-// understood it -- `hardware_volume` exists only on an unmerged branch -- and an
-// ignored key is indistinguishable from a working one from the outside.
-constexpr const wchar_t* kKnownIniKeys[] = {
-    L"helper",
-    L"device",
-    L"format",
-    L"volume",
-    L"diagnostics",
-    L"startup_silence",
-    L"buffer_extra",
-    L"hardware_volume",
-    L"volume_max",
-    L"start_volume_max",
-    L"sleep_after_stop",
-};
-
-void report_unknown_ini_keys(const std::wstring& path) {
-    // A null key name asks for the section's key names as a double-null
-    // terminated block, which is the only way to see what the file actually has.
-    std::vector<wchar_t> buffer(32768);
-    const DWORD size = GetPrivateProfileStringW(
-        L"wambridge",
-        nullptr,
-        L"",
-        buffer.data(),
-        static_cast<DWORD>(buffer.size()),
-        path.c_str()
-    );
-    if (size == 0) return;
-
-    std::wstring unknown;
-    std::wstring commented;
-    for (DWORD index = 0; index < size;) {
-        const std::wstring key(buffer.data() + index);
-        index += static_cast<DWORD>(key.size()) + 1;
-        if (key.empty()) continue;
-        // Windows comments start with `;` and those never reach this loop,
-        // because the profile API drops them. `#` is an ordinary character to
-        // it, so `#format=flac` arrives as a key literally named `#format`.
-        // Reported separately rather than skipped: a line someone believes is
-        // disabled is exactly the confusion this function exists to remove, and
-        // `#hardware_volume=1` is a real setting nobody is applying.
-        if (key.front() == L'#') {
-            if (!commented.empty()) commented += L", ";
-            commented += key;
-            continue;
-        }
-
-        // Case-insensitively: GetPrivateProfileStringW finds `Device=M5` when
-        // asked for `device`, so an exact comparison would announce a setting
-        // as ignored while it was being applied. Reporting a working key as
-        // dead is the same failure this function exists to remove, pointed the
-        // other way.
-        bool known = false;
-        for (const wchar_t* candidate : kKnownIniKeys) {
-            if (CompareStringOrdinal(
-                    key.c_str(),
-                    -1,
-                    candidate,
-                    -1,
-                    TRUE
-                ) == CSTR_EQUAL) {
-                known = true;
-            }
-        }
-        if (known) continue;
-
-        if (!unknown.empty()) unknown += L", ";
-        unknown += key;
-    }
-    // Only %u and %s: console::printf is pfc's formatter, not the CRT one.
-    if (!unknown.empty()) {
-        console::printf(
-            "%s: ignoring unknown setting(s) in foobar.ini: %s",
-            kComponentName,
-            narrowed(unknown).c_str()
-        );
-    }
-    if (!commented.empty()) {
-        console::printf(
-            "%s: foobar.ini has setting(s) starting with '#': %s. Windows "
-            "comments start with ';', so these are names, not disabled lines, "
-            "and nothing reads them",
-            kComponentName,
-            narrowed(commented).c_str()
-        );
-    }
-}
-
-struct Settings {
-    std::wstring helper;
-    std::wstring device;
-    std::wstring format;
-    std::optional<int> volume;
-    bool diagnostics = false;
-    int startupSilenceMs = kDefaultStartupSilenceMs;
-    int bufferExtraMs = kDefaultBufferExtraMs;
-    bool hardwareVolume = false;
-    int volumeMax = kDefaultVolumeMax;
-    int startVolumeMax = kDefaultStartVolumeMax;
-    int sleepAfterStopSeconds = kDefaultSleepAfterStopSeconds;
-};
-
-bool truthy(const std::wstring& value) {
-    return value == L"1" || value == L"true" || value == L"yes" ||
-        value == L"on";
-}
+using Settings = wam_settings::Values;
 
 Settings load_settings() {
-    const auto path = config_path();
-    report_unknown_ini_keys(path);
-    auto helper = environment_value(L"WAMBRIDGE_PCM");
-    if (helper.empty()) {
-        const auto configured = ini_value(L"helper", L"", path);
-        if (!configured.empty() && !file_exists(configured)) {
-            // Otherwise a developer measures the bundled binary while believing
-            // a custom build is under test, which makes the numbers describe
-            // something nobody chose. The artifact has to stay identifiable.
-            console::printf(
-                "%s: helper %s does not exist, using the bundled one",
-                kComponentName,
-                narrowed(configured).c_str()
-            );
-        }
-        helper = configured.empty() || !file_exists(configured)
-            ? bundled_helper_path()
-            : configured;
+    auto settings = wam_settings::load_effective_values();
+    if (!settings.helper.empty() && !file_exists(settings.helper)) {
+        console::printf(
+            "%s: helper %s does not exist, using the bundled one",
+            kComponentName,
+            narrowed(settings.helper).c_str()
+        );
+        settings.helper.clear();
     }
-
-    auto device = environment_value(L"WAMBRIDGE_DEVICE");
-    if (device.empty()) device = ini_value(L"device", L"M5", path);
-
-    // FLAC unless asked otherwise. The prebuffer is partly bounded by bytes:
-    // mp3 at 320 kbps measured 16.9 s against FLAC's 13.4 s, because a thinner
-    // stream fits more seconds into the same space. wav pulls the same lever
-    // the other way and has not been heard on hardware yet.
-    auto format = environment_value(L"WAMBRIDGE_FORMAT");
-    if (format.empty()) format = ini_value(L"format", L"", path);
-    bool known = false;
-    for (const wchar_t* candidate : kStreamFormats) {
-        if (format == candidate) known = true;
-    }
-    if (!known) {
-        // Falling back silently is how a typo becomes "wav did not help".
-        if (!format.empty()) {
-            console::printf(
-                "%s: unknown format %s, falling back to %s",
-                kComponentName,
-                narrowed(format).c_str(),
-                narrowed(kDefaultStreamFormat).c_str()
-            );
-        }
-        format = kDefaultStreamFormat;
-    }
-
-    std::optional<int> volume;
-    auto rawVolume = environment_value(L"WAMBRIDGE_VOLUME");
-    if (rawVolume.empty()) rawVolume = ini_value(L"volume", L"", path);
-    if (!rawVolume.empty()) {
-        wchar_t* end = nullptr;
-        const long parsed = std::wcstol(rawVolume.c_str(), &end, 10);
-        if (end != rawVolume.c_str() && *end == L'\0' && parsed >= 0 && parsed <= 100) {
-            volume = static_cast<int>(parsed);
-        } else {
-            // Same silence as the two above: without this the speaker simply
-            // starts wherever it was, and the file looks like it asked for
-            // something else.
-            console::printf(
-                "%s: volume %s is not a number in 0..100, leaving the "
-                "speaker's own level",
-                kComponentName,
-                narrowed(rawVolume).c_str()
-            );
-        }
-    }
-    // Off unless asked for: the clock counters are a diagnostic, and a normal
-    // session should not push 240 lines into the user's console.
-    auto rawDiagnostics = environment_value(L"WAMBRIDGE_DIAGNOSTICS");
-    if (rawDiagnostics.empty()) {
-        rawDiagnostics = ini_value(L"diagnostics", L"", path);
-    }
-    const bool diagnostics = truthy(rawDiagnostics);
-
-    // Off unless asked for as well. The host gain is heard about thirteen
-    // seconds late, but it is also the only volume that works when the speaker
-    // is unreachable, so switching the slider over stays a deliberate choice.
-    auto rawHardware = environment_value(L"WAMBRIDGE_HARDWARE_VOLUME");
-    if (rawHardware.empty()) {
-        rawHardware = ini_value(L"hardware_volume", L"", path);
-    }
-    const bool hardwareVolume = truthy(rawHardware);
-
-    int volumeMax = kDefaultVolumeMax;
-    auto rawMax = environment_value(L"WAMBRIDGE_VOLUME_MAX");
-    if (rawMax.empty()) rawMax = ini_value(L"volume_max", L"", path);
-    if (!rawMax.empty()) {
-        wchar_t* end = nullptr;
-        const long parsed = std::wcstol(rawMax.c_str(), &end, 10);
-        if (end != rawMax.c_str() && *end == L'\0' && parsed >= 1 &&
-            parsed <= kMaximumRawVolume) {
-            volumeMax = static_cast<int>(parsed);
-        } else {
-            // "Nothing here is ignored quietly any more" was not true of this
-            // one: it was the last key that fell back without saying so.
-            console::printf(
-                "%s: volume_max %s is not a raw step in 1..%u, keeping %u",
-                kComponentName,
-                narrowed(rawMax).c_str(),
-                static_cast<unsigned>(kMaximumRawVolume),
-                static_cast<unsigned>(volumeMax)
-            );
-        }
-    }
-
-    int startVolumeMax = kDefaultStartVolumeMax;
-    auto rawStartMax = environment_value(L"WAMBRIDGE_START_VOLUME_MAX");
-    if (rawStartMax.empty()) {
-        rawStartMax = ini_value(L"start_volume_max", L"", path);
-    }
-    if (!rawStartMax.empty()) {
-        wchar_t* end = nullptr;
-        const long parsed = std::wcstol(rawStartMax.c_str(), &end, 10);
-        // Zero is a real answer here and means "no cap, start where the slider
-        // points", so the range starts at 0 rather than 1.
-        if (end != rawStartMax.c_str() && *end == L'\0' && parsed >= 0 &&
-            parsed <= kMaximumRawVolume) {
-            startVolumeMax = static_cast<int>(parsed);
-        } else {
-            console::printf(
-                "%s: start_volume_max %s is not a raw step in 0..%u, keeping %u",
-                kComponentName,
-                narrowed(rawStartMax).c_str(),
-                static_cast<unsigned>(kMaximumRawVolume),
-                static_cast<unsigned>(startVolumeMax)
-            );
-        }
-    }
-
-    int startupSilenceMs = kDefaultStartupSilenceMs;
-    auto rawSilence = environment_value(L"WAMBRIDGE_STARTUP_SILENCE");
-    if (rawSilence.empty()) {
-        rawSilence = ini_value(L"startup_silence", L"", path);
-    }
-    if (!rawSilence.empty()) {
-        wchar_t* end = nullptr;
-        const long parsed = std::wcstol(rawSilence.c_str(), &end, 10);
-        if (end != rawSilence.c_str() && *end == L'\0' && parsed >= 0 &&
-            parsed <= kMaximumStartupSilenceMs) {
-            startupSilenceMs = static_cast<int>(parsed);
-        } else {
-            console::printf(
-                "%s: startup_silence %s is not a number in 0..%u, using %u ms",
-                kComponentName,
-                narrowed(rawSilence).c_str(),
-                static_cast<unsigned>(kMaximumStartupSilenceMs),
-                static_cast<unsigned>(kDefaultStartupSilenceMs)
-            );
-        }
-    }
-
-    int bufferExtraMs = kDefaultBufferExtraMs;
-    auto rawBufferExtra = environment_value(L"WAMBRIDGE_BUFFER_EXTRA");
-    if (rawBufferExtra.empty()) {
-        rawBufferExtra = ini_value(L"buffer_extra", L"", path);
-    }
-    if (!rawBufferExtra.empty()) {
-        wchar_t* end = nullptr;
-        const long parsed = std::wcstol(rawBufferExtra.c_str(), &end, 10);
-        if (end != rawBufferExtra.c_str() && *end == L'\0' && parsed >= 0 &&
-            parsed <= kMaximumBufferExtraMs) {
-            bufferExtraMs = static_cast<int>(parsed);
-        } else {
-            // This knob exists to be walked down during a measurement, so a
-            // typo would otherwise read as "that value changed nothing".
-            console::printf(
-                "%s: buffer_extra %s is not a number in 0..%u, using %u ms",
-                kComponentName,
-                narrowed(rawBufferExtra).c_str(),
-                static_cast<unsigned>(kMaximumBufferExtraMs),
-                static_cast<unsigned>(kDefaultBufferExtraMs)
-            );
-        }
-    }
-
-    int sleepAfterStopSeconds = kDefaultSleepAfterStopSeconds;
-    auto rawSleep = environment_value(L"WAMBRIDGE_SLEEP_AFTER_STOP");
-    if (rawSleep.empty()) {
-        rawSleep = ini_value(L"sleep_after_stop", L"", path);
-    }
-    if (!rawSleep.empty()) {
-        wchar_t* end = nullptr;
-        const long parsed = std::wcstol(rawSleep.c_str(), &end, 10);
-        if (end != rawSleep.c_str() && *end == L'\0' && parsed >= 0 &&
-            parsed <= kMaximumSleepAfterStopSeconds) {
-            sleepAfterStopSeconds = static_cast<int>(parsed);
-        } else {
-            // Silence here would read as "the speaker still will not sleep",
-            // which is exactly the symptom this setting exists to end.
-            console::printf(
-                "%s: sleep_after_stop %s is not a number of seconds in 0..%u, "
-                "arming no sleep timer",
-                kComponentName,
-                narrowed(rawSleep).c_str(),
-                static_cast<unsigned>(kMaximumSleepAfterStopSeconds)
-            );
-        }
-    }
-
-    return {
-        std::move(helper),
-        std::move(device),
-        std::move(format),
-        volume,
-        diagnostics,
-        startupSilenceMs,
-        bufferExtraMs,
-        hardwareVolume,
-        volumeMax,
-        startVolumeMax,
-        sleepAfterStopSeconds,
-    };
+    if (settings.helper.empty()) settings.helper = bundled_helper_path();
+    return settings;
 }
 
 // The one socket the component keeps to a running helper's control listener.

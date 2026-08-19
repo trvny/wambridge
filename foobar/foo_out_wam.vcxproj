@@ -80,6 +80,7 @@
     </ClCompile>
     <ClCompile Include="wam_menu.cpp" />
     <ClCompile Include="wam_preferences.cpp" />
+    <ClCompile Include="wam_settings.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="$(FoobarSdkRoot)\pfc\pfc.vcxproj">
