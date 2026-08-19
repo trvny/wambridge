@@ -6,8 +6,6 @@ Android-first adapter for exposing Samsung WAM speakers to mobile players withou
 
 ## Scope
 
-- Lives under `mobile/` apart from isolated mobile-only CI/release workflows.
-- Does not modify or depend on `src/` or the foobar2000 output component.
 - Uses measured WAM behavior as a protocol specification, not as a code dependency.
 - First target: Neutron Music Player -> UPnP/DLNA -> Samsung Shape M5.
 
@@ -23,7 +21,6 @@ The Android adapter provides:
 - a Quick Settings tile: tap toggles the renderer, long-press opens settings;
 - optional launcher-icon hiding;
 - an M5-style app/renderer icon exposed through UPnP for players such as Neutron;
-- versioned APK output as `wambridge-{version}.apk`.
 
 Physical phone + M5 playback through Neutron is confirmed.
 
@@ -44,7 +41,3 @@ Neutron / other UPnP-DLNA player
             v
         Shape M5
 ```
-
-## Launcher visibility
-
-The launcher entry is a dedicated `activity-alias`, so it can be disabled without disabling the app or foreground renderer service. The Quick Settings tile remains available: tap starts/stops the renderer and long-press opens the app screen.
