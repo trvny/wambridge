@@ -82,7 +82,7 @@ Preferences → Playback → Output → Samsung M5 (Wi-Fi)
 ```
 
 This is alpha software built by one person against one speaker. It works, and it
-is not polished: there is no preferences page yet, so configuration is an INI
+is not polished: the preferences page is new and the INI is still the fuller
 file, and the control latency above is real. If you own a Shape speaker and were
 looking for exactly this, it should serve you — just read the limitation first.
 

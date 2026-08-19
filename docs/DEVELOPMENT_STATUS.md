@@ -299,8 +299,8 @@ operating system records.
 
 ## Open, in the order that makes sense
 
-1. **Physical checklist for PR #30** (routed volume slider). It changes `volume_set` and the
-   helper's startup volume, so the full gate applies before merging.
+1. ~~**Physical checklist for PR #30**~~ (routed volume slider). PR #30 is closed; the routed
+   slider is in `Stable on main` above. Struck 2026-08-19 during a claim-by-claim audit.
 2. **Find how small the host buffer can get.** It was dismissed as "2-3 s of thirteen" and is
    now the largest single term of six. `clamp(bufferLength, 2.0, 30.0)` plus a pad is a
    choice, not a measurement, and nothing has tested where the pipe starts to starve.
@@ -364,7 +364,10 @@ operating system records.
    interval is roughly a quarter of an hour and it starts when the last program lets go, not
    when the audio stops.
 10. Reduce and reimplement the finite share path from its measured working form.
-11. Add a proper foobar preferences page while retaining legacy INI compatibility.
+11. ~~Add a proper foobar preferences page while retaining legacy INI compatibility.~~
+    **Done** - `foobar/wam_preferences.cpp` implements `preferences_page_instance` in 524
+    lines, and the INI keys still load. Struck 2026-08-19 during a claim-by-claim audit; it had
+    been false since the page landed.
 12. Extend the radio side. **This item was wrong and stayed wrong for a while:** it claimed
     nothing lists what the speaker holds and a preset can only be recalled by a known number.
     `wambridge --tunein-list` has listed them all along, paginated and with the service
