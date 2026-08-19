@@ -388,6 +388,11 @@ operating system records.
     structure is understood, and only then writing or removing presets. That is a bigger step
     than further cosmetic work on the renderer.
 
+    **Open, small, and asked for while testing on 2026-08-19: the mobile radio screen has no
+    stop button.** A preset started from `wambridge-mobile` cannot be stopped from the same
+    screen. `RendererService` already has `ACTION_STOP` wired to a notification action, so the
+    gap is the radio UI rather than the transport.
+
     **Next concrete step, agreed 2026-08-19: a TuneIn id in the station store.**
     `RadioStation` already carries `url` and `fallback_urls`. Adding the station's TuneIn id
     gives each entry a **dynamic** address - `GetStationData` resolves it to whatever stream the

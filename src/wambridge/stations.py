@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,13 @@ __all__ = [
     "StationStore",
     "default_station_path",
     "validate_station_url",
+    "validate_tunein_id",
 ]
+
+# TuneIn station ids look like `s15984`. The catalogue also uses `p` for podcasts
+# and `t` for individual episodes; neither is a live stream, so neither belongs
+# in a station entry.
+_TUNEIN_ID_RE = re.compile(r"\As[0-9]{1,12}\Z")
 
 
 class StationError(RuntimeError):
@@ -31,6 +38,12 @@ class RadioStation:
     alias: str
     url: str
     fallback_urls: tuple[str, ...] = ()
+    # A TuneIn station id resolves to whatever stream the broadcaster serves
+    # today, so it survives an endpoint move that would leave a hardcoded URL
+    # dead. It is resolved at play time and never stored as a URL, because the
+    # answer changes; `url` and `fallback_urls` stay as the static safety net
+    # for when TuneIn is unreachable or offers only formats the speaker refuses.
+    tunein_id: str | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> RadioStation:
@@ -39,6 +52,7 @@ class RadioStation:
             alias = str(value["alias"]).strip()
             url = str(value["url"]).strip()
             raw_fallbacks = value.get("fallback_urls", ())
+            raw_tunein = value.get("tunein_id")
         except (KeyError, TypeError) as error:
             raise StationError(f"Invalid radio station: {value!r}") from error
         if isinstance(raw_fallbacks, str):
@@ -49,10 +63,16 @@ class RadioStation:
         if not alias:
             raise StationError("Radio station alias cannot be empty")
         validated_urls = _validated_unique_urls((url, *fallback_urls))
+        tunein_id = (
+            validate_tunein_id(str(raw_tunein).strip())
+            if raw_tunein not in (None, "")
+            else None
+        )
         return cls(
             alias=alias,
             url=validated_urls[0],
             fallback_urls=validated_urls[1:],
+            tunein_id=tunein_id,
         )
 
     @property
@@ -65,6 +85,8 @@ class RadioStation:
         payload: dict[str, Any] = {"alias": self.alias, "url": self.url}
         if self.fallback_urls:
             payload["fallback_urls"] = list(self.fallback_urls)
+        if self.tunein_id:
+            payload["tunein_id"] = self.tunein_id
         return payload
 
 
@@ -74,6 +96,15 @@ def validate_station_url(url: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise StationError("Radio station URL must use HTTP or HTTPS")
     return url
+
+
+def validate_tunein_id(value: str) -> str:
+    """Return a validated TuneIn station id such as ``s15984``."""
+    if not _TUNEIN_ID_RE.match(value):
+        raise StationError(
+            f"TuneIn station id must look like s15984, got {value!r}"
+        )
+    return value
 
 
 def _validated_unique_urls(urls: Iterable[str]) -> tuple[str, ...]:

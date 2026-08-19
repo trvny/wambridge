@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from urllib.parse import urlencode
 from xml.etree import ElementTree
 
-from .samsung import DEFAULT_PORT, WamApiError, WamResponse, request
+from .samsung import (
+    DEFAULT_PORT,
+    LOCAL_OPENER,
+    WamApiError,
+    WamResponse,
+    request,
+)
+
+LOGGER = logging.getLogger("wambridge")
+
+# A Tune.ashx answer is a short playlist. Anything larger is not one.
+MAX_TUNE_RESPONSE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +68,59 @@ def _element_value(element: ElementTree.Element, name: str) -> str | None:
         if value:
             return value
     return None
+
+
+# TuneIn resolves a station id to whatever the broadcaster serves right now.
+# Asking for `mp3,aac` matters: without it the answer for many stations is an
+# HLS playlist over HTTPS, and the speaker plays neither when a URL is handed
+# to it directly. No partnerId or serial is needed - measured 2026-08-19, the
+# bare id plus formats answers, while the id alone returns `#STATUS: 400`.
+TUNEIN_TUNE_URL = "http://opml.radiotime.com/Tune.ashx"
+TUNEIN_DIRECT_FORMATS = "mp3,aac"
+
+
+def resolve_tunein_station(
+    tunein_id: str,
+    *,
+    timeout: float = 10.0,
+    formats: str = TUNEIN_DIRECT_FORMATS,
+) -> tuple[str, ...]:
+    """Return the stream URLs TuneIn currently offers for one station id.
+
+    Runs on this machine, not on the speaker. Playlist entries that are HLS are
+    dropped rather than returned, because a caller handing them straight to
+    ``SetUrlPlayback`` gets silence, and one has previously wedged the control
+    port. Returns an empty tuple when TuneIn answers with no usable stream, so
+    a caller can fall through to its own static URLs.
+    """
+    query = urlencode({"id": tunein_id, "formats": formats})
+    request_url = f"{TUNEIN_TUNE_URL}?{query}"
+    try:
+        with LOCAL_OPENER.open(  # nosec B310 - fixed http scheme, built above
+            request_url,
+            timeout=timeout,
+        ) as response:
+            body = response.read(MAX_TUNE_RESPONSE_BYTES).decode(
+                "utf-8", errors="replace"
+            )
+    except OSError as error:
+        raise WamApiError(
+            f"Cannot reach TuneIn for station {tunein_id}: {error}"
+        ) from error
+
+    urls: list[str] = []
+    for line in body.splitlines():
+        candidate = line.strip()
+        if not candidate or candidate.startswith("#"):
+            continue
+        if not candidate.startswith(("http://", "https://")):
+            continue
+        if ".m3u8" in candidate:
+            LOGGER.debug("Skipping HLS variant for %s: %s", tunein_id, candidate)
+            continue
+        if candidate not in urls:
+            urls.append(candidate)
+    return tuple(urls)
 
 
 def select_tunein(

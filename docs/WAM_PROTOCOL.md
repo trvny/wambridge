@@ -873,6 +873,12 @@ in five** even years ago, with the official app and TuneIn both in good health. 
 `SetPlayPreset` answering `StopPlaybackEvent` is not a regression, not something this project
 broke, and not worth chasing: the speaker's own preset path has always been that unreliable.
 
+Confirmed from both ends the same evening. Every attempt from this machine failed, and then
+`czworka` started on the first try from `wambridge-mobile`, whose `SamsungTuneIn.kt` sends the
+identical call - `SetPlayPreset` with `presettype` before `presetindex`. Same command, same
+speaker, minutes apart, different outcome. The mechanism works; it is the reliability that does
+not, and no amount of getting the call right changes that.
+
 Which settles the design. Browsing to a station, reading `stationurl` and handing it to
 `SetUrlPlayback` is not merely an alternative to the preset path - it is **more reliable than
 the speaker's own**, and it starts on the first try. Preset writing buys nothing except the
