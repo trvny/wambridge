@@ -28,6 +28,11 @@ internal class RadioProxyServer(
         fun onProxyError(message: String)
     }
 
+    private data class OpenSource(
+        val connection: HttpURLConnection,
+        val contentType: String,
+    )
+
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
@@ -95,19 +100,35 @@ internal class RadioProxyServer(
 
         var lastError: Exception? = null
         for (source in station.urls) {
-            try {
-                proxySource(source, output)
-                return
+            val opened = try {
+                openSource(source)
             } catch (error: Exception) {
                 lastError = error
+                continue
             }
+
+            writeSuccess(output, opened.contentType)
+            listener.onStreamOpened(source)
+            try {
+                opened.connection.inputStream.use { raw ->
+                    BufferedInputStream(raw, COPY_BUFFER).copyTo(output, COPY_BUFFER)
+                    output.flush()
+                }
+            } catch (error: Exception) {
+                listener.onProxyError(error.message ?: error.javaClass.simpleName)
+            } finally {
+                opened.connection.disconnect()
+                listener.onStreamClosed()
+            }
+            return
         }
+
         val message = lastError?.message ?: "No usable station URL"
         listener.onProxyError(message)
         runCatching { writeError(output, 502, "Bad Gateway") }
     }
 
-    private fun proxySource(source: String, output: BufferedOutputStream) {
+    private fun openSource(source: String): OpenSource {
         val uri = URI(source)
         require(!uri.path.orEmpty().lowercase(Locale.ROOT).endsWith(".m3u8")) {
             "HLS radio streams are not supported by the mobile relay yet"
@@ -140,22 +161,12 @@ internal class RadioProxyServer(
                 require(contentType !in OGG_TYPES) {
                     "Ogg radio needs transcoding and is not supported by the mobile relay yet"
                 }
-
-                val outgoingType = contentType.ifBlank { "application/octet-stream" }
-                writeSuccess(output, outgoingType)
-                listener.onStreamOpened(source)
-                try {
-                    connection.inputStream.use { raw ->
-                        BufferedInputStream(raw, COPY_BUFFER).copyTo(output, COPY_BUFFER)
-                        output.flush()
-                    }
-                } finally {
-                    listener.onStreamClosed()
-                }
-                return
+                return OpenSource(
+                    connection = connection,
+                    contentType = contentType.ifBlank { "application/octet-stream" },
+                )
             } catch (error: Exception) {
                 lastError = error
-            } finally {
                 connection.disconnect()
             }
         }
