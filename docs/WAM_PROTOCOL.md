@@ -63,6 +63,31 @@ The speaker pulls from the local HTTP server. Do not send a remote URL directly:
 
 Proxy all sources through the local server.
 
+### Two playback paths, and the mistake of treating them as one
+
+Every format claim in this file belongs to exactly one of these, and they behave nothing alike:
+
+| path | who decodes | formats | needs a PC |
+| --- | --- | --- | --- |
+| `--radio-play`, foobar output, the share path | **our FFmpeg**, via the local server | anything FFmpeg reads - Ogg, HLS, HTTPS | yes |
+| a remote URL handed straight to `SetUrlPlayback`, TuneIn presets, the physical Radio button | **the speaker** | plain HTTP, MP3/AAC | no |
+
+The station packs in `src/wambridge/station_packs.py` are the first kind. Their Ogg and `.m3u8`
+entries are correct and play, because the speaker never sees those bytes. Reading the direct-path
+format limits and concluding those packs are broken is a mistake made here on 2026-08-19, one
+edit away from "fixing" working code.
+
+Re-measured the same evening, on a speaker known responsive because it was mid-stream on plain
+MP3 when the switch was sent: `http://41.dktr.pl:8000/trojka.ogg` handed straight to
+`SetUrlPlayback` is accepted, answers `UrlPlayback`, moves to `submode=cp` - and is silent. The
+same station as plain MP3, `http://stream3.polskieradio.pl:8954/`, plays. So the Ogg line below
+still holds; what it never meant is that Ogg cannot reach this speaker at all.
+
+An earlier attempt at the same test was thrown away rather than recorded: the front panel was
+still on Radio from a physical button press, so silence proved nothing. `SetFunc bt` then
+`SetFunc wifi` cleared it, and the known-good stream was audible immediately afterwards - the
+first time that recovery was needed for real rather than staged.
+
 ### Submode
 
 `SetUrlPlayback` normally switches the tested M5 from `dlna` to `cp`. A measured run stayed
