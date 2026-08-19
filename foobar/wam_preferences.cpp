@@ -6,6 +6,7 @@
 #include <array>
 #include <cwchar>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -102,12 +103,26 @@ bool truthy(const std::wstring& value) {
         value == L"on";
 }
 
-int parsed_int(const std::wstring& value, int fallback, int minimum, int maximum) {
+int valid_int(const std::wstring& value, int fallback, int minimum, int maximum) {
+    if (value.empty()) return fallback;
+    wchar_t* end = nullptr;
+    const long parsed = std::wcstol(value.c_str(), &end, 10);
+    if (end == value.c_str() || *end != L'\0' || parsed < minimum || parsed > maximum) {
+        return fallback;
+    }
+    return static_cast<int>(parsed);
+}
+
+int clamped_int(const std::wstring& value, int fallback, int minimum, int maximum) {
     if (value.empty()) return fallback;
     wchar_t* end = nullptr;
     const long parsed = std::wcstol(value.c_str(), &end, 10);
     if (end == value.c_str() || *end != L'\0') return fallback;
-    return std::clamp(static_cast<int>(parsed), minimum, maximum);
+    const long bounded = (std::max)(
+        static_cast<long>(minimum),
+        (std::min)(static_cast<long>(maximum), parsed)
+    );
+    return static_cast<int>(bounded);
 }
 
 Values default_values() {
@@ -134,31 +149,31 @@ Values load_values() {
     }
 
     values.hardwareVolume = truthy(ini_value(L"hardware_volume", L""));
-    values.volumeMax = parsed_int(
+    values.volumeMax = valid_int(
         ini_value(L"volume_max", L""),
         kDefaultVolumeMax,
         1,
         30
     );
-    values.startVolumeMax = parsed_int(
+    values.startVolumeMax = valid_int(
         ini_value(L"start_volume_max", L""),
         kDefaultStartVolumeMax,
         0,
         30
     );
-    values.startupSilenceMs = parsed_int(
+    values.startupSilenceMs = valid_int(
         ini_value(L"startup_silence", L""),
         kDefaultStartupSilenceMs,
         0,
         10000
     );
-    values.bufferExtraMs = parsed_int(
+    values.bufferExtraMs = valid_int(
         ini_value(L"buffer_extra", L""),
         kDefaultBufferExtraMs,
         0,
         10000
     );
-    values.sleepAfterStopSeconds = parsed_int(
+    values.sleepAfterStopSeconds = valid_int(
         ini_value(L"sleep_after_stop", L""),
         kDefaultSleepAfterStopSeconds,
         0,
@@ -345,7 +360,9 @@ private:
         windowClass.lpfnWndProc = &window_proc;
         windowClass.hInstance = instance;
         windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+        windowClass.hbrBackground = reinterpret_cast<HBRUSH>(
+            static_cast<INT_PTR>(COLOR_BTNFACE + 1)
+        );
         windowClass.lpszClassName = kWindowClass;
         if (RegisterClassExW(&windowClass) != 0 ||
             GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
@@ -436,7 +453,9 @@ private:
 
     void create_controls(HINSTANCE instance, HWND parent) {
         m_font = reinterpret_cast<HFONT>(SendMessageW(parent, WM_GETFONT, 0, 0));
-        if (m_font == nullptr) m_font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        if (m_font == nullptr) {
+            m_font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        }
 
         m_title = make_label(instance, L"WAM Bridge");
         m_note = make_label(
@@ -563,11 +582,16 @@ private:
         SetWindowTextW(control, value.c_str());
     }
 
-    static void set_checked(HWND control, bool checked) {
-        SendMessageW(control, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    static void set_checked(HWND control, bool checkedValue) {
+        SendMessageW(
+            control,
+            BM_SETCHECK,
+            checkedValue ? BST_CHECKED : BST_UNCHECKED,
+            0
+        );
     }
 
-    static bool checked(HWND control) {
+    static bool is_checked(HWND control) {
         return SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
     }
 
@@ -590,7 +614,7 @@ private:
     }
 
     int control_int(HWND control, int fallback, int minimum, int maximum) const {
-        return parsed_int(window_text(control), fallback, minimum, maximum);
+        return clamped_int(window_text(control), fallback, minimum, maximum);
     }
 
     Values read_controls() const {
@@ -604,9 +628,9 @@ private:
 
         const auto volume = window_text(m_volume);
         if (!volume.empty()) {
-            values.volume = std::to_wstring(parsed_int(volume, 0, 0, 100));
+            values.volume = std::to_wstring(clamped_int(volume, 0, 0, 100));
         }
-        values.hardwareVolume = checked(m_hardwareVolume);
+        values.hardwareVolume = is_checked(m_hardwareVolume);
         values.volumeMax = control_int(m_volumeMax, kDefaultVolumeMax, 1, 30);
         values.startVolumeMax = control_int(
             m_startVolumeMax,
@@ -632,7 +656,7 @@ private:
             0,
             86400
         );
-        values.diagnostics = checked(m_diagnostics);
+        values.diagnostics = is_checked(m_diagnostics);
         values.helper = window_text(m_helper);
         return values;
     }
