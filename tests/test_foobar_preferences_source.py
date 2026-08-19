@@ -79,3 +79,10 @@ class FoobarPreferencesSourceTests(TestCase):
         self.assertIn("const wchar_t* stored = value == defaultValue ? nullptr", source)
         self.assertIn('write_setting(path, L"device", values.device, L"M5")', source)
         self.assertIn('write_setting(path, L"format", values.format, L"flac")', source)
+
+    def test_startup_volume_uses_the_speakers_raw_range(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("Startup volume (raw 0-30, blank = unchanged)", source)
+        self.assertIn("parsed >= 0 && parsed <= 30", source)
+        self.assertIn("clamped_int(volume, 0, 0, 30)", source)
