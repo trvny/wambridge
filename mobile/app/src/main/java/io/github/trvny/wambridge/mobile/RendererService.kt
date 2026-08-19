@@ -74,9 +74,16 @@ class RendererService : Service(), RendererCallbacks {
         destroyed = true
         startPending.set(false)
         cancelIdleRelease()
+
+        val teardown = Thread({ stopRenderer() }, "wam-mobile-destroy").apply { start() }
+        try {
+            teardown.join(DESTROY_RELEASE_TIMEOUT_MS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+
         idleScheduler.shutdownNow()
         worker.shutdownNow()
-        stopRenderer()
         super.onDestroy()
     }
 
@@ -344,6 +351,7 @@ class RendererService : Service(), RendererCallbacks {
         private const val NOTIFICATION_ID = 5101
         private const val SAFE_START_VOLUME = 3
         private const val STREAM_RELEASE_GRACE_SECONDS = 15L
+        private const val DESTROY_RELEASE_TIMEOUT_MS = 1_500L
 
         @Volatile var running: Boolean = false
             private set

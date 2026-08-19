@@ -22,8 +22,10 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 internal interface RendererCallbacks {
     fun onPlay(rendererStreamUrl: String)
@@ -53,7 +55,9 @@ internal class UpnpRenderer(
 ) : AutoCloseable {
     private val executor = Executors.newCachedThreadPool()
     private val running = AtomicBoolean(false)
-    private val streamActive = AtomicBoolean(false)
+    private val clientSockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val streamSources = ConcurrentHashMap<Socket, HttpURLConnection>()
+    private val activeStream = AtomicReference<Socket?>(null)
     private var httpServer: ServerSocket? = null
     private var ssdpSocket: MulticastSocket? = null
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -80,14 +84,22 @@ internal class UpnpRenderer(
     }
 
     private fun startHttp() {
-        val server = ServerSocket(0)
+        val server = ServerSocket(0, 50, localAddress)
         httpServer = server
         port = server.localPort
         Thread({
             while (running.get()) {
                 try {
                     val socket = server.accept()
-                    executor.execute { handleClient(socket) }
+                    clientSockets += socket
+                    executor.execute {
+                        try {
+                            handleClient(socket)
+                        } finally {
+                            clientSockets -= socket
+                            try { socket.close() } catch (_: Exception) { }
+                        }
+                    }
                 } catch (_: IOException) {
                     if (running.get()) state.lastError = "UPnP HTTP listener stopped"
                 }
@@ -173,7 +185,10 @@ internal class UpnpRenderer(
                 socket.soTimeout = 15_000
                 val request = readRequest(BufferedInputStream(socket.getInputStream()))
                 val output = BufferedOutputStream(socket.getOutputStream())
+                val localControl = isLocalControlPeer(socket.inetAddress)
                 when {
+                    request.method == "GET" && request.path == "/stream" -> proxyStream(socket, output)
+                    !localControl -> textResponse(output, 403, "text/plain", "Local control only")
                     request.method == "GET" && request.path == "/description.xml" ->
                         textResponse(output, 200, "text/xml; charset=utf-8", descriptionXml())
                     request.method == "GET" && request.path == "/icon.png" -> iconResponse(output)
@@ -193,7 +208,6 @@ internal class UpnpRenderer(
                         subscriptionResponse(output, request)
                     request.method == "UNSUBSCRIBE" && request.path.startsWith("/upnp/event/") ->
                         rawResponse(output, 200, "OK", emptyMap(), ByteArray(0))
-                    request.method == "GET" && request.path == "/stream" -> proxyStream(output)
                     else -> textResponse(output, 404, "text/plain", "Not found")
                 }
             } catch (error: Exception) {
@@ -349,15 +363,17 @@ internal class UpnpRenderer(
         }
     }
 
-    private fun proxyStream(out: BufferedOutputStream) {
-        if (!streamActive.compareAndSet(false, true)) {
-            textResponse(out, 503, "text/plain", "Stream already active")
-            return
+    private fun proxyStream(client: Socket, out: BufferedOutputStream) {
+        val previous = activeStream.getAndSet(client)
+        if (previous != null && previous !== client) {
+            streamSources.remove(previous)?.disconnect()
+            try { previous.close() } catch (_: Exception) { }
         }
+
         callbacks.onStreamOpened()
         try {
             val source = state.currentUri
-            require(isLanHttpUri(source)) { "Only LAN HTTP sources are accepted" }
+            require(isLocalPlayerUri(source)) { "Only this phone's HTTP sources are accepted" }
             val connection = (URI(source).toURL().openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 0
@@ -366,6 +382,7 @@ internal class UpnpRenderer(
                 instanceFollowRedirects = false
                 setRequestProperty("User-Agent", "WAMBridge-Mobile/0.1")
             }
+            streamSources[client] = connection
             try {
                 connection.connect()
                 require(connection.responseCode in 200..299) {
@@ -394,17 +411,19 @@ internal class UpnpRenderer(
                     out.flush()
                 }
             } finally {
+                streamSources.remove(client)
                 connection.disconnect()
             }
         } finally {
-            streamActive.set(false)
-            if (state.nextUri.isNotBlank()) {
-                state.currentUri = state.nextUri
-                state.currentMetadata = state.nextMetadata
-                state.nextUri = ""
-                state.nextMetadata = ""
+            if (activeStream.compareAndSet(client, null)) {
+                if (state.nextUri.isNotBlank()) {
+                    state.currentUri = state.nextUri
+                    state.currentMetadata = state.nextMetadata
+                    state.nextUri = ""
+                    state.nextMetadata = ""
+                }
+                callbacks.onStreamClosed()
             }
-            callbacks.onStreamClosed()
         }
     }
 
@@ -454,11 +473,14 @@ internal class UpnpRenderer(
         write(((value ushr 24) and 0xff).toInt())
     }
 
-    private fun isLanHttpUri(value: String): Boolean = try {
+    private fun isLocalControlPeer(address: InetAddress): Boolean =
+        address.isLoopbackAddress || address.hostAddress == localAddress.hostAddress
+
+    private fun isLocalPlayerUri(value: String): Boolean = try {
         val uri = URI(value)
         if (!uri.scheme.equals("http", ignoreCase = true) || uri.host.isNullOrBlank()) false
-        else InetAddress.getAllByName(uri.host).all {
-            it.isSiteLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress
+        else InetAddress.getAllByName(uri.host).all { address ->
+            address.isLoopbackAddress || address.hostAddress == localAddress.hostAddress
         }
     } catch (_: Exception) {
         false
@@ -754,6 +776,14 @@ internal class UpnpRenderer(
         try { httpServer?.close() } catch (_: Exception) { }
         ssdpSocket = null
         httpServer = null
+        activeStream.getAndSet(null)?.let { socket ->
+            streamSources.remove(socket)?.disconnect()
+            try { socket.close() } catch (_: Exception) { }
+        }
+        streamSources.values.forEach { it.disconnect() }
+        streamSources.clear()
+        clientSockets.forEach { socket -> try { socket.close() } catch (_: Exception) { } }
+        clientSockets.clear()
         multicastLock?.let { if (it.isHeld) it.release() }
         multicastLock = null
         executor.shutdownNow()
