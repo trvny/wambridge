@@ -1,4 +1,6 @@
 #include <windows.h>
+#include <mmsystem.h>
+#include <objidl.h>
 
 #include <foobar2000/SDK/foobar2000.h>
 
@@ -143,7 +145,7 @@ Values load_values() {
     if (!volume.empty()) {
         wchar_t* end = nullptr;
         const long parsed = std::wcstol(volume.c_str(), &end, 10);
-        if (end != volume.c_str() && *end == L'\0' && parsed >= 0 && parsed <= 100) {
+        if (end != volume.c_str() && *end == L'\0' && parsed >= 0 && parsed <= 30) {
             values.volume = std::to_wstring(parsed);
         }
     }
@@ -320,7 +322,7 @@ public:
         }
     }
 
-    ~WamPreferencesInstance() override {
+    ~WamPreferencesInstance() {
         if (m_window != nullptr && IsWindow(m_window)) DestroyWindow(m_window);
     }
 
@@ -489,7 +491,7 @@ private:
             SendMessageW(m_format, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(format));
         }
 
-        m_volumeLabel = make_label(instance, L"Startup volume (0-100, blank = unchanged)");
+        m_volumeLabel = make_label(instance, L"Startup volume (raw 0-30, blank = unchanged)");
         m_volume = make_edit(instance, kVolume, true);
         m_hardwareVolume = make_checkbox(
             instance,
@@ -538,7 +540,8 @@ private:
         const int gap = dpi_scale(10);
         const int top = dpi_scale(86 + row * 31);
         const int controlX = margin + labelWidth + gap;
-        const int controlWidth = (std::max)(dpi_scale(120), client.right - controlX - margin);
+        const int availableWidth = static_cast<int>(client.right) - controlX - margin;
+        const int controlWidth = (std::max)(dpi_scale(120), availableWidth);
         MoveWindow(label, margin, top + dpi_scale(4), labelWidth, dpi_scale(20), TRUE);
         MoveWindow(control, controlX, top, controlWidth, dpi_scale(height), TRUE);
     }
@@ -548,7 +551,8 @@ private:
         RECT client{};
         GetClientRect(m_window, &client);
         const int margin = dpi_scale(14);
-        const int width = (std::max)(dpi_scale(100), client.right - margin * 2);
+        const int availableWidth = static_cast<int>(client.right) - margin * 2;
+        const int width = (std::max)(dpi_scale(100), availableWidth);
         MoveWindow(m_title, margin, dpi_scale(12), width, dpi_scale(22), TRUE);
         MoveWindow(m_note, margin, dpi_scale(35), width, dpi_scale(20), TRUE);
         MoveWindow(m_path, margin, dpi_scale(57), width, dpi_scale(20), TRUE);
@@ -628,7 +632,7 @@ private:
 
         const auto volume = window_text(m_volume);
         if (!volume.empty()) {
-            values.volume = std::to_wstring(clamped_int(volume, 0, 0, 100));
+            values.volume = std::to_wstring(clamped_int(volume, 0, 0, 30));
         }
         values.hardwareVolume = is_checked(m_hardwareVolume);
         values.volumeMax = control_int(m_volumeMax, kDefaultVolumeMax, 1, 30);
