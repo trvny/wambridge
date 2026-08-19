@@ -42,7 +42,7 @@ class MainActivity : Activity() {
             textSize = 24f
         })
         layout.addView(TextView(this).apply {
-            text = "\nNeutron → UPnP/DLNA → WAM Bridge → Samsung M5"
+            text = "\nUPnP/DLNA player → WAM Bridge → Samsung M5"
             textSize = 16f
         })
 
@@ -96,7 +96,7 @@ class MainActivity : Activity() {
         })
 
         layout.addView(TextView(this).apply {
-            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Default output settings are supported; WAV and LPCM/L16 are handled by the adapter."
+            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Other local UPnP/DLNA players can use the same renderer; WAV/L16, MP3 and FLAC are advertised."
             textSize = 14f
         })
 
