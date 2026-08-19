@@ -166,10 +166,22 @@ internal object SpeakerRemote {
     }
 
     private fun responseError(body: String): String? {
+        val result = Regex(
+            "<response\\b[^>]*\\bresult\\s*=\\s*['\"]([^'\"]+)['\"]",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).find(body)?.groupValues?.getOrNull(1)?.trim()
         val error = Regex(
             "<response\\b[^>]*\\berrCode\\s*=\\s*['\"]([^'\"]+)['\"]",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
         ).find(body)?.groupValues?.getOrNull(1)?.trim()
+            ?: Regex(
+                "<errCode\\b[^>]*>\\s*([^<]+?)\\s*</errCode>",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            ).find(body)?.groupValues?.getOrNull(1)?.trim()
+
+        if (!result.isNullOrBlank() && !result.equals("ok", ignoreCase = true)) {
+            return if (error.isNullOrBlank()) result else "$result/$error"
+        }
         return error?.takeUnless { it in SUCCESS_CODES }
     }
 
