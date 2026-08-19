@@ -20,6 +20,8 @@ STATUS = ROOT / "docs" / "DEVELOPMENT_STATUS.md"
 PREFERENCES = ROOT / "foobar" / "wam_preferences.cpp"
 MENU = ROOT / "foobar" / "wam_menu.cpp"
 TUNEIN = ROOT / "src" / "wambridge" / "tunein.py"
+CLI = ROOT / "src" / "wambridge" / "cli.py"
+SAMSUNG = ROOT / "src" / "wambridge" / "samsung.py"
 
 
 def read(path: Path) -> str:
@@ -63,3 +65,23 @@ class DocsMatchCodeTests(TestCase):
                 match.group(1).lstrip().startswith("~~"),
                 f"open item {number} was struck and is open again",
             )
+
+    def test_the_url_path_does_not_gate_on_the_cp_submode(self) -> None:
+        # `cp` is the submode SetUrlPlayback runs in - measured twice, most
+        # recently 2026-08-19 with an internet stream audible for its whole run
+        # while GetFunc reported `cp`. A gate here refuses the start that
+        # follows every previous URL playback, and DEVELOPMENT_STATUS has said
+        # so since before the gate existed. It was added anyway once.
+        self.assertIn(
+            "no URL startup gate or power-cycle advice",
+            read(STATUS),
+            "the rule this test enforces was removed from the status file",
+        )
+        self.assertNotIn("require_local_playback_mode", read(CLI))
+
+    def test_the_cp_guard_does_not_advertise_a_power_cycle(self) -> None:
+        # Recovery is SetFunc to another source and back to wifi. The guard
+        # told users to unplug the speaker long after that stopped being true.
+        samsung = read(SAMSUNG)
+        self.assertIn("def require_local_playback_mode(", samsung)
+        self.assertNotIn("power-cycle the speaker and retry", samsung)

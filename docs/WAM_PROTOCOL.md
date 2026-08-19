@@ -737,36 +737,60 @@ means browsing does not have to end in a preset write: browse, read the station 
 `SetUrlPlayback`, which this project already implements. The whole of rung 3 can stay untouched.
 The `partnerId` and `serial` are the speaker's credentials with TuneIn and are redacted here.
 
-**And now the price, which is the reason this is not a free read.** `SetSelectRadio` puts the
-speaker into `submode=cp`, and `samsung.py:require_local_playback_mode` already documents what
-that costs: in `cp` the speaker still fetches an offered URL or DLNA object over HTTP and then
-stays silent. Nothing clears it. Re-measured the same day, after browsing:
+**Browsing costs nothing, and an earlier revision of this section said otherwise.** That
+revision claimed `SetSelectRadio` strands the speaker in `submode=cp`. It does not. Re-measured
+deliberately the same evening, one command at a time:
 
 ```text
-CPM SetPlaybackControl stop   -> "Current track token is empty."   submode still cp
-UIC SetPlaybackControl stop   -> result="ng"                       submode still cp
-UIC SetFunc wifi              -> accepted, answers submode=cp      submode still cp
+start                                    submode=dlna
+SetSelectRadio                           submode=dlna
+GetCurrentRadioList                      submode=dlna
+GetSelectRadioList (descend)             submode=dlna
+GetStationData                           submode=dlna
+GetUpperRadioList                        submode=dlna
++80 s idle                               submode=dlna
 ```
 
-A power cycle does clear it. Measured the same evening, after the speaker was unplugged and
-plugged back in: `function=bt, submode=""`.
+The whole walk leaves the submode untouched. The `cp` seen earlier was already there before the
+first probe ran; nothing established that browsing caused it, and the causal claim was written
+down anyway. Browsing is a genuinely free read.
 
-**But do not read the `SetFunc` line above as "SetFunc does nothing".** That was the reading
-taken at first and it is wrong. The speaker came back from its power cycle on the Bluetooth
-source, and `SetFunc wifi` moved it to `function=wifi, submode=dlna` immediately. The command
-works. It did nothing against `cp` because the speaker was *already* on `wifi` - it was told to
-become what it already was.
+**What does switch the speaker to `cp` is `SetUrlPlayback` - and that is normal, not a fault.**
+This file has said so since the "Submode" section near the top, and it is worth repeating here
+because the wrong version above was written straight past it. Measured: an ordinary internet
+stream handed to `SetUrlPlayback` played audibly while `GetFunc` reported `submode=cp`
+throughout, and a second `SetUrlPlayback` switched streams without leaving `cp`.
 
-That leaves an untested hypothesis worth one experiment: **a round trip through another source**
-(`SetFunc bt`, then `SetFunc wifi`) may reset the submode out of `cp` the same way the power
-cycle did, since the power cycle's own recovery ended in `dlna`. If it works, the "power-cycle
-only" wording in `samsung.py:require_local_playback_mode` is too strong and the trap becomes a
-two-command recovery. Nothing has been sent - testing it means deliberately entering `cp` first,
-so it wants a speaker nobody is waiting on.
+Two reading traps come with that submode, both measured:
 
-So browsing is read-only with respect to presets and destructive with respect to playback. Any
-feature built on it has to treat entering the radio surface as a mode switch the user chose,
-not as a background lookup - and a client must never browse to enrich a now-playing display.
+- `GetPlayStatus` returns `function` and `submode` but **no `playstatus` element** while in `cp`.
+  Code that decides "is it playing" from that field is blind here.
+- `GetMusicInfo` answers `errCode: Wifi Sub Mode is CP`. That is the metadata call not applying
+  to content-player playback, not a failure of the playback.
+
+**Leaving `cp` takes two commands, not a power cycle.** Measured from a speaker that was in `cp`
+with a stream running:
+
+```text
+SetFunc bt      -> function=bt    submode=""
+SetFunc wifi    -> function=wifi  submode=dlna
+```
+
+`SetFunc` had looked useless earlier only because it was aimed at `wifi` while the speaker was
+already on `wifi` - it was told to become what it already was. A round trip through another
+source is what moves it. What still refuses to shift `cp` in place: `SetPlaybackControl stop` on
+both `CPM` (`"Current track token is empty."`) and `UIC` (`result="ng"`).
+
+So `samsung.py:require_local_playback_mode` saying "no command clears this state - power-cycle
+the speaker and retry" is wrong on both halves, and `docs/DEVELOPMENT_STATUS.md` had already
+recorded the rule it breaks: *no URL startup gate or power-cycle advice may depend on that
+submode*.
+
+**Still untested, and the reason the share path keeps its guard.** Everything above used a
+stream from the public internet. Both guarded call sites concern a URL pointing at *our own*
+HTTP server (`cli.py`) or the DLNA share path (`share_cli.py`). That `cp` blocks *those* remains
+plausible and unmeasured - the DLNA renderer in particular wants `submode=dlna`, which is the
+likeliest reason a phone pushing over DLNA finds a speaker in `cp` silent.
 
 **One more failure mode, worth expecting.** Under a fast series of CPM calls the whole CPM
 endpoint wedges: first it answers lists with `totallistcount=0`, then it stops answering `CPM`
@@ -854,12 +878,12 @@ player over before.
 above. `GetBatteryStatus` answers `batteryrate=50, batterymode=battery` on a mains-powered M5,
 which reads like a stub rather than a measurement - do not build on it.
 
-**Rung 1b - reads that are not free.** The radio browse calls belong here rather than above.
-`SetSelectRadio`, `GetCurrentRadioList`, `GetSelectRadioList`, `GetUpperRadioList` and
+**Rung 1, continued - the radio browse calls.** `SetSelectRadio`, `GetCurrentRadioList`,
+`GetSelectRadioList`, `GetUpperRadioList` and
 `GetStationData` touch no preset and no setting, but entering the radio surface leaves the
-speaker in `submode=cp`, where locally offered playback goes silent. A power cycle definitely
-clears it; whether a `SetFunc` round trip does is the open question under "Walking the radio
-tree".
+`GetStationData` touch no preset, no setting and - measured - not even the submode. Browsing
+belongs in rung 1 after all; the "1b" this list carried for one revision was based on a causal
+claim that did not survive being tested.
 
 **Rung 2 - writes that restore themselves.** Read the current value, write, write it back. Safe
 because the old value is known before anything changes, and none of it survives being set back.
