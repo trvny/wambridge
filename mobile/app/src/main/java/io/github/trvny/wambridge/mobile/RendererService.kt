@@ -374,7 +374,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "trvny.wambridge.mobile",
+                getString(R.string.app_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
                 description = "Mobile UPnP adapter status"
@@ -408,7 +408,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         }
         return builder
             .setSmallIcon(R.drawable.ic_qs_tile)
-            .setContentTitle("trvny.wambridge.mobile")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(message)
             .setContentIntent(openPendingIntent)
             .setOngoing(true)
