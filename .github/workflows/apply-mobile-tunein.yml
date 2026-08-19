@@ -1,0 +1,88 @@
+name: Apply mobile TuneIn wiring
+
+on:
+  push:
+    branches:
+      - mobile-tunein-presets
+    paths:
+      - ".github/workflows/apply-mobile-tunein.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Wire TuneIn into the mobile app
+        shell: python
+        run: |
+          from pathlib import Path
+
+          manifest = Path("mobile/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text(encoding="utf-8")
+          old = '''        <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>'''
+          new = '''        <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>'''
+          if old not in text:
+              raise SystemExit("MainActivity declaration not found")
+          marker = '''        </activity>
+
+        <activity-alias'''
+          replacement = '''        </activity>
+
+        <activity
+            android:name=".TuneInActivity"
+            android:exported="false" />
+
+        <activity-alias'''
+          if marker not in text:
+              raise SystemExit("Activity alias marker not found")
+          manifest.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
+
+          activity = Path("mobile/app/src/main/java/io/github/trvny/wambridge/mobile/MainActivity.kt")
+          text = activity.read_text(encoding="utf-8")
+          marker = '''        layout.addView(TextView(this).apply {
+            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Default output settings are supported; WAV and LPCM/L16 are handled by the adapter."
+            textSize = 14f
+        })'''
+          replacement = '''        layout.addView(Button(this).apply {
+            text = "TuneIn presets"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, TuneInActivity::class.java))
+            }
+        })
+
+        layout.addView(TextView(this).apply {
+            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Default output settings are supported; WAV and LPCM/L16 are handled by the adapter."
+            textSize = 14f
+        })'''
+          if marker not in text:
+              raise SystemExit("Neutron help marker not found")
+          activity.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
+
+          readme = Path("mobile/README.md")
+          text = readme.read_text(encoding="utf-8")
+          marker = '- optional launcher-icon hiding;\n'
+          replacement = marker + '- native TuneIn preset browsing and safe playback through the speaker CPM API;\n'
+          if marker not in text:
+              raise SystemExit("README marker not found")
+          readme.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
+
+      - name: Commit result and remove helper workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-mobile-tunein.yml
+          git add mobile
+          git commit -m "Add native TuneIn presets to mobile"
+          git push
