@@ -25,6 +25,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".TuneInActivity"
+            android:exported="false" />
+
         <activity-alias
             android:name="trvny.wambridge.mobile.LauncherAlias"
             android:enabled="true"
