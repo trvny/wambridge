@@ -1,0 +1,81 @@
+from pathlib import Path
+from unittest import TestCase
+
+
+ROOT = Path(__file__).parents[1]
+SOURCE = ROOT / "foobar" / "wam_preferences.cpp"
+PROJECT = ROOT / "foobar" / "foo_out_wam.vcxproj"
+
+
+class FoobarPreferencesSourceTests(TestCase):
+    def test_preferences_page_is_built_under_output(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        project = PROJECT.read_text(encoding="utf-8")
+
+        self.assertIn('<ClCompile Include="wam_preferences.cpp" />', project)
+        self.assertIn("class WamPreferencesPage : public preferences_page_v4", source)
+        self.assertIn('const char* get_name() override { return "WAM Bridge"; }', source)
+        self.assertIn(
+            "GUID get_parent_guid() override { return preferences_page::guid_output; }",
+            source,
+        )
+        self.assertIn(
+            "preferences_page_factory_t<WamPreferencesPage> g_preferencesFactory;",
+            source,
+        )
+
+    def test_preferences_keep_the_existing_ini_as_source_of_truth(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn('L"\\\\WAMBridge\\\\foobar.ini"', source)
+        self.assertIn("GetPrivateProfileStringW(", source)
+        self.assertIn("WritePrivateProfileStringW(", source)
+        for key in (
+            "device",
+            "format",
+            "volume",
+            "hardware_volume",
+            "volume_max",
+            "start_volume_max",
+            "startup_silence",
+            "buffer_extra",
+            "sleep_after_stop",
+            "diagnostics",
+            "helper",
+        ):
+            self.assertIn(f'L"{key}"', source)
+
+    def test_environment_overrides_are_kept_visible(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        for name in (
+            "WAMBRIDGE_PCM",
+            "WAMBRIDGE_CONTROL",
+            "WAMBRIDGE_DEVICE",
+            "WAMBRIDGE_VOLUME",
+            "WAMBRIDGE_FORMAT",
+            "WAMBRIDGE_DIAGNOSTICS",
+            "WAMBRIDGE_HARDWARE_VOLUME",
+            "WAMBRIDGE_VOLUME_MAX",
+            "WAMBRIDGE_START_VOLUME_MAX",
+            "WAMBRIDGE_STARTUP_SILENCE",
+            "WAMBRIDGE_BUFFER_EXTRA",
+            "WAMBRIDGE_SLEEP_AFTER_STOP",
+        ):
+            self.assertIn(f'L"{name}"', source)
+        self.assertIn("environment overrides are active and take precedence", source)
+
+    def test_apply_is_marked_as_a_playback_restart_change(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("preferences_state::changed", source)
+        self.assertIn("preferences_state::needs_restart_playback", source)
+        self.assertIn("preferences_state::resettable", source)
+        self.assertIn("populate(default_values());", source)
+
+    def test_defaults_are_not_written_as_redundant_ini_values(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("const wchar_t* stored = value == defaultValue ? nullptr", source)
+        self.assertIn('write_setting(path, L"device", values.device, L"M5")', source)
+        self.assertIn('write_setting(path, L"format", values.format, L"flac")', source)
