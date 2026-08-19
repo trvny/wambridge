@@ -38,7 +38,7 @@ class MainActivity : Activity() {
         }
 
         layout.addView(TextView(this).apply {
-            text = "trvny.wambridge.mobile"
+            text = getString(R.string.app_name)
             textSize = 24f
         })
         layout.addView(TextView(this).apply {
