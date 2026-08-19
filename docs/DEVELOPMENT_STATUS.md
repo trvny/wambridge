@@ -414,8 +414,9 @@ operating system records.
     **Search is measured as of 2026-08-20** and works: `SearchQuery` is paginated and returned
     66 hits for `Trojka`, with the owner's own preset station `s15984` among them. So finding a
     station by name needs neither the browse tree nor a preset write. `GetGenreStations` refuses
-    cleanly with "API not implemented for current service"; `GlobalSearch` needs `str_arr`
-    support in `build_command`, which does not exist yet. What is left is the UI.
+    cleanly with "API not implemented for current service"; `GlobalSearch` answers but returns
+    nothing on this speaker - it searches signed-in content providers and there are none, so the
+    `str_arr` support it would need is not worth adding. What is left is the UI.
 
     The concrete want behind this is the **physical Radio button**, which cycles the three
     presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
