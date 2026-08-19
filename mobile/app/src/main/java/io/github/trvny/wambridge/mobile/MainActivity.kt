@@ -88,6 +88,13 @@ class MainActivity : Activity() {
         }
         layout.addView(statusView)
 
+        layout.addView(Button(this).apply {
+            text = "TuneIn presets"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, TuneInActivity::class.java))
+            }
+        })
+
         layout.addView(TextView(this).apply {
             text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Default output settings are supported; WAV and LPCM/L16 are handled by the adapter."
             textSize = 14f
