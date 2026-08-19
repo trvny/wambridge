@@ -1,35 +1,63 @@
 package io.github.trvny.wambridge.mobile
 
-import android.annotation.SuppressLint
-import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 
 class WamBridgeTileService : TileService() {
+    override fun onStartListening() {
+        super.onStartListening()
+        refreshTile()
+    }
+
     override fun onClick() {
         super.onClick()
 
-        val intent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (RendererService.running) {
+            startService(
+                Intent(this, RendererService::class.java).apply { action = RendererService.ACTION_STOP },
+            )
+            qsTile?.state = Tile.STATE_INACTIVE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Off"
+            qsTile?.updateTile()
+            return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val pendingIntent = PendingIntent.getActivity(
-                this,
-                0,
-                intent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-            startActivityAndCollapse(pendingIntent)
-        } else {
-            startActivityAndCollapseLegacy(intent)
+        val preferences = getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
+        val target = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
+        if (!RendererService.isReasonableIpv4(target)) {
+            qsTile?.state = Tile.STATE_UNAVAILABLE
+            qsTile?.updateTile()
+            return
         }
+
+        startForegroundService(
+            Intent(this, RendererService::class.java).apply { action = RendererService.ACTION_START },
+        )
+        qsTile?.state = Tile.STATE_ACTIVE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Starting…"
+        qsTile?.updateTile()
     }
 
-    @SuppressLint("StartActivityAndCollapseDeprecated")
-    @Suppress("DEPRECATION")
-    private fun startActivityAndCollapseLegacy(intent: Intent) {
-        startActivityAndCollapse(intent)
+    private fun refreshTile() {
+        val tile = qsTile ?: return
+        val preferences = getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
+        val target = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
+        val configured = RendererService.isReasonableIpv4(target)
+
+        tile.state = when {
+            !configured -> Tile.STATE_UNAVAILABLE
+            RendererService.running -> Tile.STATE_ACTIVE
+            else -> Tile.STATE_INACTIVE
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            tile.subtitle = when {
+                !configured -> "Set up M5"
+                RendererService.running -> "On"
+                else -> "Off"
+            }
+        }
+        tile.updateTile()
     }
 }

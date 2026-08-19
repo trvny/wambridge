@@ -9,6 +9,8 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
@@ -17,10 +19,18 @@ class RendererService : Service(), RendererCallbacks {
     private var wamChannel: SamsungWamChannel? = null
     private var rendererState: RendererState? = null
     private var speakerIp: String = ""
+    private var clientUuid: String = ""
     private var ownsPlayback = false
+    private var safeVolumeApplied = false
+    private val channelLock = Any()
+    private val idleLock = Any()
+    private var idleRelease: ScheduledFuture<*>? = null
     private val startPending = AtomicBoolean(false)
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "wam-mobile-service").apply { isDaemon = true }
+    }
+    private val idleScheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "wam-mobile-idle-release").apply { isDaemon = true }
     }
 
     @Volatile
@@ -63,6 +73,8 @@ class RendererService : Service(), RendererCallbacks {
     override fun onDestroy() {
         destroyed = true
         startPending.set(false)
+        cancelIdleRelease()
+        idleScheduler.shutdownNow()
         worker.shutdownNow()
         stopRenderer()
         super.onDestroy()
@@ -89,7 +101,7 @@ class RendererService : Service(), RendererCallbacks {
         stopRenderer(removeForeground = false)
 
         speakerIp = target
-        val clientUuid = preferences.getString(KEY_CLIENT_UUID, null)
+        clientUuid = preferences.getString(KEY_CLIENT_UUID, null)
             ?: SamsungWamChannel.newClientUuid().also {
                 preferences.edit().putString(KEY_CLIENT_UUID, it).apply()
             }
@@ -98,27 +110,21 @@ class RendererService : Service(), RendererCallbacks {
                 preferences.edit().putString(KEY_RENDERER_UDN, it).apply()
             }
 
-        var channel: SamsungWamChannel? = null
         var activeRenderer: UpnpRenderer? = null
         try {
-            channel = SamsungWamChannel(speakerIp, clientUuid)
-            channel.connect()
-            if (destroyed || Thread.currentThread().isInterrupted) return
-
             val state = RendererState(rendererUdn)
             activeRenderer = UpnpRenderer(this, state, this)
             activeRenderer.start()
             if (destroyed || Thread.currentThread().isInterrupted) return
 
-            wamChannel = channel
             rendererState = state
             renderer = activeRenderer
-            channel = null
             activeRenderer = null
 
             ownsPlayback = false
+            safeVolumeApplied = false
             running = true
-            lastStatus = "Ready · ${renderer!!.localAddress.hostAddress}:${renderer!!.port} → $speakerIp"
+            lastStatus = "Ready · ${renderer!!.localAddress.hostAddress}:${renderer!!.port} → $speakerIp · speaker released"
             publish(lastStatus)
         } catch (error: Exception) {
             lastStatus = "Could not start adapter: ${error.message ?: error.javaClass.simpleName}"
@@ -130,15 +136,62 @@ class RendererService : Service(), RendererCallbacks {
             } catch (_: Exception) {
                 // Best effort while abandoning a partially started renderer.
             }
+        }
+    }
+
+    private fun ensureChannel(): SamsungWamChannel = synchronized(channelLock) {
+        wamChannel?.let { return it }
+        check(speakerIp.isNotBlank()) { "Speaker is not configured" }
+        check(clientUuid.isNotBlank()) { "Client UUID is not configured" }
+        SamsungWamChannel(speakerIp, clientUuid).also {
+            it.connect()
+            wamChannel = it
+        }
+    }
+
+    private fun closeWamChannel() {
+        synchronized(channelLock) {
             try {
-                channel?.close()
+                wamChannel?.close()
             } catch (_: Exception) {
-                // Best effort while abandoning a partial WAM connection.
+                // Best effort while releasing the speaker.
             }
+            wamChannel = null
+        }
+    }
+
+    private fun cancelIdleRelease() {
+        synchronized(idleLock) {
+            idleRelease?.cancel(false)
+            idleRelease = null
+        }
+    }
+
+    private fun scheduleIdleRelease() {
+        if (destroyed) return
+        synchronized(idleLock) {
+            if (destroyed) return
+            idleRelease?.cancel(false)
+            idleRelease = idleScheduler.schedule({
+                worker.execute {
+                    if (destroyed || !ownsPlayback) return@execute
+                    try {
+                        wamChannel?.pause()
+                    } catch (_: Exception) {
+                        // Closing the channel still prevents the adapter from holding resources.
+                    } finally {
+                        ownsPlayback = false
+                        closeWamChannel()
+                        rendererState?.transportState = "STOPPED"
+                        publish("Stream ended · speaker released")
+                    }
+                }
+            }, STREAM_RELEASE_GRACE_SECONDS, TimeUnit.SECONDS)
         }
     }
 
     private fun stopRenderer(removeForeground: Boolean = true) {
+        cancelIdleRelease()
         rendererState?.transportState = "STOPPED"
         if (ownsPlayback) {
             try {
@@ -148,56 +201,79 @@ class RendererService : Service(), RendererCallbacks {
             }
         }
         ownsPlayback = false
+        closeWamChannel()
         try {
             renderer?.close()
         } catch (_: Exception) {
             // Best effort.
         }
-        try {
-            wamChannel?.close()
-        } catch (_: Exception) {
-            // Best effort.
-        }
         renderer = null
         rendererState = null
-        wamChannel = null
         running = false
         speakerIp = ""
+        clientUuid = ""
         if (removeForeground) stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     override fun onPlay(rendererStreamUrl: String) {
-        val channel = requireNotNull(wamChannel) { "WAM control channel is not running" }
-        if (!ownsPlayback) channel.setVolumeRaw(SAFE_START_VOLUME)
+        cancelIdleRelease()
+        val channel = ensureChannel()
+        if (!safeVolumeApplied) {
+            channel.setVolumeRaw(SAFE_START_VOLUME)
+            safeVolumeApplied = true
+        }
         channel.offerStream(rendererStreamUrl)
         ownsPlayback = true
         rendererState?.transportState = "PLAYING"
         publish("Streaming Neutron → M5")
     }
 
+    override fun onStreamOpened() {
+        cancelIdleRelease()
+    }
+
+    override fun onStreamClosed() {
+        if (!destroyed && ownsPlayback) scheduleIdleRelease()
+    }
+
     override fun onPause() {
+        cancelIdleRelease()
         if (ownsPlayback) requireNotNull(wamChannel).pause()
         rendererState?.transportState = "PAUSED_PLAYBACK"
         publish("Paused")
     }
 
     override fun onStop() {
-        if (ownsPlayback) requireNotNull(wamChannel).pause()
-        ownsPlayback = false
+        cancelIdleRelease()
+        if (ownsPlayback) {
+            try {
+                wamChannel?.pause()
+            } finally {
+                ownsPlayback = false
+                closeWamChannel()
+            }
+        } else {
+            closeWamChannel()
+        }
         rendererState?.transportState = "STOPPED"
-        publish("Stopped")
+        publish("Stopped · speaker released")
     }
 
     override fun onVolume(percent: Int) {
         val normalized = percent.coerceIn(0, 100)
         val raw = (normalized * 30.0 / 100.0).roundToInt().coerceIn(0, 30)
-        requireNotNull(wamChannel).setVolumeRaw(raw)
+        val channel = ensureChannel()
+        channel.setVolumeRaw(raw)
+        safeVolumeApplied = true
         rendererState?.volumePercent = normalized
+        if (!ownsPlayback) closeWamChannel()
     }
 
     override fun onMute(muted: Boolean) {
-        requireNotNull(wamChannel).setMute(muted)
+        val channel = ensureChannel()
+        channel.setMute(muted)
         rendererState?.muted = muted
+        if (!ownsPlayback) closeWamChannel()
     }
 
     private fun promoteToForeground(message: String) {
@@ -258,8 +334,8 @@ class RendererService : Service(), RendererCallbacks {
     }
 
     companion object {
-        const val ACTION_START = "io.github.trvny.wambridge.mobile.START"
-        const val ACTION_STOP = "io.github.trvny.wambridge.mobile.STOP"
+        const val ACTION_START = "trvny.wambridge.mobile.START"
+        const val ACTION_STOP = "trvny.wambridge.mobile.STOP"
         const val PREFS = "mobile-adapter"
         const val KEY_SPEAKER_IP = "speaker_ip"
         private const val KEY_CLIENT_UUID = "wam_client_uuid"
@@ -267,6 +343,7 @@ class RendererService : Service(), RendererCallbacks {
         private const val CHANNEL_ID = "wambridge-renderer"
         private const val NOTIFICATION_ID = 5101
         private const val SAFE_START_VOLUME = 3
+        private const val STREAM_RELEASE_GRACE_SECONDS = 15L
 
         @Volatile var running: Boolean = false
             private set

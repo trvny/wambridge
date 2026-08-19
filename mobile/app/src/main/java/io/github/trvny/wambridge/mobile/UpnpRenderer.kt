@@ -1,6 +1,9 @@
 package io.github.trvny.wambridge.mobile
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.net.wifi.WifiManager
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -24,6 +27,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal interface RendererCallbacks {
     fun onPlay(rendererStreamUrl: String)
+    fun onStreamOpened()
+    fun onStreamClosed()
     fun onPause()
     fun onStop()
     fun onVolume(percent: Int)
@@ -171,6 +176,7 @@ internal class UpnpRenderer(
                 when {
                     request.method == "GET" && request.path == "/description.xml" ->
                         textResponse(output, 200, "text/xml; charset=utf-8", descriptionXml())
+                    request.method == "GET" && request.path == "/icon.png" -> iconResponse(output)
                     request.method == "GET" && request.path == "/upnp/avtransport.xml" ->
                         textResponse(output, 200, "text/xml; charset=utf-8", avTransportScpd())
                     request.method == "GET" && request.path == "/upnp/renderingcontrol.xml" ->
@@ -348,6 +354,7 @@ internal class UpnpRenderer(
             textResponse(out, 503, "text/plain", "Stream already active")
             return
         }
+        callbacks.onStreamOpened()
         try {
             val source = state.currentUri
             require(isLanHttpUri(source)) { "Only LAN HTTP sources are accepted" }
@@ -397,6 +404,7 @@ internal class UpnpRenderer(
                 state.nextUri = ""
                 state.nextMetadata = ""
             }
+            callbacks.onStreamClosed()
         }
     }
 
@@ -464,6 +472,32 @@ internal class UpnpRenderer(
         ?.substringAfter('=', "")
         ?.trim()
         ?.trim('"')
+
+    private fun iconResponse(out: BufferedOutputStream) {
+        val drawable = context.getDrawable(R.drawable.ic_launcher_foreground)
+            ?: error("Renderer icon drawable unavailable")
+        val bitmap = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.BLACK)
+        drawable.setBounds(0, 0, bitmap.width, bitmap.height)
+        drawable.draw(canvas)
+        val bytes = ByteArrayOutputStream().use { buffer ->
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, buffer)) { "Could not encode renderer icon" }
+            buffer.toByteArray()
+        }
+        bitmap.recycle()
+        rawResponse(
+            out,
+            200,
+            "OK",
+            mapOf(
+                "Content-Type" to "image/png",
+                "Content-Length" to bytes.size.toString(),
+                "Cache-Control" to "public, max-age=86400",
+            ),
+            bytes,
+        )
+    }
 
     private fun subscriptionResponse(out: BufferedOutputStream, request: HttpRequest) {
         rawResponse(
@@ -637,6 +671,7 @@ internal class UpnpRenderer(
         <device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
         <friendlyName>WAM Bridge · M5</friendlyName><manufacturer>WAM Bridge</manufacturer>
         <modelName>WAM Bridge Mobile</modelName><modelNumber>0.1</modelNumber><UDN>uuid:${state.udn}</UDN>
+        <iconList><icon><mimetype>image/png</mimetype><width>128</width><height>128</height><depth>32</depth><url>/icon.png</url></icon></iconList>
         <serviceList>
         ${serviceXml(AV_TRANSPORT, "AVTransport", "avtransport")}
         ${serviceXml(RENDERING_CONTROL, "RenderingControl", "renderingcontrol")}

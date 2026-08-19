@@ -38,7 +38,7 @@ class MainActivity : Activity() {
         }
 
         layout.addView(TextView(this).apply {
-            text = "WAM Bridge mobile adapter"
+            text = "trvny.wambridge.mobile"
             textSize = 24f
         })
         layout.addView(TextView(this).apply {
@@ -73,7 +73,11 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply {
             text = "Stop renderer"
             setOnClickListener {
-                stopService(Intent(this@MainActivity, RendererService::class.java))
+                startService(
+                    Intent(this@MainActivity, RendererService::class.java).apply {
+                        action = RendererService.ACTION_STOP
+                    },
+                )
                 window.decorView.postDelayed({ refreshStatus() }, 250)
             }
         })
@@ -90,8 +94,8 @@ class MainActivity : Activity() {
         })
 
         layout.addView(Button(this).apply {
-            text = "Add recovery Quick Settings tile"
-            setOnClickListener { requestRecoveryTile() }
+            text = "Add Quick Settings toggle"
+            setOnClickListener { requestQuickSettingsTile() }
         })
 
         launcherButton = Button(this).apply {
@@ -229,7 +233,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun requestRecoveryTile() {
+    private fun requestQuickSettingsTile() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             Toast.makeText(
                 this,
@@ -254,7 +258,7 @@ class MainActivity : Activity() {
             preferences.edit().putBoolean("recovery_tile_ready", ready).apply()
             Toast.makeText(
                 this,
-                if (ready) "Recovery tile ready." else "Recovery tile was not added.",
+                if (ready) "Quick Settings toggle ready." else "Quick Settings tile was not added.",
                 Toast.LENGTH_SHORT,
             ).show()
         }
@@ -263,9 +267,9 @@ class MainActivity : Activity() {
     private fun confirmHideLauncher() {
         val recoveryReady = preferences.getBoolean("recovery_tile_ready", false)
         val message = if (recoveryReady) {
-            "The launcher icon will disappear. Use the WAM Bridge Quick Settings tile to reopen this screen."
+            "The launcher icon will disappear. Tap the WAM Bridge Quick Settings tile to start/stop the renderer; long-press it to reopen this screen."
         } else {
-            "The launcher icon will disappear. Add the WAM Bridge Quick Settings tile first. A running adapter also keeps a notification, but the tile is the safer way back."
+            "The launcher icon will disappear. Add the WAM Bridge Quick Settings tile first. Its long-press opens this screen even after the launcher icon is hidden."
         }
 
         AlertDialog.Builder(this)
