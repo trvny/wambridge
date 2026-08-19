@@ -6,7 +6,9 @@ on the physical M5, including failed approaches and measurements that have
 superseded earlier assumptions. Prefer the newest measured result over an older
 plausible explanation. This file keeps only easy-to-miss traps.
 
-## Expensive traps
+## Wambridge
+
+### Expensive traps
 
 - **`process_samples` must accept every frame it is offered.** It returns void,
   so dropping a remainder cannot be reported; that bug made a 220 s track finish
@@ -34,13 +36,13 @@ plausible explanation. This file keeps only easy-to-miss traps.
 - Terminate timed-out child processes. Runaway FFmpeg processes have already
   exhausted the 8 GB physical test machine.
 
-## Physical M5
+### Physical M5
 
 Start hardware tests at raw volume step `3` or lower. Transport changes are
 merge-ready after a complete track, stable seekbar, second track, pause/resume,
 stop/change, and clean process shutdown pass on the physical M5.
 
-## GitHub
+## Code review rules
 
-Prefer one logical change per PR; trivial low-risk fixes can go directly to
-`main`.
+- Focus on functional bugs, regressions, security issues, data loss, and broken behavior.
+- Do not comment on README-only, documentation-only, changelog, formatting, or cosmetic changes unless they introduce a factual error or break generated/validated content.
