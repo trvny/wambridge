@@ -16,6 +16,7 @@ class RadioStationsActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var stationsView: LinearLayout
     private val store by lazy { RadioStationStore(this) }
+    private var editingAlias: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,11 +83,17 @@ class RadioStationsActivity : Activity() {
     }
 
     private fun saveStation() {
+        val originalAlias = editingAlias
         val result = runCatching {
-            store.upsert(aliasInput.text.toString(), urlsInput.text.toString().lines())
+            val station = store.upsert(aliasInput.text.toString(), urlsInput.text.toString().lines())
+            if (originalAlias != null && !originalAlias.equals(station.alias, ignoreCase = true)) {
+                store.remove(originalAlias)
+            }
+            station
         }
         result.fold(
             onSuccess = { station ->
+                editingAlias = null
                 aliasInput.text.clear()
                 urlsInput.text.clear()
                 statusView.text = "Saved ${station.alias}."
@@ -128,6 +135,7 @@ class RadioStationsActivity : Activity() {
                 addView(Button(this@RadioStationsActivity).apply {
                     text = "Edit"
                     setOnClickListener {
+                        editingAlias = station.alias
                         aliasInput.setText(station.alias)
                         urlsInput.setText(station.urls.joinToString("\n"))
                     }
@@ -136,6 +144,11 @@ class RadioStationsActivity : Activity() {
                     text = "Delete"
                     setOnClickListener {
                         store.remove(station.alias)
+                        if (editingAlias.equals(station.alias, ignoreCase = true)) {
+                            editingAlias = null
+                            aliasInput.text.clear()
+                            urlsInput.text.clear()
+                        }
                         refreshStations()
                     }
                 })
