@@ -7,7 +7,7 @@ Android-first adapter for exposing Samsung WAM speakers to mobile players withou
 ## Scope
 
 - Uses measured WAM behavior as a protocol specification, not as a code dependency.
-- First target: Neutron Music Player -> UPnP/DLNA -> Samsung Shape M5.
+- Confirmed target: Neutron Music Player -> UPnP/DLNA -> Samsung Shape M5; other local UPnP/DLNA players can use the same renderer.
 
 ## Current state
 
@@ -15,7 +15,7 @@ The Android adapter provides:
 
 - WAM speaker autodiscovery via SSDP with prefix-aware LAN fallback;
 - UPnP MediaRenderer services: AVTransport, RenderingControl and ConnectionManager;
-- a local WAV/LPCM proxy handed to the M5 through `SetUrlPlayback`;
+- a local WAV/LPCM, MP3 and FLAC proxy handed to the M5 through `SetUrlPlayback`;
 - safe first-start volume capped at M5 raw step `3`;
 - idle/session release so stopped playback does not keep the M5 awake;
 - a Quick Settings tile: tap toggles the renderer, long-press opens settings;
@@ -27,7 +27,7 @@ Physical phone + M5 playback through Neutron is confirmed.
 ## Architecture
 
 ```text
-Neutron / other UPnP-DLNA player
+Local UPnP/DLNA player
             |
             v
  Android MediaRenderer facade

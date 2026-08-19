@@ -285,7 +285,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         }
         if (ownsPlayback) {
             rendererState?.transportState = "PLAYING"
-            publish("Streaming Neutron → M5")
+            publish("Streaming player → M5")
         }
     }
 
@@ -350,7 +350,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
     override fun onPlaybackStarted() = dispatchWamEvent {
         if (!ownsPlayback) return@dispatchWamEvent
         rendererState?.transportState = "PLAYING"
-        publish("Streaming Neutron → M5 · confirmed")
+        publish("Streaming player → M5 · confirmed")
     }
 
     override fun onReportedError(method: String?, code: String) = dispatchWamEvent {

@@ -812,7 +812,7 @@ internal class UpnpRenderer(
         private const val AV_TRANSPORT = "urn:schemas-upnp-org:service:AVTransport:1"
         private const val RENDERING_CONTROL = "urn:schemas-upnp-org:service:RenderingControl:1"
         private const val CONNECTION_MANAGER = "urn:schemas-upnp-org:service:ConnectionManager:1"
-        private const val SINK_PROTOCOLS = "http-get:*:audio/wav:*,http-get:*:audio/x-wav:*,http-get:*:audio/L16:*"
+        private const val SINK_PROTOCOLS = "http-get:*:audio/wav:*,http-get:*:audio/x-wav:*,http-get:*:audio/L16:*,http-get:*:audio/mpeg:*,http-get:*:audio/flac:*,http-get:*:audio/x-flac:*"
         private val SSDP_TARGETS = listOf(
             "upnp:rootdevice",
             "urn:schemas-upnp-org:device:MediaRenderer:1",
