@@ -1,10 +1,10 @@
 package io.github.trvny.wambridge.mobile
 
+import android.content.Context
 import android.net.Uri
 import java.io.BufferedInputStream
 import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
@@ -12,9 +12,17 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class SamsungWamChannel(
+    context: Context,
     private val speakerIp: String,
     private val clientUuid: String,
+    private val listener: Listener? = null,
 ) : AutoCloseable {
+    interface Listener {
+        fun onPlaybackStarted()
+        fun onReportedError(method: String?, code: String)
+    }
+
+    private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
     private val sendLock = Any()
     private var socket: Socket? = null
@@ -24,8 +32,12 @@ internal class SamsungWamChannel(
         synchronized(sendLock) {
             if (socket?.isConnected == true && socket?.isClosed == false) return
 
-            val connection = Socket().apply {
-                connect(InetSocketAddress(speakerIp, PORT), CONNECT_TIMEOUT_MS)
+            val connection = WifiLan.connectSocket(
+                appContext,
+                speakerIp,
+                PORT,
+                CONNECT_TIMEOUT_MS,
+            ).apply {
                 keepAlive = true
                 soTimeout = READ_TIMEOUT_MS
             }
@@ -108,12 +120,15 @@ internal class SamsungWamChannel(
     }
 
     private fun drainResponses(activeSocket: Socket) {
-        val buffer = ByteArray(8192)
+        val bytes = ByteArray(8_192)
+        val parser = ResponseParser()
         try {
             val input = BufferedInputStream(activeSocket.getInputStream())
             while (running.get() && !activeSocket.isClosed) {
                 try {
-                    if (input.read(buffer) < 0) break
+                    val count = input.read(bytes)
+                    if (count < 0) break
+                    parser.feed(bytes, count).forEach(::handleResponseBody)
                 } catch (_: java.net.SocketTimeoutException) {
                     continue
                 }
@@ -122,6 +137,19 @@ internal class SamsungWamChannel(
             // The service reports command failures on the next send/reconnect attempt.
         } finally {
             if (socket === activeSocket) closeSocket()
+        }
+    }
+
+    private fun handleResponseBody(body: String) {
+        val method = METHOD_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()
+        val errorCode = RESPONSE_ERROR_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()
+            ?: ERROR_ELEMENT_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()
+
+        if (!errorCode.isNullOrBlank() && errorCode !in SUCCESS_ERROR_CODES) {
+            listener?.onReportedError(method, errorCode)
+        }
+        if (method.equals("StartPlaybackEvent", ignoreCase = true)) {
+            listener?.onPlaybackStarted()
         }
     }
 
@@ -185,31 +213,115 @@ internal class SamsungWamChannel(
     private data class Argument(val name: String, val value: String, val kind: Kind)
     private enum class Kind { STR, DEC, CDATA }
 
+    private class ResponseParser {
+        private var pending = ByteArray(0)
+
+        fun feed(bytes: ByteArray, count: Int): List<String> {
+            if (count <= 0) return emptyList()
+            if (pending.size + count > MAX_PENDING_BYTES) {
+                throw IOException("WAM response buffer exceeded limit")
+            }
+            pending += bytes.copyOf(count)
+
+            val bodies = mutableListOf<String>()
+            while (pending.isNotEmpty()) {
+                val statusStart = indexOf(pending, HTTP_PREFIX)
+                if (statusStart < 0) {
+                    if (pending.size > HTTP_PREFIX.size) {
+                        pending = pending.copyOfRange(pending.size - HTTP_PREFIX.size, pending.size)
+                    }
+                    break
+                }
+                if (statusStart > 0) pending = pending.copyOfRange(statusStart, pending.size)
+
+                val headerEnd = indexOf(pending, HEADER_END)
+                if (headerEnd < 0) break
+                val headerText = String(pending, 0, headerEnd, StandardCharsets.ISO_8859_1)
+                val status = STATUS_REGEX.find(headerText)?.groupValues?.getOrNull(1)
+                    ?: throw IOException("WAM response missing HTTP status")
+                val contentLength = CONTENT_LENGTH_REGEX.find(headerText)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+                    ?: throw IOException("WAM response missing Content-Length")
+                if (contentLength !in 0..MAX_BODY_BYTES) {
+                    throw IOException("WAM response body too large")
+                }
+
+                val bodyStart = headerEnd + HEADER_END.size
+                val messageEnd = bodyStart + contentLength
+                if (pending.size < messageEnd) break
+                if (status == "200" && contentLength > 0) {
+                    bodies += String(pending, bodyStart, contentLength, StandardCharsets.UTF_8)
+                }
+                pending = pending.copyOfRange(messageEnd, pending.size)
+            }
+            return bodies
+        }
+
+        private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
+            if (needle.isEmpty() || haystack.size < needle.size) return -1
+            outer@ for (start in 0..haystack.size - needle.size) {
+                for (index in needle.indices) {
+                    if (haystack[start + index] != needle[index]) continue@outer
+                }
+                return start
+            }
+            return -1
+        }
+    }
+
     companion object {
         private const val PORT = 55001
-        private const val CONNECT_TIMEOUT_MS = 3000
-        private const val READ_TIMEOUT_MS = 1000
+        private const val CONNECT_TIMEOUT_MS = 3_000
+        private const val READ_TIMEOUT_MS = 1_000
+        private const val MAX_PENDING_BYTES = 1024 * 1024
+        private const val MAX_BODY_BYTES = 1024 * 1024
+        private val HTTP_PREFIX = "HTTP/".toByteArray(StandardCharsets.US_ASCII)
+        private val HEADER_END = "\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)
+        private val STATUS_REGEX = Regex("^HTTP/1\\.[01]\\s+(\\d{3})\\b", RegexOption.IGNORE_CASE)
+        private val CONTENT_LENGTH_REGEX = Regex(
+            "^Content-Length\\s*:\\s*(\\d+)\\s*$",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE),
+        )
+        private val METHOD_REGEX = Regex(
+            "<method>\\s*([^<]+?)\\s*</method>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+        private val RESPONSE_ERROR_REGEX = Regex(
+            "<response\\b[^>]*\\berrCode\\s*=\\s*['\"]([^'\"]+)['\"]",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+        private val ERROR_ELEMENT_REGEX = Regex(
+            "<errCode\\b[^>]*>\\s*([^<]+?)\\s*</errCode>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+        private val SUCCESS_ERROR_CODES = setOf("0", "00", "000", "0000")
 
         fun newClientUuid(): String = UUID.randomUUID().toString()
 
-        fun probe(speakerIp: String): Boolean {
+        fun probe(context: Context, speakerIp: String): Boolean {
             val command = Uri.encode("<name>GetSpkName</name>")
-            val connection = (URL("http://$speakerIp:$PORT/UIC?cmd=$command").openConnection() as HttpURLConnection).apply {
-                connectTimeout = CONNECT_TIMEOUT_MS
-                readTimeout = CONNECT_TIMEOUT_MS
-                useCaches = false
-                requestMethod = "GET"
-            }
-            return try {
-                connection.inputStream.use { input ->
-                    val body = input.bufferedReader().readText()
-                    connection.responseCode == HttpURLConnection.HTTP_OK && body.isNotBlank()
+            val url = URL("http://$speakerIp:$PORT/UIC?cmd=$command")
+            for (connection in WifiLan.openHttpConnections(context.applicationContext, url)) {
+                connection.apply {
+                    connectTimeout = CONNECT_TIMEOUT_MS
+                    readTimeout = CONNECT_TIMEOUT_MS
+                    useCaches = false
+                    requestMethod = "GET"
                 }
-            } catch (_: IOException) {
-                false
-            } finally {
-                connection.disconnect()
+                try {
+                    if (connection.responseCode != HttpURLConnection.HTTP_OK) continue
+                    connection.inputStream.use { input ->
+                        if (input.bufferedReader().readText().isNotBlank()) return true
+                    }
+                } catch (_: IOException) {
+                    // Try the next Wi-Fi network if one exists.
+                } finally {
+                    connection.disconnect()
+                }
             }
+            return false
         }
     }
 }
