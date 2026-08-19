@@ -1,3 +1,5 @@
+![DLNA](https://img.shields.io/badge/DLNA-48A842?logo=dlna&logoColor=fff&style=for-the-badge) ![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=fff&style=for-the-badge)
+
 # WAM Bridge Mobile Adapter
 
 Android-first adapter for exposing Samsung WAM speakers to mobile players without changing the existing WAM Bridge playback/research code.
@@ -24,17 +26,6 @@ The Android adapter provides:
 - versioned APK output as `wambridge-{version}.apk`.
 
 Physical phone + M5 playback through Neutron is confirmed.
-
-## Release signing
-
-The release workflow becomes release-signed automatically when these GitHub Actions secrets exist:
-
-- `WAMBRIDGE_ANDROID_KEYSTORE_BASE64`
-- `WAMBRIDGE_ANDROID_KEYSTORE_PASSWORD`
-- `WAMBRIDGE_ANDROID_KEY_ALIAS`
-- `WAMBRIDGE_ANDROID_KEY_PASSWORD`
-
-`WAMBRIDGE_ANDROID_KEYSTORE_BASE64` is the base64-encoded keystore file. Without all four secrets the workflow keeps the debug-signed APK as an Actions artifact only. With signing configured it publishes `wambridge-{version}.apk` under a `mobile-v{version}` release tag.
 
 ## Architecture
 
