@@ -1771,8 +1771,14 @@ void note_speaker_step(int step) {
 
 DECLARE_COMPONENT_VERSION(
     "WAM Bridge Output",
-    "0.1.7",
-    "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm."
+    // Keep equal to `version` in pyproject.toml, which is where the number
+    // is decided; tests/test_component_version.py fails the build otherwise.
+    "0.0.5",
+    "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm.\n"
+    "\n"
+    "https://github.com/trvny/wambridge\n"
+    "\n"
+    "Copyright \xC2\xA9 2026 trvny. ISC licensed."
 );
 
 VALIDATE_COMPONENT_FILENAME("foo_out_wam.dll");
