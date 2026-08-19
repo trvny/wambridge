@@ -16,3 +16,10 @@ updates:
     groups:
       uv:
         patterns: ["*"]
+  - package-ecosystem: "gradle"
+    directory: "/mobile"
+    schedule:
+      interval: "weekly"
+    groups:
+      gradle:
+        patterns: ["*"]
