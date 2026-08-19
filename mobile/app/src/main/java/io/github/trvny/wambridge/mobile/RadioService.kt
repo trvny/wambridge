@@ -108,10 +108,17 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
                 preferences.edit().putString(KEY_CLIENT_UUID, it).apply()
             }
 
+        // Already on the radio worker thread, so this blocking resolution never
+        // touches the main one. A saved TuneIn id is resolved now rather than
+        // stored, because the answer changes whenever the broadcaster moves its
+        // endpoint - the failure a hardcoded URL cannot survive. Failure here is
+        // not fatal: the saved URLs come back unchanged.
+        val sources = TuneInResolver.candidateUrls(this, selected)
+
         var activeProxy: RadioProxyServer? = null
         var activeChannel: SamsungWamChannel? = null
         try {
-            activeProxy = RadioProxyServer(this, speakerIp, selected, this).also { it.start() }
+            activeProxy = RadioProxyServer(this, speakerIp, sources, this).also { it.start() }
             activeChannel = SamsungWamChannel(this, speakerIp, clientUuid, this).also { it.connect() }
 
             // Same startup rule as renderer and desktop radio: keep old firmware
