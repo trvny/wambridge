@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
@@ -92,6 +93,8 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
     private fun startRenderer() {
         if (destroyed) return
 
+        releaseRadio()
+
         val preferences = getSharedPreferences(PREFS, MODE_PRIVATE)
         val target = preferences.getString(KEY_SPEAKER_IP, "").orEmpty().trim()
         if (!isReasonableIpv4(target)) {
@@ -144,6 +147,20 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
                 // Best effort while abandoning a partially started renderer.
             }
         }
+    }
+
+    private fun releaseRadio() {
+        if (!RadioService.running) return
+        startService(
+            Intent(this, RadioService::class.java).apply {
+                action = RadioService.ACTION_STOP
+            },
+        )
+        val deadline = SystemClock.elapsedRealtime() + RADIO_STOP_TIMEOUT_MS
+        while (RadioService.running && SystemClock.elapsedRealtime() < deadline) {
+            Thread.sleep(50)
+        }
+        check(!RadioService.running) { "Radio did not release the WAM control channel" }
     }
 
     private fun ensureChannel(): SamsungWamChannel = synchronized(channelLock) {
@@ -428,6 +445,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         private const val SAFE_START_VOLUME = 3
         private const val STREAM_RELEASE_GRACE_SECONDS = 15L
         private const val DESTROY_RELEASE_TIMEOUT_MS = 1_500L
+        private const val RADIO_STOP_TIMEOUT_MS = 2_500L
         private const val CONTROL_ACTION_TIMEOUT_MS = 5_000L
         private const val WORKER_THREAD_NAME = "wam-mobile-service"
 
