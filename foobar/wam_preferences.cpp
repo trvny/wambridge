@@ -19,6 +19,8 @@ constexpr int kDefaultBufferExtraMs = 2000;
 constexpr int kDefaultVolumeMax = 10;
 constexpr int kDefaultStartVolumeMax = 3;
 constexpr int kDefaultSleepAfterStopSeconds = 0;
+constexpr int kRowBase = 80;
+constexpr int kRowPitch = 27;
 
 // {D50FA20F-41FC-4F2C-B76B-3C65DD129028}
 constexpr GUID kPreferencesGuid = {
@@ -195,19 +197,51 @@ bool ensure_config_directory() {
     return GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
+bool ensure_unicode_config_file() {
+    if (!ensure_config_directory()) return false;
+    const auto path = config_path();
+    HANDLE file = CreateFileW(
+        path.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+    if (file == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        return error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS;
+    }
+
+    constexpr BYTE bom[] = {0xFF, 0xFE};
+    DWORD written = 0;
+    const bool ok = WriteFile(file, bom, sizeof(bom), &written, nullptr) != FALSE &&
+        written == sizeof(bom);
+    CloseHandle(file);
+    if (!ok) DeleteFileW(path.c_str());
+    return ok;
+}
+
 bool write_setting(
     const std::wstring& path,
     const wchar_t* key,
     const std::wstring& value,
-    const wchar_t* defaultValue
+    const std::wstring& defaultValue
 ) {
     const wchar_t* stored = value == defaultValue ? nullptr : value.c_str();
     return WritePrivateProfileStringW(kSection, key, stored, path.c_str()) != FALSE;
 }
 
 bool write_values(const Values& values) {
-    if (!ensure_config_directory()) return false;
+    if (!ensure_unicode_config_file()) return false;
     const auto path = config_path();
+    const auto defaultVolumeMax = std::to_wstring(kDefaultVolumeMax);
+    const auto defaultStartVolumeMax = std::to_wstring(kDefaultStartVolumeMax);
+    const auto defaultStartupSilence = std::to_wstring(kDefaultStartupSilenceMs);
+    const auto defaultBufferExtra = std::to_wstring(kDefaultBufferExtraMs);
+    const auto defaultSleepAfterStop = std::to_wstring(kDefaultSleepAfterStopSeconds);
+
     bool ok = true;
     ok = write_setting(path, L"device", values.device, L"M5") && ok;
     ok = write_setting(path, L"format", values.format, L"flac") && ok;
@@ -222,31 +256,31 @@ bool write_values(const Values& values) {
         path,
         L"volume_max",
         std::to_wstring(values.volumeMax),
-        L"10"
+        defaultVolumeMax
     ) && ok;
     ok = write_setting(
         path,
         L"start_volume_max",
         std::to_wstring(values.startVolumeMax),
-        L"3"
+        defaultStartVolumeMax
     ) && ok;
     ok = write_setting(
         path,
         L"startup_silence",
         std::to_wstring(values.startupSilenceMs),
-        L"1500"
+        defaultStartupSilence
     ) && ok;
     ok = write_setting(
         path,
         L"buffer_extra",
         std::to_wstring(values.bufferExtraMs),
-        L"2000"
+        defaultBufferExtra
     ) && ok;
     ok = write_setting(
         path,
         L"sleep_after_stop",
         std::to_wstring(values.sleepAfterStopSeconds),
-        L"0"
+        defaultSleepAfterStop
     ) && ok;
     ok = write_setting(
         path,
@@ -302,7 +336,7 @@ public:
         RECT client{};
         GetClientRect(parent, &client);
         m_window = CreateWindowExW(
-            0,
+            WS_EX_CONTROLPARENT,
             kWindowClass,
             L"",
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
@@ -341,6 +375,11 @@ public:
         const Values requested = read_controls();
         if (!write_values(requested)) {
             console::printf("WAM Bridge Output: could not save foobar.ini preferences");
+            popup_message::g_show(
+                "Could not save the WAM Bridge preferences file.",
+                "WAM Bridge",
+                popup_message::icon_error
+            );
             return;
         }
         m_baseline = load_values();
@@ -463,8 +502,8 @@ private:
         m_note = make_label(
             instance,
             has_environment_overrides()
-                ? L"WAMBRIDGE_* environment overrides are active and take precedence. Changes apply to the next playback session."
-                : L"Environment variables take precedence over values saved here. Changes apply to the next playback session."
+                ? L"WAMBRIDGE_* overrides are active and take precedence. Changes apply on next playback."
+                : L"Environment variables override values saved here. Changes apply on next playback."
         );
         m_path = make_label(instance, (L"Config: " + config_path()).c_str());
 
@@ -538,7 +577,7 @@ private:
         const int margin = dpi_scale(14);
         const int labelWidth = dpi_scale(250);
         const int gap = dpi_scale(10);
-        const int top = dpi_scale(86 + row * 31);
+        const int top = dpi_scale(kRowBase + row * kRowPitch);
         const int controlX = margin + labelWidth + gap;
         const int availableWidth = static_cast<int>(client.right) - controlX - margin;
         const int controlWidth = (std::max)(dpi_scale(120), availableWidth);
@@ -553,15 +592,15 @@ private:
         const int margin = dpi_scale(14);
         const int availableWidth = static_cast<int>(client.right) - margin * 2;
         const int width = (std::max)(dpi_scale(100), availableWidth);
-        MoveWindow(m_title, margin, dpi_scale(12), width, dpi_scale(22), TRUE);
-        MoveWindow(m_note, margin, dpi_scale(35), width, dpi_scale(20), TRUE);
-        MoveWindow(m_path, margin, dpi_scale(57), width, dpi_scale(20), TRUE);
+        MoveWindow(m_title, margin, dpi_scale(8), width, dpi_scale(20), TRUE);
+        MoveWindow(m_note, margin, dpi_scale(29), width, dpi_scale(28), TRUE);
+        MoveWindow(m_path, margin, dpi_scale(58), width, dpi_scale(18), TRUE);
 
         place_row(m_deviceLabel, m_device, 0);
         place_row(m_formatLabel, m_format, 1, 200);
         place_row(m_volumeLabel, m_volume, 2);
 
-        const int checkboxTop = dpi_scale(86 + 3 * 31);
+        const int checkboxTop = dpi_scale(kRowBase + 3 * kRowPitch);
         MoveWindow(
             m_hardwareVolume,
             margin,
@@ -577,7 +616,7 @@ private:
         place_row(m_bufferExtraLabel, m_bufferExtra, 7);
         place_row(m_sleepAfterStopLabel, m_sleepAfterStop, 8);
 
-        const int diagnosticsTop = dpi_scale(86 + 9 * 31);
+        const int diagnosticsTop = dpi_scale(kRowBase + 9 * kRowPitch);
         MoveWindow(m_diagnostics, margin, diagnosticsTop, width, dpi_scale(23), TRUE);
         place_row(m_helperLabel, m_helper, 10);
     }
