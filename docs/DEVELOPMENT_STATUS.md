@@ -327,10 +327,11 @@ operating system records.
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer. The stream
    path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
-7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** Try
-   `GetNetworkStandByMode` first: the official app has it on `UIC`, the socket this component
-   already holds open, and if the speaker answers it is a cleaner power lever than arming a
-   timer. The `Get` form is free to probe. See `WAM_PROTOCOL.md`. This
+7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** Note first
+   that the sleep timer is **not** the only power lever: `GetNetworkStandByMode` was measured
+   answering on 2026-08-19 with `networkstandbymode=on`, on `UIC`, the socket this component
+   already holds open. `SetNetworkStandByMode` takes a `str` and is untried. That may be the
+   better menu item, or the better default. See `WAM_PROTOCOL.md`. This
    component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
    only power lever the firmware answers a client with — yet the only way to reach it is
    `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
@@ -363,14 +364,15 @@ operating system records.
    when the audio stops.
 10. Reduce and reimplement the finite share path from its measured working form.
 11. Add a proper foobar preferences page while retaining legacy INI compatibility.
-12. Extend the radio side. Native TuneIn preset playback and custom stations already work
-    from the CLI and the foobar menu; what is missing is browsing rather than recalling -
-    nothing lists what the speaker has, and a preset can only be played by the number a person
-    already knows. **The commands for it are now known** (`GetPresetList`, paginated, plus
-    `GetCurrentRadioList` / `GetUpperRadioList` for the tree) - see the vocabulary section in
-    `WAM_PROTOCOL.md`, and note that none of it has been tried against the hardware yet, and
-    that `SetPlayPreset` carries a `presettype` this project does not send. A dockable panel
-    still waits on output transport being stable.
+12. Extend the radio side. **This item was wrong and stayed wrong for a while:** it claimed
+    nothing lists what the speaker holds and a preset can only be recalled by a known number.
+    `wambridge --tunein-list` has listed them all along, paginated and with the service
+    selected first, in `src/wambridge/tunein.py`. Two things are genuinely missing, both now
+    with commands attached in `WAM_PROTOCOL.md` and neither tried on hardware:
+    **writing presets** (`SetSavePreset`, `SetRemovePreset`, `SetMovePreset`, against a README
+    that still says no write API is known) and **browsing the catalogue** for stations not
+    already saved (`GetUpperRadioList`, `GetCurrentRadioList`, `SetSelectRadio`,
+    `GetGenreStations`, `SearchQuery`). A dockable panel still waits on output transport.
 13. ~~**Take the Samsung Android app apart.**~~ **Done 2026-08-19.** 242 commands recovered
     and written up in `WAM_PROTOCOL.md`; 26 of them were already in use here. What follows from
     it is spread across items 7, 12 and the new item 15 rather than kept as one lump.
@@ -378,9 +380,10 @@ operating system records.
     a Samsung corporate one, and two independent mirrors agree on the fingerprint.
 14. **Probe the recovered commands against the physical M5, cheapest first.** They are
     inferred from a decompiled app, so each one is a hypothesis until the speaker answers.
-    Order that costs least and settles most: `GetNetworkStandByMode` and `GetPresetList` are
-    both read-only and answer or time out; `GetCurrentRadioList` and `GetUpperRadioList` next,
-    to see whether the radio surface is a tree or a flat list; only then anything with `Set`.
+    First round done 2026-08-19: `GetNetworkStandByMode`, `GetCpList`, `GetPresetList` and
+    `GetRadioInfo` all answered and are written up. Next, still read-only:
+    `GetCurrentRadioList` and `GetUpperRadioList`, to settle whether the radio surface is a
+    tree or a flat list; only then anything with `Set`.
     Record each as measured or as silent in `WAM_PROTOCOL.md`, the same way the rest of that
     file distinguishes them - a command that exists in the app and dies on this firmware is
     worth writing down exactly once.

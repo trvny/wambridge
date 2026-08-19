@@ -539,11 +539,23 @@ CPM?cmd=<name>GetUpperRadioList</name>
        <p type="dec" name="listcount"  val="%s"/>
 ```
 
-Two details this project does not currently carry: `GetPresetList` is **paginated**, so a
-client has to walk it rather than ask once; and `SetPlayPreset` sends a `presettype` alongside
-the index, which we do not send at all. `GetUpperRadioList` and `GetCurrentRadioList` together
-suggest the speaker exposes a browsable tree rather than a flat list, with
-`SetSelectRadio` descending into it.
+**Correction, same day.** An earlier revision of this section claimed the pagination and the
+`presettype` argument were missing here. Both were already implemented: `src/wambridge/tunein.py`
+selects the service first, pages `GetPresetList`, and sends `presettype` with `SetPlayPreset`,
+all reachable as `wambridge --tunein-list` and `--tunein-play`. Listing saved presets is a solved
+problem and the open list said otherwise for longer than it was true.
+
+What the app has and this project does not is on either side of that:
+
+- **Writing presets.** `README.md` says changing the preset list "still belongs to Samsung's
+  plugin because no reliable write API is known". The app has `SetSavePreset`,
+  `SetRemovePreset` (`presetindex`) and `SetMovePreset`. Untested here, but they are not
+  unknown any more.
+- **Finding stations that are not already saved.** `GetUpperRadioList` and
+  `GetCurrentRadioList` are both paginated and together imply a browsable tree rather than a
+  flat list, with `SetSelectRadio` descending into it; `GetGenreStations`, `SearchQuery` and
+  `GlobalSearch` sit beside them. Nothing here browses the catalogue - only what the speaker
+  already holds.
 
 ### A second power lever, on the port we already hold open
 
@@ -556,15 +568,39 @@ UIC?cmd=<name>SetNetworkStandByMode</name>
 UIC?cmd=<name>GetNetworkStandByMode</name>
 ```
 
-Worth probing before the sleep-timer menu item is built, because if it works it is a cleaner
-answer to the standby question than arming a timer. The `Get` form costs nothing to try.
+**Measured 2026-08-19, and it answers.** A plain read against the physical M5 at rest:
+
+```xml
+<method>NetworkStandByMode</method>
+<response result="ok"><networkstandbymode>on</networkstandbymode></response>
+```
+
+So the sleep timer is not the only power lever after all, and the "almost standby" state the
+speaker was long observed to have now has a name and a command. The response method drops the
+`Get`, the same way `GetApInfo` answers as `ApInfo`. `SetNetworkStandByMode` takes a `str`
+argument `networkstandbymode` and has not been tried.
 
 ### Content providers and search
 
 `BrowseMain`, `Browse`, `GetCpList`, `GetCpInfo`, `GetCpSubmenu`, `SetSelectCpSubmenu`,
 `SetCpService`, `GlobalSearch`, `SearchQuery`, `SearchUniversalQuery`, `GetStationData`,
 `GetGenreStations`, `SetCreateNewStation`, `SetDeleteStation`, `BookmarkStation`. This is the
-whole TuneIn-and-friends surface. Most of it will need a signed-in service to answer.
+whole TuneIn-and-friends surface. Most of it needs a service selected first.
+
+Measured the same day, all read-only:
+
+- `GetCpList` answers with `liststartindex` and `listcount` - **not** `startindex`, which is
+  what the preset call takes; guessing the wrong one returns `errcode 53`,
+  "Input parameter/parameters not found".
+- It lists **20 providers** (Pandora, Spotify, Deezer, Qobuz, Tidal HiFi, SiriusXM, Amazon
+  Prime and so on), every one `signinstatus=0`, while reporting `listtotalcount=24`. TuneIn is
+  **not among them** - it is reached through the radio surface, not as a content provider.
+- `GetPresetList` without a service selected returns `errcode 67`, "No service Selected", which
+  is why `tunein.py` calls `select_tunein()` first.
+- `GetRadioInfo` answers `ok` with `playstatus=stop` and `cpname=Unknown` when nothing is
+  selected.
+- Anonymous reads come back with `user_identifier=public`, and errors arrive as child elements
+  (`<errcode>`, `<errmessage>`), both as this file already records.
 
 ### Sound shaping
 
