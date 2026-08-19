@@ -492,6 +492,32 @@ without evidence from different firmware.
   transport while it keeps the connection. `holding=<count>` reads the local end of that,
   which is the same socket seen from this side, but the speaker's own view is unmeasured.
 
+### Three sources, none of them automatically right
+
+Everything known about this speaker came from one of three places, and it is worth naming them
+because the newest one is the easiest to over-trust.
+
+1. **Traffic measured against the physical M5**, including traffic produced by Samsung's own
+   desktop app while someone watched. This is where `playertype=myphone`, the flat `objectid`,
+   the queue-based playback and the 0-30 volume scale came from. Strongest evidence there is.
+2. **The mobile app's code**, decompiled 2026-08-19. Broad and precise about *shape* - exact
+   arguments, exact endpoints - and silent about whether this firmware answers at all.
+3. **This project's own implementation**, which in places went past both.
+
+The third one is not a poor relation. The clearest example is the release at the end of a
+session: nothing in either app suggested it, and it exists because a lit speaker was measured
+staying lit. A build that sent no release was still lit 33 minutes after its last audio; a
+session ending `WAMBRIDGE STOPPED stop=sent sleep=off holding=0` was dark 17 minutes later. That
+behaviour is ours, it is measured, and no amount of official-looking code should displace it.
+
+So the rule for adopting anything from the vocabulary below: **replace an improvisation when the
+official way is demonstrably better on this hardware, not because it is official.** Sometimes it
+will be - a documented argument beats a guessed one. Sometimes the app is doing something for
+reasons that do not apply here, and sometimes it is simply worse: it has a whole UI to keep
+responsive and no interest in a bit-exact PCM clock. Where two sources disagree, the measurement
+wins and the disagreement is worth a line in this file rather than a silent edit.
+
+
 ## What the official app can say, and we cannot
 
 Read this section differently from the rest of the file: **nothing here is measured.** Every
