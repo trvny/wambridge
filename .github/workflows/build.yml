@@ -22,6 +22,7 @@ on:
       - "tests/**"
       - "tools/**"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

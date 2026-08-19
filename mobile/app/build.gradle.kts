@@ -2,6 +2,15 @@ plugins {
     id("com.android.application")
 }
 
+// The release workflow derives both from the git tag; the literals below are the
+// fallback used by local and CI debug builds.
+val wamVersionName = (findProperty("wamVersionName") as String?)
+    ?.takeIf { it.isNotBlank() }
+    ?: "0.1.3"
+val wamVersionCode = (findProperty("wamVersionCode") as String?)
+    ?.toIntOrNull()
+    ?: 103
+
 val releaseKeystorePath = System.getenv("WAMBRIDGE_KEYSTORE_PATH")
 val releaseStorePassword = System.getenv("WAMBRIDGE_KEYSTORE_PASSWORD")
 val releaseKeyAlias = System.getenv("WAMBRIDGE_KEY_ALIAS")
@@ -21,8 +30,8 @@ android {
         applicationId = "trvny.wambridge.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = wamVersionCode
+        versionName = wamVersionName
     }
 
     signingConfigs {

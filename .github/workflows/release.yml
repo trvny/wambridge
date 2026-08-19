@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.parse.outputs.name }}
+      code: ${{ steps.parse.outputs.code }}
+      prerelease: ${{ steps.parse.outputs.prerelease }}
+    steps:
+      - name: Derive the version from the tag
+        id: parse
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          name="${TAG#v}"
+          core="${name%%-*}"
+          if [[ ! "$core" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Tag $TAG carries no major.minor.patch version" >&2
+            exit 1
+          fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          if (( minor > 99 || patch > 99 )); then
+            echo "minor and patch must stay below 100, or versionCode stops increasing" >&2
+            exit 1
+          fi
+          code=$(( major * 10000 + minor * 100 + patch ))
+          if [[ "$name" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Releasing $name as versionCode $code (prerelease: $prerelease)"
+
+  component:
+    uses: ./.github/workflows/build.yml
+
+  apk:
+    needs: version
+    uses: ./.github/workflows/mobile.yml
+    with:
+      signed: true
+      version-name: ${{ needs.version.outputs.name }}
+      version-code: ${{ needs.version.outputs.code }}
+    secrets: inherit
+
+  publish:
+    needs: [version, component, apk]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: foo_out_wam-x64
+          path: component
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: wambridge-apk
+          path: apk
+
+      - name: Publish one release carrying both halves
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.name }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          assets=(
+            "component/foo_out_wam.fb2k-component"
+            "component/wambridge-source.zip"
+            "apk/wambridge-${VERSION}.apk"
+          )
+          for asset in "${assets[@]}"; do
+            test -f "$asset"
+          done
+
+          flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            flags+=(--prerelease)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "WAMbridge ${VERSION}" \
+              "${flags[@]}" \
+              --notes "foobar2000 component and signed Android APK for ${VERSION}."
+          fi
