@@ -873,12 +873,25 @@ The audible confirmations tonight were all on `;`-suffixed addresses -
 also the form the station pack already carried. Whether the speaker's own player copes with the
 bare `:8954/` form is untested; it was assumed, not heard.
 
-`s15984` is the exact entry sitting in preset 0. So `SetPlayPreset` answering
-`StopPlaybackEvent` on a station whose stream is plain HTTP is **not** a format problem, and an
-earlier revision of this section guessed that it was. Cause unknown; what is ruled out is the
-station. BBC Radio 1 remains genuinely unplayable here - HLS from TuneIn and HLS in the
-personal playlists in `trvny/stuff/playlists` alike - so a preset holding it cannot work whatever
-else is fixed.
+`s15984` is the exact entry sitting in preset 0, and **the station is not ruled out** - an
+earlier revision of this paragraph said it was, on the strength of the table above before that
+table was corrected. With `:8954/` now known to answer `200 text/html` rather than a stream, the
+station is back to being a live suspect for `SetPlayPreset` returning `StopPlaybackEvent`.
+
+The evidence available points that way rather than away from it, though it is two data points
+and not a finding:
+
+- Trójka, whose resolved address does not stream, is the preset that failed here every time.
+- Czwórka, whose resolved address does stream once its `.pls` is read, is the preset that
+  started on the first try from `wambridge-mobile`.
+
+What would settle it is hearing the resolved `:8954/` through the speaker's own player, which
+has not been done - it was assumed playable because it was plain HTTP, which is exactly the
+inference this section had to retract once already.
+
+BBC Radio 1 remains genuinely unplayable here - HLS from TuneIn and HLS in the personal
+playlists in `trvny/stuff/playlists` alike - so a preset holding it cannot work whatever else is
+fixed.
 
 **And the owner's history closes the question.** Preset playback started roughly **one attempt
 in five** even years ago, with the official app and TuneIn both in good health. So
