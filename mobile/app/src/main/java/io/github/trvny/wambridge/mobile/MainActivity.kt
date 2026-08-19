@@ -88,6 +88,20 @@ class MainActivity : Activity() {
         }
         layout.addView(statusView)
 
+        layout.addView(Button(this).apply {
+            text = "TuneIn presets"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, TuneInActivity::class.java))
+            }
+        })
+
+        layout.addView(Button(this).apply {
+            text = "Radio stations"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, RadioStationsActivity::class.java))
+            }
+        })
+
         layout.addView(TextView(this).apply {
             text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Other local UPnP/DLNA players can use the same renderer; WAV/L16, MP3 and FLAC are advertised."
             textSize = 14f
