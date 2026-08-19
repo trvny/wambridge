@@ -20,6 +20,7 @@ import android.widget.Toast
 
 class MainActivity : Activity() {
     private lateinit var launcherButton: Button
+    private lateinit var discoverButton: Button
     private lateinit var speakerIp: EditText
     private lateinit var statusView: TextView
 
@@ -52,6 +53,12 @@ class MainActivity : Activity() {
             setSingleLine(true)
         }
         layout.addView(speakerIp)
+
+        discoverButton = Button(this).apply {
+            text = "Discover WAM speaker"
+            setOnClickListener { discoverSpeaker(allowScan = true) }
+        }
+        layout.addView(discoverButton)
 
         layout.addView(Button(this).apply {
             text = "Save + test M5"
@@ -101,6 +108,10 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(layout) })
         refreshLauncherButton()
         refreshStatus()
+
+        if (!RendererService.isReasonableIpv4(speakerIp.text.toString().trim())) {
+            window.decorView.post { discoverSpeaker(allowScan = false) }
+        }
     }
 
     override fun onResume() {
@@ -116,6 +127,55 @@ class MainActivity : Activity() {
         }
         preferences.edit().putString(RendererService.KEY_SPEAKER_IP, value).apply()
         return value
+    }
+
+    private fun discoverSpeaker(allowScan: Boolean) {
+        if (RendererService.running) {
+            Toast.makeText(this, "Stop the renderer before discovery.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        discoverButton.isEnabled = false
+        statusView.text = if (allowScan) {
+            "Discovering WAM speakers on Wi-Fi…"
+        } else {
+            "Looking for WAM speakers on Wi-Fi…"
+        }
+
+        Thread({
+            val speakers = WamDiscovery.discover(applicationContext, allowScan = allowScan)
+            runOnUiThread {
+                discoverButton.isEnabled = true
+                when {
+                    speakers.isEmpty() && allowScan -> {
+                        statusView.text = "No WAM speaker found. Enter the IP manually if discovery is blocked by the network."
+                    }
+
+                    speakers.isEmpty() -> {
+                        statusView.text = "No WAM speaker announced via SSDP. Tap Discover for LAN fallback or enter the IP manually."
+                    }
+
+                    speakers.size == 1 -> useDiscoveredSpeaker(speakers.single())
+                    else -> chooseDiscoveredSpeaker(speakers)
+                }
+            }
+        }, "wam-mobile-discovery").start()
+    }
+
+    private fun chooseDiscoveredSpeaker(speakers: List<WamDiscovery.Speaker>) {
+        val labels = speakers.map { "${it.ip} · ${it.source}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Choose WAM speaker")
+            .setItems(labels) { _, which -> useDiscoveredSpeaker(speakers[which]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+        statusView.text = "Found ${speakers.size} WAM speakers."
+    }
+
+    private fun useDiscoveredSpeaker(speaker: WamDiscovery.Speaker) {
+        speakerIp.setText(speaker.ip)
+        preferences.edit().putString(RendererService.KEY_SPEAKER_IP, speaker.ip).apply()
+        statusView.text = "Found WAM speaker at ${speaker.ip} via ${speaker.source}."
     }
 
     private fun testSpeaker() {
