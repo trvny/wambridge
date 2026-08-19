@@ -1,0 +1,114 @@
+name: Mobile release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/mobile-release.yml"
+      - "mobile/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android-release:
+    runs-on: ubuntu-latest
+    env:
+      WAMBRIDGE_KEYSTORE_BASE64: ${{ secrets.WAMBRIDGE_ANDROID_KEYSTORE_BASE64 }}
+      WAMBRIDGE_KEYSTORE_PASSWORD: ${{ secrets.WAMBRIDGE_ANDROID_KEYSTORE_PASSWORD }}
+      WAMBRIDGE_KEY_ALIAS: ${{ secrets.WAMBRIDGE_ANDROID_KEY_ALIAS }}
+      WAMBRIDGE_KEY_PASSWORD: ${{ secrets.WAMBRIDGE_ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.5.0"
+
+      - name: Prepare signing
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$WAMBRIDGE_KEYSTORE_BASE64" && \
+                -n "$WAMBRIDGE_KEYSTORE_PASSWORD" && \
+                -n "$WAMBRIDGE_KEY_ALIAS" && \
+                -n "$WAMBRIDGE_KEY_PASSWORD" ]]; then
+            printf '%s' "$WAMBRIDGE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/wambridge-release.keystore"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "WAMBRIDGE_KEYSTORE_PATH=$RUNNER_TEMP/wambridge-release.keystore" >> "$GITHUB_ENV"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build versioned APK
+        id: apk
+        working-directory: mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
+          test -n "$version"
+          mkdir -p dist
+
+          if [[ "${{ steps.signing.outputs.signed }}" == "true" ]]; then
+            gradle :app:lintRelease :app:assembleRelease
+            source_apk="app/build/outputs/apk/release/app-release.apk"
+          else
+            gradle :app:lintDebug :app:assembleDebug
+            source_apk="app/build/outputs/apk/debug/app-debug.apk"
+          fi
+
+          apk="dist/wambridge-${version}.apk"
+          cp "$source_apk" "$apk"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "apk=mobile/$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Verify signed APK
+        if: steps.signing.outputs.signed == 'true'
+        shell: bash
+        env:
+          APK: ${{ steps.apk.outputs.apk }}
+        run: |
+          set -euo pipefail
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose --print-certs "$APK"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.apk.outputs.version }}
+          APK: ${{ steps.apk.outputs.apk }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if [[ "$SIGNED" == "true" ]]; then
+            notes="Signed Android release."
+            prerelease=()
+          else
+            notes="Android preview. APK is CI debug-signed; add the WAMBRIDGE_ANDROID_* secrets for a release-signed APK."
+            prerelease=(--prerelease)
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$APK" --clobber
+          else
+            gh release create "$tag" "$APK" \
+              --target "$GITHUB_SHA" \
+              --title "WAMbridge ${VERSION}" \
+              "${prerelease[@]}" \
+              --notes "$notes"
+          fi

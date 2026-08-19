@@ -1,0 +1,49 @@
+name: Mobile
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mobile.yml"
+      - "mobile/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/mobile.yml"
+      - "mobile/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.5.0"
+
+      - name: Build Android adapter
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
+          test -n "$version"
+          gradle :app:lintDebug :app:assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/wambridge-${version}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wambridge-mobile-debug
+          path: mobile/app/build/outputs/apk/debug/wambridge-*.apk
+          if-no-files-found: error
