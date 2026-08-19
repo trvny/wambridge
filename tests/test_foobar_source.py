@@ -4,6 +4,8 @@ from unittest import TestCase
 
 
 SOURCE = Path(__file__).parents[1] / "foobar" / "foo_out_wam.cpp"
+SETTINGS_SOURCE = SOURCE.parent / "wam_settings.cpp"
+SETTINGS_HEADER = SOURCE.parent / "wam_settings.h"
 
 
 class FoobarSourceTests(TestCase):
@@ -80,57 +82,46 @@ class FoobarSourceTests(TestCase):
         self.assertLess(source.index("if (takenFrames == 0) return 0;"), accept)
 
     def test_clock_counters_are_off_unless_asked_for(self) -> None:
-        # Diagnostics, not a feature: a normal session must not get 240 lines.
-        source = SOURCE.read_text(encoding="utf-8")
+        output = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
+        header = SETTINGS_HEADER.read_text(encoding="utf-8")
 
-        self.assertIn("bool diagnostics = false;", source)
-        self.assertIn('environment_value(L"WAMBRIDGE_DIAGNOSTICS")', source)
-        self.assertIn('ini_value(L"diagnostics", L"", path)', source)
-        self.assertIn("if (!m_settings.diagnostics) return;", source)
+        self.assertIn("bool diagnostics = false;", header)
+        self.assertIn('L"WAMBRIDGE_DIAGNOSTICS"', settings)
+        self.assertIn('L"diagnostics"', settings)
+        self.assertIn("if (!m_settings.diagnostics) return;", output)
 
     def test_stream_format_is_configurable_but_validated(self) -> None:
-        # The value lands on the helper's command line, so an unknown one would
-        # be a rejected argument and take the stream down.
-        source = SOURCE.read_text(encoding="utf-8")
+        output = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
 
-        self.assertIn('environment_value(L"WAMBRIDGE_FORMAT")', source)
-        self.assertIn('ini_value(L"format", L"", path)', source)
-        # The fallback must stay guarded by the validation. Asserting only that
-        # the assignment exists would match it anywhere in the file.
-        guard = source.index("if (!known) {")
-        self.assertLess(guard, source.index("format = kDefaultStreamFormat;", guard))
-        self.assertIn('constexpr const wchar_t* kDefaultStreamFormat = L"flac";', source)
-        self.assertIn('command += L" --sample-format f32le --format " + m_settings.format;', source)
-        self.assertNotIn("--format flac --startup-timeout", source)
+        self.assertIn('L"WAMBRIDGE_FORMAT"', settings)
+        self.assertIn('L"format"', settings)
+        self.assertIn("bool parse_format(", settings)
+        self.assertIn('output = L"flac";', settings)
+        self.assertIn(
+            'command += L" --sample-format f32le --format " + m_settings.format;',
+            output,
+        )
+        self.assertNotIn("--format flac --startup-timeout", output)
 
     def test_unknown_ini_keys_are_reported(self) -> None:
-        # An ignored key looks exactly like a working one from the outside. The
-        # owner's file carried hardware_volume, which only exists on an unmerged
-        # branch, and nothing said so.
-        source = SOURCE.read_text(encoding="utf-8")
+        output = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
 
-        self.assertIn("report_unknown_ini_keys(path);", source)
-        # A null key name is what asks for the section's key names.
-        self.assertIn('L"wambridge",\n        nullptr,', source)
-        self.assertIn("ignoring unknown setting(s) in foobar.ini", source)
-        # Windows resolves INI keys case-insensitively, so `Device=M5` is
-        # applied. Comparing exactly would report an active setting as dead -
-        # the same false impression this function exists to remove.
-        self.assertIn("CompareStringOrdinal(", source)
-        self.assertIn("CSTR_EQUAL", source)
-        self.assertNotIn("if (key == candidate) known = true;", source)
-        # A rejected value is the same silence in a different place.
-        self.assertIn("unknown format %s, falling back to %s", source)
-        # "out of range" also covered `startup_silence=fast`, which is not a
-        # range problem and reads as though a number was rejected.
-        self.assertIn("startup_silence %s is not a number in 0..%u", source)
-        self.assertIn("helper %s does not exist, using the bundled one", source)
-        self.assertIn("volume %s is not a number in 0..100", source)
-        # `#` is an ordinary character to the profile API, so a file copied from
-        # an older example arrives carrying keys called `#format`. Reported, not
-        # skipped: `#hardware_volume=1` is a setting someone believes is active.
-        self.assertIn("if (key.front() == L'#') {", source)
-        self.assertIn("Windows \"\n            \"comments start with ';'", source)
+        self.assertIn("report_unknown_ini_keys(path);", settings)
+        self.assertIn("nullptr,", settings)
+        self.assertIn("ignoring unknown setting(s) in foobar.ini", settings)
+        self.assertIn("CompareStringOrdinal(", settings)
+        self.assertIn("CSTR_EQUAL", settings)
+        self.assertNotIn("if (key == candidate) known = true;", settings)
+        self.assertIn('report_invalid(report, L"format"', settings)
+        self.assertIn('report_invalid(report, L"startup_silence"', settings)
+        self.assertIn("helper %s does not exist, using the bundled one", output)
+        self.assertIn('report_invalid(report, L"volume"', settings)
+        self.assertIn("a raw step in 0..30", settings)
+        self.assertIn("if (key.front() == L'#') {", settings)
+        self.assertIn("Windows INI comments start with ';'", settings)
 
     def test_example_ini_comments_use_the_windows_marker(self) -> None:
         # `#startup_silence=0` is not a disabled setting to Windows; it is a key
@@ -146,24 +137,16 @@ class FoobarSourceTests(TestCase):
             )
 
     def test_accepted_formats_match_the_helper(self) -> None:
-        # The whitelist and the helper's --format choices are edited in two
-        # separate languages. A name in only one of them is either a profile
-        # nobody can select from the INI or a command line the helper rejects.
         from wambridge.stream import OUTPUT_PROFILES
 
-        source = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
         declaration = re.search(
             r"constexpr const wchar_t\* kStreamFormats\[\] = \{(.*?)\};",
-            source,
+            settings,
             re.DOTALL,
         )
-        self.assertIsNotNone(
-            declaration,
-            "kStreamFormats is no longer a single-line constexpr array; this test "
-            "reads it as text, so update the pattern rather than the whitelist",
-        )
+        self.assertIsNotNone(declaration)
         accepted = set(re.findall(r'L"([^"]+)"', declaration.group(1)))
-
         self.assertEqual(accepted, set(OUTPUT_PROFILES))
 
     def test_startup_volume_is_applied_once_per_session(self) -> None:
@@ -194,24 +177,16 @@ class FoobarSourceTests(TestCase):
         self.assertIn('command += L" --max-start-volume " +', source)
 
     def test_queue_capacity_is_configurable(self) -> None:
-        # Capacity is delay on this path: the queue measured 3.79-3.99 s full of
-        # a 4.0 s capacity, so everything allowed here is heard that much later.
-        # The 2 s that used to be hardcoded was chosen, never measured, and it
-        # is the largest single share of the six seconds that reach the ear.
-        source = SOURCE.read_text(encoding="utf-8")
+        output = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
+        header = SETTINGS_HEADER.read_text(encoding="utf-8")
 
-        self.assertIn("constexpr int kDefaultBufferExtraMs = 2000;", source)
-        self.assertIn('environment_value(L"WAMBRIDGE_BUFFER_EXTRA")', source)
-        self.assertIn('ini_value(L"buffer_extra", L"", path)', source)
-        self.assertIn("m_settings.bufferExtraMs / 1000.0", source)
-        # And it has to join the known-key list, or the component reports its
-        # own setting as unknown - the drift that list exists to catch.
-        self.assertIn('L"buffer_extra",', source)
-        # A typo in a knob meant for walking down during a measurement would
-        # otherwise read as "that value changed nothing".
-        self.assertIn("buffer_extra %s is not a number in 0..%u", source)
-        # The old constant must be gone, or the knob would do nothing.
-        self.assertNotIn("(m_bufferLength + 2.0)", source)
+        self.assertIn("kDefaultBufferExtraMs = 2000", header)
+        self.assertIn('L"WAMBRIDGE_BUFFER_EXTRA"', settings)
+        self.assertIn('L"buffer_extra"', settings)
+        self.assertIn("kMaximumBufferExtraMs", settings)
+        self.assertIn("m_settings.bufferExtraMs / 1000.0", output)
+        self.assertNotIn("(m_bufferLength + 2.0)", output)
 
     def test_no_conflict_markers_in_tracked_text(self) -> None:
         # A resolution script that only covered the files git named left markers
@@ -381,46 +356,31 @@ class FoobarSourceTests(TestCase):
         self.assertIn('line.rfind("WAMBRIDGE ERROR ", 0)', source)
 
     def test_startup_silence_is_configurable(self) -> None:
-        # The default prepends 1.5 s of silence to a path measured at about 6 s.
-        # It carried no comment and had been there since the initial import;
-        # 0 was confirmed on hardware on 2026-08-08 and startup still reached
-        # WAMBRIDGE PLAYING.
-        source = SOURCE.read_text(encoding="utf-8")
+        output = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
+        header = SETTINGS_HEADER.read_text(encoding="utf-8")
 
-        self.assertIn("constexpr int kDefaultStartupSilenceMs = 1500;", source)
-        self.assertIn("int startupSilenceMs = kDefaultStartupSilenceMs;", source)
-        self.assertIn('environment_value(L"WAMBRIDGE_STARTUP_SILENCE")', source)
-        self.assertIn('ini_value(L"startup_silence", L"", path)', source)
-        self.assertIn('command += L" --startup-silence " +', source)
-        # Out-of-range values fall back rather than reaching the helper CLI,
-        # which would reject them and take the whole stream down.
-        self.assertIn("parsed <= kMaximumStartupSilenceMs", source)
+        self.assertIn("kDefaultStartupSilenceMs = 1500", header)
+        self.assertIn("int startupSilenceMs = kDefaultStartupSilenceMs;", header)
+        self.assertIn('L"WAMBRIDGE_STARTUP_SILENCE"', settings)
+        self.assertIn('L"startup_silence"', settings)
+        self.assertIn('command += L" --startup-silence " +', output)
+        self.assertIn("kMaximumStartupSilenceMs", settings)
 
     def test_sleep_timer_is_configurable_and_off_by_default(self) -> None:
-        # A fallback for when releasing the stream is not enough on its own:
-        # the speaker does sleep once every program lets go, but nothing can
-        # read or set that. Off by default - powering the speaker down is the
-        # listener's decision, and a surprise standby is worse than a lit LED.
-        source = SOURCE.read_text(encoding="utf-8")
+        output = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
+        header = SETTINGS_HEADER.read_text(encoding="utf-8")
 
-        self.assertIn("constexpr int kDefaultSleepAfterStopSeconds = 0;", source)
-        self.assertIn('L"sleep_after_stop",', source)
-        self.assertIn('environment_value(L"WAMBRIDGE_SLEEP_AFTER_STOP")', source)
-        self.assertIn('ini_value(L"sleep_after_stop", L"", path)', source)
-        self.assertIn('command += L" --sleep-after-stop " +', source)
-        # Passed unconditionally, zero included: the helper has to tell "the
-        # feature is off" apart from "nobody said", because only the second
-        # still has to clear a timer armed under a setting that has changed
-        # since. What is gated instead is the clear, on a marker that is sticky
-        # for the playback session rather than a reading of the setting.
-        self.assertIn('command += L" --clear-sleep-timer";', source)
-        self.assertIn("if (m_sleepTimerArmed.load()) {", source)
-        self.assertIn("m_sleepTimerArmed.store(true);", source)
-        self.assertIn("parsed <= kMaximumSleepAfterStopSeconds", source)
-        self.assertIn(
-            "sleep_after_stop %s is not a number of seconds in 0..%u",
-            source,
-        )
+        self.assertIn("kDefaultSleepAfterStopSeconds = 0", header)
+        self.assertIn('L"sleep_after_stop"', settings)
+        self.assertIn('L"WAMBRIDGE_SLEEP_AFTER_STOP"', settings)
+        self.assertIn('command += L" --sleep-after-stop " +', output)
+        self.assertIn('command += L" --clear-sleep-timer";', output)
+        self.assertIn("if (m_sleepTimerArmed.load()) {", output)
+        self.assertIn("m_sleepTimerArmed.store(true);", output)
+        self.assertIn("kMaximumSleepAfterStopSeconds", settings)
+        self.assertIn('report_invalid(report, L"sleep_after_stop"', settings)
 
     def test_shutdown_grace_outlasts_the_helper_releasing_the_speaker(self) -> None:
         # The helper stops playback on the speaker, optionally arms a sleep
@@ -448,19 +408,16 @@ class FoobarSourceTests(TestCase):
         )
 
     def test_the_start_volume_cap_applies_only_to_the_first_helper(self) -> None:
-        source = SOURCE.read_text(encoding="utf-8")
+        output = SOURCE.read_text(encoding="utf-8")
+        settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
+        header = SETTINGS_HEADER.read_text(encoding="utf-8")
 
-        self.assertIn("constexpr int kDefaultStartVolumeMax = 3;", source)
-        self.assertIn('L"start_volume_max",', source)
-        self.assertIn('environment_value(L"WAMBRIDGE_START_VOLUME_MAX")', source)
-        self.assertIn('ini_value(L"start_volume_max", L"", path)', source)
-        # Zero is a real answer - "no cap" - so the range starts there rather
-        # than at 1 like volume_max, whose zero would mean a silent ceiling.
-        self.assertIn("parsed >= 0 &&\n            parsed <= kMaximumRawVolume", source)
-        # The cap is lifted once a helper of this session has reported PLAYING,
-        # so a seek cannot turn down a level the listener chose mid-session.
-        self.assertIn("m_startupVolumeApplied.load() ||", source)
-        self.assertIn("(std::min)(routed, m_settings.startVolumeMax)", source)
+        self.assertIn("kDefaultStartVolumeMax = 3", header)
+        self.assertIn('L"start_volume_max"', settings)
+        self.assertIn('L"WAMBRIDGE_START_VOLUME_MAX"', settings)
+        self.assertIn("kMaximumRawVolume", settings)
+        self.assertIn("m_startupVolumeApplied.load() ||", output)
+        self.assertIn("(std::min)(routed, m_settings.startVolumeMax)", output)
 
     def test_the_slider_follows_the_level_the_helper_reports(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")

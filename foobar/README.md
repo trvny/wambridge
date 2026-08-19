@@ -41,8 +41,10 @@ Preferences -> Playback -> Output -> WAM Bridge
 The page edits the existing `%LOCALAPPDATA%\WAMBridge\foobar.ini`, so existing manual
 configuration stays compatible. It exposes the device profile, stream format, startup
 volume, hardware volume routing and limits, startup silence, extra buffer, sleep-after-stop,
-diagnostics and the optional PCM helper override. Reset returns the page to component
-defaults and removes redundant default-valued keys from the INI.
+diagnostics and the optional PCM helper override, and follows foobar2000's dark mode.
+Runtime and UI share the same validation rules. If an existing known INI value is invalid,
+the page shows its effective fallback and enables Apply; saving normalizes that stale entry.
+Reset returns the page to component defaults and removes redundant default-valued keys.
 
 The file can still be edited directly:
 

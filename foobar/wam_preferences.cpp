@@ -3,6 +3,9 @@
 #include <objidl.h>
 
 #include <foobar2000/SDK/foobar2000.h>
+#include <foobar2000/SDK/coreDarkMode.h>
+
+#include "wam_settings.h"
 
 #include <algorithm>
 #include <array>
@@ -14,11 +17,15 @@ namespace {
 
 constexpr wchar_t kSection[] = L"wambridge";
 constexpr wchar_t kWindowClass[] = L"WAMBridgePreferencesPage";
-constexpr int kDefaultStartupSilenceMs = 1500;
-constexpr int kDefaultBufferExtraMs = 2000;
-constexpr int kDefaultVolumeMax = 10;
-constexpr int kDefaultStartVolumeMax = 3;
-constexpr int kDefaultSleepAfterStopSeconds = 0;
+using wam_settings::kDefaultBufferExtraMs;
+using wam_settings::kDefaultSleepAfterStopSeconds;
+using wam_settings::kDefaultStartVolumeMax;
+using wam_settings::kDefaultStartupSilenceMs;
+using wam_settings::kDefaultVolumeMax;
+using wam_settings::kMaximumBufferExtraMs;
+using wam_settings::kMaximumRawVolume;
+using wam_settings::kMaximumSleepAfterStopSeconds;
+using wam_settings::kMaximumStartupSilenceMs;
 constexpr int kRowBase = 80;
 constexpr int kRowPitch = 27;
 
@@ -44,275 +51,13 @@ enum ControlId {
     kHelper,
 };
 
-struct Values {
-    std::wstring device = L"M5";
-    std::wstring format = L"flac";
-    std::wstring volume;
-    bool hardwareVolume = false;
-    int volumeMax = kDefaultVolumeMax;
-    int startVolumeMax = kDefaultStartVolumeMax;
-    int startupSilenceMs = kDefaultStartupSilenceMs;
-    int bufferExtraMs = kDefaultBufferExtraMs;
-    int sleepAfterStopSeconds = kDefaultSleepAfterStopSeconds;
-    bool diagnostics = false;
-    std::wstring helper;
-};
-
-bool equal_values(const Values& left, const Values& right) {
-    return left.device == right.device &&
-        left.format == right.format &&
-        left.volume == right.volume &&
-        left.hardwareVolume == right.hardwareVolume &&
-        left.volumeMax == right.volumeMax &&
-        left.startVolumeMax == right.startVolumeMax &&
-        left.startupSilenceMs == right.startupSilenceMs &&
-        left.bufferExtraMs == right.bufferExtraMs &&
-        left.sleepAfterStopSeconds == right.sleepAfterStopSeconds &&
-        left.diagnostics == right.diagnostics &&
-        left.helper == right.helper;
-}
-
-std::wstring environment_value(const wchar_t* name) {
-    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
-    if (needed == 0) return {};
-    std::wstring value(needed, L'\0');
-    const DWORD written = GetEnvironmentVariableW(name, value.data(), needed);
-    if (written == 0 || written >= needed) return {};
-    value.resize(written);
-    return value;
-}
-
-std::wstring config_path() {
-    const auto localAppData = environment_value(L"LOCALAPPDATA");
-    if (localAppData.empty()) return L"foobar.ini";
-    return localAppData + L"\\WAMBridge\\foobar.ini";
-}
-
-std::wstring ini_value(const wchar_t* key, const wchar_t* fallback = L"") {
-    std::array<wchar_t, 32768> buffer{};
-    const auto path = config_path();
-    const DWORD size = GetPrivateProfileStringW(
-        kSection,
-        key,
-        fallback,
-        buffer.data(),
-        static_cast<DWORD>(buffer.size()),
-        path.c_str()
-    );
-    return std::wstring(buffer.data(), size);
-}
-
-bool truthy(const std::wstring& value) {
-    return value == L"1" || value == L"true" || value == L"yes" ||
-        value == L"on";
-}
-
-int valid_int(const std::wstring& value, int fallback, int minimum, int maximum) {
-    if (value.empty()) return fallback;
-    wchar_t* end = nullptr;
-    const long parsed = std::wcstol(value.c_str(), &end, 10);
-    if (end == value.c_str() || *end != L'\0' || parsed < minimum || parsed > maximum) {
-        return fallback;
-    }
-    return static_cast<int>(parsed);
-}
-
-int clamped_int(const std::wstring& value, int fallback, int minimum, int maximum) {
-    if (value.empty()) return fallback;
-    wchar_t* end = nullptr;
-    const long parsed = std::wcstol(value.c_str(), &end, 10);
-    if (end == value.c_str() || *end != L'\0') return fallback;
-    const long bounded = (std::max)(
-        static_cast<long>(minimum),
-        (std::min)(static_cast<long>(maximum), parsed)
-    );
-    return static_cast<int>(bounded);
-}
-
-Values default_values() {
-    return {};
-}
-
-Values load_values() {
-    Values values;
-    values.device = ini_value(L"device", L"M5");
-    if (values.device.empty()) values.device = L"M5";
-
-    values.format = ini_value(L"format", L"");
-    const bool knownFormat = values.format == L"flac" || values.format == L"wav" ||
-        values.format == L"wav24" || values.format == L"mp3";
-    if (!knownFormat) values.format = L"flac";
-
-    const auto volume = ini_value(L"volume", L"");
-    if (!volume.empty()) {
-        wchar_t* end = nullptr;
-        const long parsed = std::wcstol(volume.c_str(), &end, 10);
-        if (end != volume.c_str() && *end == L'\0' && parsed >= 0 && parsed <= 30) {
-            values.volume = std::to_wstring(parsed);
-        }
-    }
-
-    values.hardwareVolume = truthy(ini_value(L"hardware_volume", L""));
-    values.volumeMax = valid_int(
-        ini_value(L"volume_max", L""),
-        kDefaultVolumeMax,
-        1,
-        30
-    );
-    values.startVolumeMax = valid_int(
-        ini_value(L"start_volume_max", L""),
-        kDefaultStartVolumeMax,
-        0,
-        30
-    );
-    values.startupSilenceMs = valid_int(
-        ini_value(L"startup_silence", L""),
-        kDefaultStartupSilenceMs,
-        0,
-        10000
-    );
-    values.bufferExtraMs = valid_int(
-        ini_value(L"buffer_extra", L""),
-        kDefaultBufferExtraMs,
-        0,
-        10000
-    );
-    values.sleepAfterStopSeconds = valid_int(
-        ini_value(L"sleep_after_stop", L""),
-        kDefaultSleepAfterStopSeconds,
-        0,
-        86400
-    );
-    values.diagnostics = truthy(ini_value(L"diagnostics", L""));
-    values.helper = ini_value(L"helper", L"");
-    return values;
-}
-
-bool ensure_config_directory() {
-    const auto path = config_path();
-    const auto separator = path.find_last_of(L"\\/");
-    if (separator == std::wstring::npos) return true;
-    const auto directory = path.substr(0, separator);
-    if (CreateDirectoryW(directory.c_str(), nullptr)) return true;
-    return GetLastError() == ERROR_ALREADY_EXISTS;
-}
-
-bool ensure_unicode_config_file() {
-    if (!ensure_config_directory()) return false;
-    const auto path = config_path();
-    HANDLE file = CreateFileW(
-        path.c_str(),
-        GENERIC_WRITE,
-        FILE_SHARE_READ,
-        nullptr,
-        CREATE_NEW,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr
-    );
-    if (file == INVALID_HANDLE_VALUE) {
-        const DWORD error = GetLastError();
-        return error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS;
-    }
-
-    constexpr BYTE bom[] = {0xFF, 0xFE};
-    DWORD written = 0;
-    const bool ok = WriteFile(file, bom, sizeof(bom), &written, nullptr) != FALSE &&
-        written == sizeof(bom);
-    CloseHandle(file);
-    if (!ok) DeleteFileW(path.c_str());
-    return ok;
-}
-
-bool write_setting(
-    const std::wstring& path,
-    const wchar_t* key,
-    const std::wstring& value,
-    const std::wstring& defaultValue
-) {
-    const wchar_t* stored = value == defaultValue ? nullptr : value.c_str();
-    return WritePrivateProfileStringW(kSection, key, stored, path.c_str()) != FALSE;
-}
-
-bool write_values(const Values& values) {
-    if (!ensure_unicode_config_file()) return false;
-    const auto path = config_path();
-    const auto defaultVolumeMax = std::to_wstring(kDefaultVolumeMax);
-    const auto defaultStartVolumeMax = std::to_wstring(kDefaultStartVolumeMax);
-    const auto defaultStartupSilence = std::to_wstring(kDefaultStartupSilenceMs);
-    const auto defaultBufferExtra = std::to_wstring(kDefaultBufferExtraMs);
-    const auto defaultSleepAfterStop = std::to_wstring(kDefaultSleepAfterStopSeconds);
-
-    bool ok = true;
-    ok = write_setting(path, L"device", values.device, L"M5") && ok;
-    ok = write_setting(path, L"format", values.format, L"flac") && ok;
-    ok = write_setting(path, L"volume", values.volume, L"") && ok;
-    ok = write_setting(
-        path,
-        L"hardware_volume",
-        values.hardwareVolume ? L"1" : L"",
-        L""
-    ) && ok;
-    ok = write_setting(
-        path,
-        L"volume_max",
-        std::to_wstring(values.volumeMax),
-        defaultVolumeMax
-    ) && ok;
-    ok = write_setting(
-        path,
-        L"start_volume_max",
-        std::to_wstring(values.startVolumeMax),
-        defaultStartVolumeMax
-    ) && ok;
-    ok = write_setting(
-        path,
-        L"startup_silence",
-        std::to_wstring(values.startupSilenceMs),
-        defaultStartupSilence
-    ) && ok;
-    ok = write_setting(
-        path,
-        L"buffer_extra",
-        std::to_wstring(values.bufferExtraMs),
-        defaultBufferExtra
-    ) && ok;
-    ok = write_setting(
-        path,
-        L"sleep_after_stop",
-        std::to_wstring(values.sleepAfterStopSeconds),
-        defaultSleepAfterStop
-    ) && ok;
-    ok = write_setting(
-        path,
-        L"diagnostics",
-        values.diagnostics ? L"1" : L"",
-        L""
-    ) && ok;
-    ok = write_setting(path, L"helper", values.helper, L"") && ok;
-    WritePrivateProfileStringW(nullptr, nullptr, nullptr, path.c_str());
-    return ok;
-}
-
-bool has_environment_overrides() {
-    constexpr const wchar_t* names[] = {
-        L"WAMBRIDGE_PCM",
-        L"WAMBRIDGE_CONTROL",
-        L"WAMBRIDGE_DEVICE",
-        L"WAMBRIDGE_VOLUME",
-        L"WAMBRIDGE_FORMAT",
-        L"WAMBRIDGE_DIAGNOSTICS",
-        L"WAMBRIDGE_HARDWARE_VOLUME",
-        L"WAMBRIDGE_VOLUME_MAX",
-        L"WAMBRIDGE_START_VOLUME_MAX",
-        L"WAMBRIDGE_STARTUP_SILENCE",
-        L"WAMBRIDGE_BUFFER_EXTRA",
-        L"WAMBRIDGE_SLEEP_AFTER_STOP",
-    };
-    for (const auto* name : names) {
-        if (!environment_value(name).empty()) return true;
-    }
-    return false;
-}
+using wam_settings::Values;
+using wam_settings::clamped_int;
+using wam_settings::config_path;
+using wam_settings::default_values;
+using wam_settings::equal_values;
+using wam_settings::has_environment_overrides;
+using wam_settings::write_values;
 
 std::wstring window_text(HWND window) {
     const int length = GetWindowTextLengthW(window);
@@ -329,7 +74,10 @@ public:
     WamPreferencesInstance(
         fb2k::hwnd_t parent,
         preferences_page_callback::ptr callback
-    ) : m_callback(std::move(callback)), m_baseline(load_values()) {
+    ) : m_callback(std::move(callback)) {
+        const auto loaded = wam_settings::load_ini_values();
+        m_baseline = loaded.values;
+        m_needsNormalization = loaded.needsNormalization;
         const auto instance = core_api::get_my_instance();
         register_window_class(instance);
 
@@ -351,6 +99,7 @@ public:
         );
         if (m_window != nullptr) {
             create_controls(instance, parent);
+            m_darkHooks.AddDialogWithControls(m_window);
             populate(m_baseline);
             layout();
         }
@@ -361,8 +110,9 @@ public:
     }
 
     t_uint32 get_state() override {
-        t_uint32 state = preferences_state::resettable;
-        if (!equal_values(read_controls(), m_baseline)) {
+        t_uint32 state = preferences_state::resettable |
+            preferences_state::dark_mode_supported;
+        if (m_needsNormalization || !equal_values(read_controls(), m_baseline)) {
             state |= preferences_state::changed;
             state |= preferences_state::needs_restart_playback;
         }
@@ -382,7 +132,9 @@ public:
             );
             return;
         }
-        m_baseline = load_values();
+        const auto loaded = wam_settings::load_ini_values();
+        m_baseline = loaded.values;
+        m_needsNormalization = loaded.needsNormalization;
         populate(m_baseline);
         m_callback->on_state_changed();
     }
@@ -644,7 +396,10 @@ private:
         const int formatIndex = values.format == L"wav" ? 1 :
             values.format == L"wav24" ? 2 : values.format == L"mp3" ? 3 : 0;
         SendMessageW(m_format, CB_SETCURSEL, formatIndex, 0);
-        set_text(m_volume, values.volume);
+        set_text(
+            m_volume,
+            values.volume.has_value() ? std::to_wstring(*values.volume) : L""
+        );
         set_checked(m_hardwareVolume, values.hardwareVolume);
         set_text(m_volumeMax, std::to_wstring(values.volumeMax));
         set_text(m_startVolumeMax, std::to_wstring(values.startVolumeMax));
@@ -671,7 +426,12 @@ private:
 
         const auto volume = window_text(m_volume);
         if (!volume.empty()) {
-            values.volume = std::to_wstring(clamped_int(volume, 0, 0, 30));
+            values.volume = clamped_int(
+                volume,
+                0,
+                0,
+                kMaximumRawVolume
+            );
         }
         values.hardwareVolume = is_checked(m_hardwareVolume);
         values.volumeMax = control_int(m_volumeMax, kDefaultVolumeMax, 1, 30);
@@ -679,25 +439,25 @@ private:
             m_startVolumeMax,
             kDefaultStartVolumeMax,
             0,
-            30
+            kMaximumRawVolume
         );
         values.startupSilenceMs = control_int(
             m_startupSilence,
             kDefaultStartupSilenceMs,
             0,
-            10000
+            kMaximumStartupSilenceMs
         );
         values.bufferExtraMs = control_int(
             m_bufferExtra,
             kDefaultBufferExtraMs,
             0,
-            10000
+            kMaximumBufferExtraMs
         );
         values.sleepAfterStopSeconds = control_int(
             m_sleepAfterStop,
             kDefaultSleepAfterStopSeconds,
             0,
-            86400
+            kMaximumSleepAfterStopSeconds
         );
         values.diagnostics = is_checked(m_diagnostics);
         values.helper = window_text(m_helper);
@@ -714,7 +474,9 @@ private:
 
     preferences_page_callback::ptr m_callback;
     Values m_baseline;
+    bool m_needsNormalization = false;
     bool m_loading = false;
+    fb2k::CCoreDarkModeHooks m_darkHooks;
     HWND m_window = nullptr;
     HFONT m_font = nullptr;
 

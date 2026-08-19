@@ -9,7 +9,8 @@ Current implementation and remaining control-surface work for `foo_out_wam`.
   environment is required after installation.
 - PCM pipeline: foobar `f32le` -> FFmpeg FLAC -> local HTTP -> Samsung M5.
 - `%LOCALAPPDATA%\WAMBridge\foobar.ini` configuration with environment overrides.
-- Native `Preferences -> Playback -> Output -> WAM Bridge` page editing the same INI.
+- Native `Preferences -> Playback -> Output -> WAM Bridge` page editing the same INI,
+  with foobar2000 dark-mode theming.
 - `Playback -> WAM Bridge` submenu containing:
   - Emergency stop,
   - Standby,
@@ -29,9 +30,13 @@ Current implementation and remaining control-surface work for `foo_out_wam`.
 ## Configuration
 
 The native preferences page writes the existing INI rather than introducing a second
-configuration store. Existing files remain valid, and `WAMBRIDGE_*` environment variables
-continue to take precedence. Changes are marked as requiring a playback restart and are used
-by the next output session.
+configuration store. Runtime and UI use the same parser, defaults and ranges. Existing files
+remain valid; when a known INI value is malformed or out of range, the page shows the
+effective fallback, enables Apply and rewrites or removes the stale value on save.
+`WAMBRIDGE_*` environment variables still take precedence and are never rewritten by the
+page. Changes are marked as requiring a playback restart and are used by the next output
+session. The page follows foobar2000's light/dark appearance through the core dark-mode
+hooks.
 
 The component reads:
 
@@ -98,8 +103,8 @@ that is not a number in range, and a `helper` path that does not exist all say s
 console. `volume_max` was the last one still falling back in silence while this paragraph
 already claimed otherwise. So do settings written as
 `#key=value`: Windows comments start with `;`, so those are key names rather than disabled
-lines and nothing reads them. The owner ran for days with `hardware_volume=1`, a key that
-exists only on an unmerged branch, with nothing anywhere saying it was dead.
+lines and nothing reads them. Boolean settings accept `0/1`, `false/true`, `no/yes` and `off/on`; other non-empty
+values fall back to off and are reported.
 
 The M5 uses raw volume steps `0..30`; the UI must not pretend these are percentages until a
 model-aware conversion exists.
@@ -290,9 +295,12 @@ that emergency stop should request a speaker power cycle.
 `Preferences -> Playback -> Output -> WAM Bridge` edits the same INI keys the output already
 reads: device, format, startup volume, hardware slider routing, volume ceiling, safe start
 cap, startup silence, extra buffer, sleep-after-stop, diagnostics and the optional PCM helper
-override. Reset restores component defaults; default-valued settings are removed rather than
-written redundantly. If any `WAMBRIDGE_*` override is active the page says so, because those
-values continue to win over the INI.
+override. The page uses foobar2000's core dark-mode hooks. Runtime and UI share one settings
+parser, so their ranges cannot drift; startup volume is the M5's raw `0..30` scale in both.
+Reset restores component defaults, and default-valued settings are removed rather than
+written redundantly. Invalid known values in an existing INI mark the page changed so Apply
+normalizes them. If any `WAMBRIDGE_*` override is active the page says so, because those
+values continue to win over the INI and are not modified by Apply.
 
 Discovery, a connection test and model/firmware reporting remain future UI work.
 
