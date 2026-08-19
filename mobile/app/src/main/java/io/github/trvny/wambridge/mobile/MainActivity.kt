@@ -280,8 +280,11 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun launcherAliasComponent(): ComponentName =
+        ComponentName(this, "$packageName.LauncherAlias")
+
     private fun setLauncherVisible(visible: Boolean) {
-        val launcher = ComponentName(this, "$packageName.LauncherAlias")
+        val launcher = launcherAliasComponent()
         packageManager.setComponentEnabledSetting(
             launcher,
             if (visible) {
@@ -301,7 +304,7 @@ class MainActivity : Activity() {
     }
 
     private fun isLauncherHidden(): Boolean {
-        val launcher = ComponentName(this, "$packageName.LauncherAlias")
+        val launcher = launcherAliasComponent()
         return packageManager.getComponentEnabledSetting(launcher) ==
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED
     }

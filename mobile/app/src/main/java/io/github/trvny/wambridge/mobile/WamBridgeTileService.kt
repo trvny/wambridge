@@ -37,13 +37,13 @@ class WamBridgeTileService : TileService() {
                 Intent(this, RendererService::class.java).apply { action = RendererService.ACTION_START },
             )
             qsTile?.state = Tile.STATE_ACTIVE
-            if (Build.VERSION_SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Starting¯ "
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Starting..."
         } catch (_: IllegalStateException) {
             qsTile?.state = Tile.STATE_INACTIVE
-            if (Build.VERSION_SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Start blocked"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Start blocked"
         } catch (_: SecurityException) {
             qsTile?.state = Tile.STATE_INACTIVE
-            if (Build.VERSION_SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Start blocked"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) qsTile?.subtitle = "Start blocked"
         }
         qsTile?.updateTile()
     }

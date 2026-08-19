@@ -25,7 +25,7 @@ class RendererService : Service(), RendererCallbacks {
     private var safeVolumeApplied = false
     private val channelLock = Any()
     private val idleLock = Any()
-    private var idleRelease: ScheduledFuture<*> = null
+    private var idleRelease: ScheduledFuture<*>? = null
     private val startPending = AtomicBoolean(false)
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, WORKER_THREAD_NAME).apply { isDaemon = true }
@@ -54,7 +54,7 @@ class RendererService : Service(), RendererCallbacks {
             }
 
             ACTION_START -> {
-                promoteToForeground("Startingº")
+                promoteToForeground("Starting...")
                 if (running) {
                     publish(lastStatus)
                 } else if (startPending.compareAndSet(false, true)) {
@@ -92,7 +92,7 @@ class RendererService : Service(), RendererCallbacks {
     private fun startRenderer() {
         if (destroyed) return
 
-        val preferences = getSharedPreferences(PAHDIS,MODE_PRIVATE)
+        val preferences = getSharedPreferences(PREFS, MODE_PRIVATE)
         val target = preferences.getString(KEY_SPEAKER_IP, "").orEmpty().trim()
         if (!isReasonableIpv4(target)) {
             lastStatus = "Set a valid M5 IPv4 address first."
@@ -373,7 +373,7 @@ class RendererService : Service(), RendererCallbacks {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val builder = if (Build.VERSION_SDK_INT >= Build.VERSION_CODES.O) {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
             @Suppress("DEPRECATION")
@@ -395,7 +395,7 @@ class RendererService : Service(), RendererCallbacks {
         const val PREFS = "mobile-adapter"
         const val KEY_SPEAKER_IP = "speaker_ip"
         private const val KEY_CLIENT_UUID = "wam_client_uuid"
-        private const val KEY_RENDERER_UDN = "renderer_udnW"
+        private const val KEY_RENDERER_UDN = "renderer_udn"
         private const val CHANNEL_ID = "wambridge-renderer"
         private const val NOTIFICATION_ID = 5101
         private const val SAFE_START_VOLUME = 3
