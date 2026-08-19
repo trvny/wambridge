@@ -12,6 +12,20 @@ on:
       - ".github/workflows/mobile.yml"
       - "mobile/**"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      signed:
+        description: "Build a release-signed APK instead of the debug one."
+        type: boolean
+        default: false
+      version-name:
+        description: "versionName for a signed build; ignored otherwise."
+        type: string
+        default: ""
+      version-code:
+        description: "versionCode for a signed build; ignored otherwise."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -19,6 +33,11 @@ permissions:
 jobs:
   android:
     runs-on: ubuntu-latest
+    env:
+      WAMBRIDGE_KEYSTORE_BASE64: ${{ secrets.WAMBRIDGE_ANDROID_KEYSTORE_BASE64 }}
+      WAMBRIDGE_KEYSTORE_PASSWORD: ${{ secrets.WAMBRIDGE_ANDROID_KEYSTORE_PASSWORD }}
+      WAMBRIDGE_KEY_ALIAS: ${{ secrets.WAMBRIDGE_ANDROID_KEY_ALIAS }}
+      WAMBRIDGE_KEY_PASSWORD: ${{ secrets.WAMBRIDGE_ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -34,16 +53,69 @@ jobs:
           gradle-version: "9.5.0"
 
       - name: Build Android adapter
+        if: ${{ !inputs.signed }}
         working-directory: mobile
         run: |
           set -euo pipefail
-          version="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
-          test -n "$version"
           gradle :app:lintDebug :app:assembleDebug
-          cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/wambridge-${version}.apk"
 
       - uses: actions/upload-artifact@v7
+        if: ${{ !inputs.signed }}
         with:
           name: wambridge-mobile-debug
-          path: mobile/app/build/outputs/apk/debug/wambridge-*.apk
+          path: mobile/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Prepare signing
+        if: ${{ inputs.signed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in "$WAMBRIDGE_KEYSTORE_BASE64" \
+                       "$WAMBRIDGE_KEYSTORE_PASSWORD" \
+                       "$WAMBRIDGE_KEY_ALIAS" \
+                       "$WAMBRIDGE_KEY_PASSWORD"; do
+            if [[ -z "$value" ]]; then
+              echo "A signed build needs all four WAMBRIDGE_ANDROID_* secrets" >&2
+              exit 1
+            fi
+          done
+          printf '%s' "$WAMBRIDGE_KEYSTORE_BASE64" \
+            | base64 --decode > "$RUNNER_TEMP/wambridge-release.keystore"
+          echo "WAMBRIDGE_KEYSTORE_PATH=$RUNNER_TEMP/wambridge-release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build the signed APK
+        if: ${{ inputs.signed }}
+        working-directory: mobile
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version-name }}
+          VERSION_CODE: ${{ inputs.version-code }}
+        run: |
+          set -euo pipefail
+          test -n "$VERSION"
+          test -n "$VERSION_CODE"
+          gradle :app:lintRelease :app:assembleRelease \
+            "-PwamVersionName=$VERSION" \
+            "-PwamVersionCode=$VERSION_CODE"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/wambridge-${VERSION}.apk"
+
+      - name: Verify the signature
+        if: ${{ inputs.signed }}
+        working-directory: mobile
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version-name }}
+        run: |
+          set -euo pipefail
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose --print-certs "dist/wambridge-${VERSION}.apk"
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ inputs.signed }}
+        with:
+          name: wambridge-apk
+          path: mobile/dist/wambridge-*.apk
           if-no-files-found: error
