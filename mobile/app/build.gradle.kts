@@ -2,8 +2,10 @@ plugins {
     id("com.android.application")
 }
 
-// The release workflow derives both from the git tag; the literals below are the
-// fallback used by local and CI debug builds.
+// The release workflow supplies both. The displayed version comes from one place
+// only - `version` in the repository's pyproject.toml - so nothing can quietly
+// disagree with it again; the literals below are the fallback for local and CI
+// debug builds and should be kept equal to it.
 val wamVersionName = (findProperty("wamVersionName") as String?)
     ?.takeIf { it.isNotBlank() }
     ?: "0.1.3"
