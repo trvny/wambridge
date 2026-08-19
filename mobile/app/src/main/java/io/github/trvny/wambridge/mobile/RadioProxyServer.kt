@@ -62,7 +62,6 @@ internal class RadioProxyServer(
                 start()
             }
         } catch (error: Exception) {
-            running.set(false)
             close()
             throw error
         }
