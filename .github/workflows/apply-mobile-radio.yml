@@ -1,0 +1,104 @@
+name: Apply mobile radio wiring
+
+on:
+  push:
+    branches:
+      - mobile-radio-stations
+    paths:
+      - ".github/workflows/apply-mobile-radio.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Wire radio into mobile app
+        shell: python
+        run: |
+          from pathlib import Path
+
+          service = Path("mobile/app/src/main/java/io/github/trvny/wambridge/mobile/RendererService.kt")
+          text = service.read_text(encoding="utf-8")
+          text = text.replace(
+              "import android.os.IBinder\n",
+              "import android.os.IBinder\nimport android.os.SystemClock\n",
+              1,
+          )
+          marker = "    private fun startRenderer() {\n        if (destroyed) return\n\n"
+          replacement = marker + "        releaseRadio()\n\n"
+          if marker not in text:
+              raise SystemExit("Renderer start marker missing")
+          text = text.replace(marker, replacement, 1)
+          marker = "    private fun ensureChannel(): SamsungWamChannel = synchronized(channelLock) {"
+          helper = '''    private fun releaseRadio() {
+        if (!RadioService.running) return
+        startService(
+            Intent(this, RadioService::class.java).apply {
+                action = RadioService.ACTION_STOP
+            },
+        )
+        val deadline = SystemClock.elapsedRealtime() + RADIO_STOP_TIMEOUT_MS
+        while (RadioService.running && SystemClock.elapsedRealtime() < deadline) {
+            Thread.sleep(50)
+        }
+        check(!RadioService.running) { "Radio did not release the WAM control channel" }
+    }
+
+'''
+          if marker not in text:
+              raise SystemExit("Renderer channel marker missing")
+          text = text.replace(marker, helper + marker, 1)
+          marker = "        private const val DESTROY_RELEASE_TIMEOUT_MS = 1_500L\n"
+          if marker not in text:
+              raise SystemExit("Renderer constants marker missing")
+          text = text.replace(marker, marker + "        private const val RADIO_STOP_TIMEOUT_MS = 2_500L\n", 1)
+          service.write_text(text, encoding="utf-8")
+
+          radio_service = Path("mobile/app/src/main/java/io/github/trvny/wambridge/mobile/RadioService.kt")
+          text = radio_service.read_text(encoding="utf-8")
+          old = "        if (safeVolumeApplied) {\n            runCatching { channel?.pause() }\n        }"
+          new = "        if (channel != null) {\n            runCatching { channel?.pause() }\n        }"
+          if old not in text:
+              raise SystemExit("Radio stop marker missing")
+          radio_service.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          activity = Path("mobile/app/src/main/java/io/github/trvny/wambridge/mobile/MainActivity.kt")
+          text = activity.read_text(encoding="utf-8")
+          marker = '''        layout.addView(TextView(this).apply {
+            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Other local UPnP/DLNA players can use the same renderer; WAV/L16, MP3 and FLAC are advertised."
+            textSize = 14f
+        })'''
+          replacement = '''        layout.addView(Button(this).apply {
+            text = "Radio stations"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, RadioStationsActivity::class.java))
+            }
+        })
+
+''' + marker
+          if marker not in text:
+              raise SystemExit("MainActivity help marker missing")
+          activity.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
+
+          readme = Path("mobile/README.md")
+          text = readme.read_text(encoding="utf-8")
+          marker = "- optional launcher-icon hiding;\n"
+          addition = marker + "- saved direct radio stations with ordered fallback URLs and local phone relay;\n"
+          if marker not in text:
+              raise SystemExit("README marker missing")
+          readme.write_text(text.replace(marker, addition, 1), encoding="utf-8")
+
+      - name: Commit result and remove helper workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-mobile-radio.yml
+          git add mobile
+          git commit -m "Wire custom radio stations into mobile"
+          git push
