@@ -12,7 +12,6 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 
 class RadioStationsActivity : Activity() {
     private lateinit var aliasInput: EditText
@@ -140,7 +139,6 @@ class RadioStationsActivity : Activity() {
                     text = "Delete"
                     setOnClickListener {
                         store.remove(station.alias)
-                        if (RadioService.running) stopRadio()
                         refreshStations()
                     }
                 })
