@@ -263,13 +263,23 @@ std::atomic<int> g_volumeMax{kDefaultVolumeMax};
 // recovery that works and gets audio back in about two and a half seconds. Only
 // starts that never got there count here.
 std::atomic<int> g_consecutiveFailedStarts{0};
-// Set the moment a helper process exists, cleared by whatever settles its fate:
-// reaching PLAYING clears it as a success, a deliberate teardown clears it as
-// nothing at all, and anything else leaves it set so the next start_child
-// charges it. That indirection is the point. A dead helper is noticed in three
-// different places and the protocol reader usually gets there first, so a
-// counter maintained where the death is seen stayed at zero in exactly the
-// scenario it was written for.
+// Set the moment a helper process exists and cleared by exactly one thing:
+// that helper reaching PLAYING. Every start that ends any other way is charged
+// by the next start_child. A dead helper is noticed in three different places
+// and the protocol reader usually gets there first, so a counter maintained
+// where the death is seen stayed at zero in exactly the scenario it exists for.
+//
+// Deliberate teardowns are deliberately NOT exempt, and that is a correction of
+// a measured mistake rather than an oversight. Every candidate discriminator -
+// m_failure, m_restart, m_childStopping - is reset by foobar on the failure
+// path itself: flush() clears m_failure and raises m_restart, and foobar calls
+// it after the failure is reported and before the object is destroyed. Exempting
+// on any of them wiped the verdict precisely when it mattered, measured
+// 2026-08-19 as a flat 0.23 s between relaunches with the budget stuck at zero.
+//
+// The cost of not exempting is one charge when the listener stops during a
+// start that had not reached PLAYING yet. That is half a second on the next
+// start, and the whole budget decays after kFailedStartDecay of calm.
 std::atomic<bool> g_startAwaitingVerdict{false};
 // steady_clock milliseconds of the last charged failure, 0 when there is none.
 std::atomic<long long> g_lastFailedStartMs{0};
@@ -369,14 +379,6 @@ public:
         cancel_child();
         m_cv.notify_all();
         if (m_worker.joinable()) m_worker.join();
-        {
-            // Asked rather than always forgotten: foobar destroys and rebuilds
-            // the output object after every reported failure, and surviving
-            // that rebuild is the entire reason the budget lives at file
-            // scope. Only a teardown with nothing wrong behind it is free.
-            std::lock_guard lock(m_mutex);
-            if (m_failure.empty()) forget_pending_start();
-        }
         stop_child();
     }
 
@@ -1063,13 +1065,6 @@ private:
         g_lastFailedStartMs.store(steady_now_ms());
     }
 
-    // The previous helper is being put down on purpose - the listener stopped,
-    // seeked, changed format, or foobar is closing. That is not a failed start
-    // and must not be charged as one.
-    static void forget_pending_start() {
-        g_startAwaitingVerdict.store(false);
-    }
-
     // Hold off before launching another helper when the previous ones died
     // without ever playing. Returns false when the wait ended because this
     // start became obsolete - shutdown, a seek, a format change or a failure
@@ -1288,17 +1283,12 @@ private:
         g_startAwaitingVerdict.store(true);
 
         bool stale = false;
-        bool alreadyFailed = false;
         {
             std::lock_guard lock(m_mutex);
-            alreadyFailed = !m_failure.empty();
-            stale = m_shutdown || m_restart || alreadyFailed ||
+            stale = m_shutdown || m_restart || !m_failure.empty() ||
                 !session_matches_locked(generation, sampleRate, channels);
         }
         if (stale) {
-            // Abandoning a helper because the session moved on is not the
-            // helper failing to start - unless a failure is what moved it on.
-            if (!alreadyFailed) forget_pending_start();
             m_childStopping.store(true);
             stop_child();
             return false;
@@ -1433,11 +1423,7 @@ private:
                 generation = m_generation;
             }
 
-            if (restart) {
-                // A seek or a format change, asked for by the listener.
-                forget_pending_start();
-                stop_child();
-            }
+            if (restart) stop_child();
             if (sampleRate == 0 || channels == 0) continue;
 
             bool flushing = false;
@@ -1541,7 +1527,6 @@ private:
             }
 
             if (stopAfterFlush) {
-                forget_pending_start();
                 stop_child();
                 continue;
             }

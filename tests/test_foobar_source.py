@@ -59,10 +59,15 @@ class FoobarSourceTests(TestCase):
         # Reaching PLAYING is the only success, and a teardown the listener
         # asked for is neither a success nor a failure.
         self.assertIn("g_consecutiveFailedStarts.store(0);", source)
-        self.assertGreaterEqual(
-            source.count("forget_pending_start();"),
-            4,
-            "every deliberate teardown has to drop the pending verdict",
+        # Nothing exempts a start from the verdict except reaching PLAYING.
+        # flush() clears m_failure and raises m_restart, and foobar calls it on
+        # the failure path, so every other discriminator erased the verdict
+        # exactly when it was needed.
+        self.assertNotIn("forget_pending_start", source)
+        self.assertEqual(
+            source.count("g_startAwaitingVerdict.store(false)"),
+            1,
+            "only reaching PLAYING may clear the pending verdict",
         )
 
         # The retry waits, the wait has a ceiling, and the ceiling is short
