@@ -234,8 +234,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     }
 
     private fun publish(message: String) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildNotification(message))
+        startForeground(NOTIFICATION_ID, buildNotification(message))
     }
 
     private fun createNotificationChannel() {
