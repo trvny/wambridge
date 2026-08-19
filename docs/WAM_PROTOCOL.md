@@ -855,18 +855,43 @@ Half still hand out a plain HTTP stream, which this firmware plays.
 Resolved by station id straight from TuneIn, using the speaker's own partner credentials:
 
 ```text
-s15984   PR3 Trójka 98.8   -> http://stream3.polskieradio.pl:8954/          plays
-s118200  Czwórka           -> http://stream3.polskieradio.pl:8956/listen.pls  plays
-s44392   PR4 Czwórka 92.0  -> http://stream3.polskieradio.pl:8906           plays
-s25176   Radio RAM 89.8    -> http://stream2.prw.pl:8000/radioram           plays
+s15984   PR3 Trójka 98.8   -> http://stream3.polskieradio.pl:8954/
+s118200  Czwórka           -> http://stream3.polskieradio.pl:8956/listen.pls
+s44392   PR4 Czwórka 92.0  -> http://stream3.polskieradio.pl:8906
+s25176   Radio RAM 89.8    -> http://stream2.prw.pl:8000/radioram
 ```
 
-`s15984` is the exact entry sitting in preset 0. So `SetPlayPreset` answering
-`StopPlaybackEvent` on a station whose stream is plain HTTP is **not** a format problem, and an
-earlier revision of this section guessed that it was. Cause unknown; what is ruled out is the
-station. BBC Radio 1 remains genuinely unplayable here - HLS from TuneIn and HLS in the
-personal playlists in `trvny/stuff/playlists` alike - so a preset holding it cannot work whatever
-else is fixed.
+**These are plain HTTP, which is not the same as verified playing, and an earlier revision of
+this table said "plays" against each one.** Nothing here was listened to; the column was a
+classification of the URL scheme. Since then, `s15984`'s address has been checked properly and
+is worse than it looked: `curl` gets `200 text/html` from it - a Shoutcast status page, not
+audio - and FFmpeg refuses it outright with `Stream ends prematurely at 0`. Appending the usual
+`;stream` or `;` does not help either.
+
+The audible confirmations tonight were all on `;`-suffixed addresses -
+`http://stream3.polskieradio.pl:8906/;stream` and `http://mp3.polskieradio.pl:8956/;` - which is
+also the form the station pack already carried. Whether the speaker's own player copes with the
+bare `:8954/` form is untested; it was assumed, not heard.
+
+`s15984` is the exact entry sitting in preset 0, and **the station is not ruled out** - an
+earlier revision of this paragraph said it was, on the strength of the table above before that
+table was corrected. With `:8954/` now known to answer `200 text/html` rather than a stream, the
+station is back to being a live suspect for `SetPlayPreset` returning `StopPlaybackEvent`.
+
+The evidence available points that way rather than away from it, though it is two data points
+and not a finding:
+
+- Trójka, whose resolved address does not stream, is the preset that failed here every time.
+- Czwórka, whose resolved address does stream once its `.pls` is read, is the preset that
+  started on the first try from `wambridge-mobile`.
+
+What would settle it is hearing the resolved `:8954/` through the speaker's own player, which
+has not been done - it was assumed playable because it was plain HTTP, which is exactly the
+inference this section had to retract once already.
+
+BBC Radio 1 remains genuinely unplayable here - HLS from TuneIn and HLS in the personal
+playlists in `trvny/stuff/playlists` alike - so a preset holding it cannot work whatever else is
+fixed.
 
 **And the owner's history closes the question.** Preset playback started roughly **one attempt
 in five** even years ago, with the official app and TuneIn both in good health. So
