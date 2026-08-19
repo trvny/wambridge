@@ -20,9 +20,11 @@ The Android adapter provides:
 - idle/session release so stopped playback does not keep the M5 awake;
 - a Quick Settings tile: tap toggles the renderer, long-press opens settings;
 - optional launcher-icon hiding;
+- native TuneIn preset browsing and safe playback through the speaker CPM API;
+- saved direct radio stations with ordered fallback URLs and local phone relay;
 - an M5-style app/renderer icon exposed through UPnP for players such as Neutron;
 
-Physical phone + M5 playback through Neutron is confirmed.
+Physical phone + M5 playback through Neutron is confirmed. The direct mobile radio relay intentionally rejects HLS and Ogg until a phone-side transcoding layer exists; the desktop bridge remains the fully transcoding radio path.
 
 ## Architecture
 
