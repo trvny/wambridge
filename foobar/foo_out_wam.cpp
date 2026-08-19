@@ -116,6 +116,19 @@ constexpr DWORD kActiveShutdownGraceMs = 6000;
 // only thing the ceiling buys is not leaving a zombie behind.
 constexpr DWORD kTerminatedShutdownGraceMs = 2000;
 constexpr DWORD kStartupShutdownGraceMs = 25000;
+// How long to wait before launching another helper after one died without ever
+// reaching PLAYING. Doubling from half a second, capped: the first relaunch
+// waits 0.5 s, then 1 s, 2 s, 4 s, and everything after that sits at the
+// ceiling. The wait is interruptible - stopping, seeking or changing format all
+// cut it short - so nothing the listener asked for is delayed by it.
+//
+// The ceiling is deliberately low, and the decay is the other half of the same
+// argument: a run of failures that stopped mattering must not leave a later,
+// perfectly ordinary press of play sitting in silence. Once nothing has failed
+// for kFailedStartDecay the budget is forgotten and the next start is free.
+constexpr std::chrono::milliseconds kFirstFailedStartBackoff{500};
+constexpr std::chrono::milliseconds kMaxFailedStartBackoff{8000};
+constexpr std::chrono::milliseconds kFailedStartDecay{60000};
 
 // {B768F82C-A6B7-436F-965D-6C8D1B21B91D}
 constexpr GUID kOutputGuid = {
@@ -234,6 +247,24 @@ SOCKET g_controlSocket = INVALID_SOCKET;
 // translation unit and has no access to the output's settings.
 std::atomic<bool> g_hardwareVolume{false};
 std::atomic<int> g_volumeMax{kDefaultVolumeMax};
+// Consecutive helpers that died before ever reporting PLAYING.
+//
+// This has to live at file scope rather than in the output object. Reporting a
+// failure throws exception_output_invalidated, and foobar answers that by
+// building a **fresh** output object and trying again - so a counter owned by
+// the object is back at zero for every retry, which is why the retries never
+// slowed down. Measured 2026-08-16: 77 restarts in 90 seconds while something
+// kept killing the helper, and it carried on by itself afterwards at one death
+// every 25 seconds. Each death left a socket in TIME_WAIT to port 55001; at 29
+// of them the speaker stopped answering commands altogether.
+//
+// A helper that reached PLAYING and then exited is a different thing entirely -
+// that is the speaker ending a stream, and restarting immediately is the
+// recovery that works and gets audio back in about two and a half seconds. Only
+// starts that never got there count here.
+std::atomic<int> g_consecutiveFailedStarts{0};
+// steady_clock milliseconds of the last charged failure, 0 when there is none.
+std::atomic<long long> g_lastFailedStartMs{0};
 
 // Moves foobar's own slider. playback_control is a main-thread interface and
 // the dispatcher runs on its own thread, so the change is handed over rather
@@ -869,6 +900,10 @@ private:
                 if (playing) {
                     m_playing.store(true);
                     m_childReachedPlaying.store(true);
+                    // Reaching PLAYING is the only thing that proves a start
+                    // worked, so it is the only thing that clears the budget.
+                    g_consecutiveFailedStarts.store(0);
+                    g_lastFailedStartMs.store(0);
                     // Not when the helper was launched: between the spawn and
                     // this line the level has not been applied yet, so a seek
                     // in that window would hand the replacement a raised clamp
@@ -988,6 +1023,69 @@ private:
         return command;
     }
 
+    static long long steady_now_ms() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    }
+
+    // Drop a budget nothing has topped up for a while. Without this a burst of
+    // failures would still be taxing an unrelated press of play an hour later.
+    static void decay_failed_starts() {
+        const long long last = g_lastFailedStartMs.load();
+        if (last == 0) return;
+        if (steady_now_ms() - last <= kFailedStartDecay.count()) return;
+        g_consecutiveFailedStarts.store(0);
+        g_lastFailedStartMs.store(0);
+    }
+
+    // Charged the moment a helper process exists, on the assumption it will
+    // fail; reaching PLAYING is what refunds it. Counting the spawn itself
+    // rather than a verdict settled later is what makes this reliable: flush()
+    // bumps the generation and zeroes the format, so the start attempt that
+    // spawned a helper is routinely abandoned before it can report anything,
+    // and any accounting that had to survive until then lost roughly two
+    // charges in three (measured 2026-08-19).
+    static void note_start_attempt() {
+        decay_failed_starts();
+        g_consecutiveFailedStarts.fetch_add(1);
+        g_lastFailedStartMs.store(steady_now_ms());
+    }
+
+    // Hold off before launching another helper when the previous ones died
+    // without ever playing. Returns false when the wait ended because this
+    // start became obsolete - shutdown, a seek, a format change or a failure
+    // already recorded - so the caller loops round instead of spawning into a
+    // session that has moved on.
+    bool wait_out_failed_start_backoff(
+        uint64_t generation,
+        unsigned sampleRate,
+        unsigned channels
+    ) {
+        decay_failed_starts();
+        const int failures = g_consecutiveFailedStarts.load();
+        if (failures <= 0) return true;
+
+        auto backoff = kFirstFailedStartBackoff;
+        for (int step = 1; step < failures && backoff < kMaxFailedStartBackoff;
+             ++step) {
+            backoff *= 2;
+        }
+        if (backoff > kMaxFailedStartBackoff) backoff = kMaxFailedStartBackoff;
+
+        std::unique_lock lock(m_mutex);
+        m_cv.wait_for(
+            lock,
+            backoff,
+            [this, generation, sampleRate, channels] {
+                return m_shutdown || m_restart || !m_failure.empty() ||
+                    !session_matches_locked(generation, sampleRate, channels);
+            }
+        );
+        return !m_shutdown && !m_restart && m_failure.empty() &&
+            session_matches_locked(generation, sampleRate, channels);
+    }
+
     bool start_child(
         unsigned sampleRate,
         unsigned channels,
@@ -1000,6 +1098,14 @@ private:
                 !session_matches_locked(generation, sampleRate, channels)) {
                 return false;
             }
+        }
+
+        // How long to hold off is decided by how many spawns in a row have
+        // failed to reach PLAYING. The wait can be cut short by the session
+        // moving on, and that is fine - the budget is charged at the spawn, so
+        // an abandoned attempt cannot lose the count.
+        if (!wait_out_failed_start_backoff(generation, sampleRate, channels)) {
+            return false;
         }
 
         m_childStopping.store(false);
@@ -1158,6 +1264,9 @@ private:
             m_childStdout = stdoutRead;
         }
 
+        // A helper process exists from here on, so from here on it is charged.
+        note_start_attempt();
+
         bool stale = false;
         {
             std::lock_guard lock(m_mutex);
@@ -1309,6 +1418,9 @@ private:
             }
             const auto childState = child_state();
             if (childState == ChildState::exited) {
+                // Nothing is charged here on purpose. This is only one of the
+                // three ways a dead helper surfaces, and usually the loser of
+                // the race; the verdict is settled by the next start_child.
                 set_failure_if_current(
                     "wambridge-pcm exited unexpectedly",
                     generation
