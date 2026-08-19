@@ -42,7 +42,7 @@ class MainActivity : Activity() {
             textSize = 24f
         })
         layout.addView(TextView(this).apply {
-            text = "\nNeutron → UPnP/DLNA → WAM Bridge → Samsung M5\n\nThe adapter is isolated under mobile/. The desktop WAM transport is not used or modified."
+            text = "\nNeutron → UPnP/DLNA → WAM Bridge → Samsung M5"
             textSize = 16f
         })
 
