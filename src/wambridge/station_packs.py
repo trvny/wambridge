@@ -6,6 +6,11 @@ from .stations import RadioStation, StationError
 
 TOP3 = (
     RadioStation(
+        # No tunein_id here on purpose. BBC Radio 1 resolves to HLS only
+        # (measured 2026-08-19, ids s24939 and s347238), so an id would cost a
+        # request per play and always come back empty. These HLS URLs are
+        # correct for the bridge, which is the only way this station reaches
+        # the speaker at all.
         alias="bbc1",
         url=(
             "https://as-hls-ww-live.akamaized.net/pool_01505109/live/ww/"
@@ -22,11 +27,17 @@ TOP3 = (
         alias="trojka",
         url="http://41.dktr.pl:8000/trojka.ogg",
         fallback_urls=("http://41.dktr.pl:8000/trojka2.ogg",),
+        # Both saved URLs are Ogg, which plays fine through the local FFmpeg
+        # bridge and is silent when handed straight to the speaker. The id
+        # resolves to a plain MP3 endpoint, so it is tried first and the direct
+        # path gets something it can take.
+        tunein_id="s15984",
     ),
     RadioStation(
         alias="czworka",
         url="http://stream3.polskieradio.pl:8906/;stream",
         fallback_urls=("http://mp3.polskieradio.pl:8956/;",),
+        tunein_id="s118200",
     ),
 )
 

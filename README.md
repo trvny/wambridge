@@ -215,6 +215,14 @@ wambridge --radio-play paradise --device M5 --volume 3
 wambridge --radio-remove paradise
 ```
 
+A station can also carry its TuneIn id. The id is resolved when the station is played, so it
+follows the broadcaster if the stream address moves - the URLs saved beside it stay as
+fallbacks for when TuneIn cannot be reached or offers nothing usable:
+
+```powershell
+wambridge --radio-add trojka "http://41.dktr.pl:8000/trojka.ogg" --tunein-id s15984
+```
+
 Station definitions are stored in:
 
 ```text

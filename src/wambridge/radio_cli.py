@@ -21,12 +21,18 @@ from .samsung import (
     set_volume,
 )
 from .station_packs import get_station_pack, station_pack_names
-from .stations import RadioStation, StationError, StationStore
+from .stations import (
+    RadioStation,
+    StationError,
+    StationStore,
+    validate_tunein_id,
+)
 from .stream import StreamError, continuous_source
 from .tunein import (
     find_tunein_preset,
     get_tunein_presets,
     play_tunein_preset,
+    resolve_tunein_station,
 )
 
 LOGGER = logging.getLogger("wambridge")
@@ -41,6 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="ALIAS_OR_URL",
         help="Save a station as ALIAS URL [FALLBACK_URL ...]",
+    )
+    parser.add_argument(
+        "--tunein-id",
+        metavar="ID",
+        help=(
+            "TuneIn station id for --radio-add, e.g. s15984. Resolved at play "
+            "time and tried before the saved URLs, which stay as fallbacks"
+        ),
     )
     radio.add_argument(
         "--radio-import",
@@ -217,6 +231,44 @@ def _play_tunein_safely(
     return 0
 
 
+def _station_candidates(station: RadioStation) -> tuple[str, ...]:
+    """Return the URLs to try, freshest first.
+
+    A saved `tunein_id` is resolved now rather than stored, because the answer
+    changes whenever the broadcaster moves its endpoint - which is exactly the
+    failure a hardcoded URL cannot survive. The saved URLs stay behind it as
+    the static net for when TuneIn is unreachable, or answers with nothing this
+    speaker can take: BBC Radio 1 resolves to HLS only, so it comes back empty
+    and the fallbacks carry the station.
+
+    Resolution failing is not fatal. It costs one entry at the front of a list
+    that still has everything it had before.
+    """
+    if not station.tunein_id:
+        return station.all_urls
+    try:
+        resolved = resolve_tunein_station(station.tunein_id)
+    except WamApiError as error:
+        LOGGER.warning(
+            "Could not resolve TuneIn id %s for %s: %s",
+            station.tunein_id,
+            station.alias,
+            error,
+        )
+        return station.all_urls
+    if not resolved:
+        LOGGER.info(
+            "TuneIn offered no directly playable stream for %s (%s); "
+            "using the saved URLs",
+            station.alias,
+            station.tunein_id,
+        )
+        return station.all_urls
+    ordered = list(resolved)
+    ordered += [url for url in station.all_urls if url not in resolved]
+    return tuple(ordered)
+
+
 def _play_custom_station(
     args: argparse.Namespace,
     station: RadioStation,
@@ -224,14 +276,15 @@ def _play_custom_station(
     """Try a station's primary stream and fallbacks in order."""
     failures: list[str] = []
     original_source = args.source
+    candidates = _station_candidates(station)
     try:
-        for index, url in enumerate(station.all_urls, start=1):
+        for index, url in enumerate(candidates, start=1):
             args.source = url
             LOGGER.info(
                 "Trying radio station %s stream %s/%s: %s",
                 station.alias,
                 index,
-                len(station.all_urls),
+                len(candidates),
                 url,
             )
             try:
@@ -239,11 +292,11 @@ def _play_custom_station(
                     result = cli.run(args)
             except (RuntimeError, StreamError, WamApiError) as error:
                 failures.append(f"{url}: {error}")
-                if index < len(station.all_urls):
+                if index < len(candidates):
                     LOGGER.warning(
                         "Radio stream failed, trying fallback %s/%s",
                         index + 1,
-                        len(station.all_urls),
+                        len(candidates),
                     )
                 continue
             if result in {0, 130}:
@@ -282,6 +335,11 @@ def run(args: argparse.Namespace) -> int:
             alias=alias,
             url=primary_url,
             fallback_urls=tuple(fallback_urls),
+            tunein_id=(
+                validate_tunein_id(args.tunein_id.strip())
+                if getattr(args, "tunein_id", None)
+                else None
+            ),
         )
         station_store.put(station)
         print(
