@@ -575,10 +575,20 @@ UIC?cmd=<name>GetNetworkStandByMode</name>
 <response result="ok"><networkstandbymode>on</networkstandbymode></response>
 ```
 
-So the sleep timer is not the only power lever after all, and the "almost standby" state the
-speaker was long observed to have now has a name and a command. The response method drops the
-`Get`, the same way `GetApInfo` answers as `ApInfo`. `SetNetworkStandByMode` takes a `str`
-argument `networkstandbymode` and has not been tried.
+The response method drops the `Get`, the same way `GetApInfo` answers as `ApInfo`.
+`SetNetworkStandByMode` takes a `str` argument `networkstandbymode` and has not been tried.
+
+**Read that for exactly what it is.** A setting called `NetworkStandByMode` exists and currently
+reads `on`. That is all. It does **not** follow that writing it puts the speaker to sleep: in
+consumer audio a name like this usually governs what the network does *while* the device is in
+standby - whether the radio stays up to be woken - rather than being the thing that enters
+standby. An earlier revision of this file called it "a second power lever", which was one
+inference too many on a single read.
+
+What would settle it, in order: `SetNetworkStandByMode` with the value already read back
+(a no-op that proves the write is accepted and what the argument alphabet looks like), then the
+other value with `GetMute` watched as the LED proxy this file already documents, and the idle
+interval from the standby section as the yardstick. Until then it is a setting, not a lever.
 
 ### Content providers and search
 

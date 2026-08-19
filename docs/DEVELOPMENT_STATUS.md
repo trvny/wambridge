@@ -327,11 +327,12 @@ operating system records.
    reports `holding=<count>` for connections still attached to the speaker, but it still
    sends no power command, so the name remains wrong until it arms a sleep timer. The stream
    path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
-7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** Note first
-   that the sleep timer is **not** the only power lever: `GetNetworkStandByMode` was measured
-   answering on 2026-08-19 with `networkstandbymode=on`, on `UIC`, the socket this component
-   already holds open. `SetNetworkStandByMode` takes a `str` and is untried. That may be the
-   better menu item, or the better default. See `WAM_PROTOCOL.md`. This
+7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** A related
+   setting turned up but does not change this item yet: `GetNetworkStandByMode` answers
+   `networkstandbymode=on` on `UIC`, the socket this component already holds open. What writing
+   it does is unknown, and the name suggests it governs the network *during* standby rather
+   than entering it, so treat it as a hypothesis with a safe test attached rather than a second
+   power control. `WAM_PROTOCOL.md` has the order for settling that. This
    component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
    only power lever the firmware answers a client with — yet the only way to reach it is
    `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
@@ -373,6 +374,11 @@ operating system records.
     that still says no write API is known) and **browsing the catalogue** for stations not
     already saved (`GetUpperRadioList`, `GetCurrentRadioList`, `SetSelectRadio`,
     `GetGenreStations`, `SearchQuery`). A dockable panel still waits on output transport.
+
+    Order agreed for the mobile side, largest gain first: read-only browsing
+    (`GetUpperRadioList`, `GetCurrentRadioList`), then search, then a browsing UI once the
+    structure is understood, and only then writing or removing presets. That is a bigger step
+    than further cosmetic work on the renderer.
 
     The concrete want behind this is the **physical Radio button**, which cycles the three
     presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
