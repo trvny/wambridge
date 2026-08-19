@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 class RendererService : Service(), RendererCallbacks {
@@ -16,6 +18,13 @@ class RendererService : Service(), RendererCallbacks {
     private var rendererState: RendererState? = null
     private var speakerIp: String = ""
     private var ownsPlayback = false
+    private val startPending = AtomicBoolean(false)
+    private val worker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "wam-mobile-service").apply { isDaemon = true }
+    }
+
+    @Volatile
+    private var destroyed = false
 
     override fun onCreate() {
         super.onCreate()
@@ -25,17 +34,36 @@ class RendererService : Service(), RendererCallbacks {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action ?: ACTION_START) {
             ACTION_STOP -> {
-                stopRenderer()
-                stopSelf()
+                startPending.set(false)
+                worker.execute {
+                    stopRenderer()
+                    stopSelf()
+                }
                 return START_NOT_STICKY
             }
 
-            ACTION_START -> startRenderer()
+            ACTION_START -> {
+                promoteToForeground("Starting…")
+                if (running) {
+                    publish(lastStatus)
+                } else if (startPending.compareAndSet(false, true)) {
+                    worker.execute {
+                        try {
+                            startRenderer()
+                        } finally {
+                            startPending.set(false)
+                        }
+                    }
+                }
+            }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        destroyed = true
+        startPending.set(false)
+        worker.shutdownNow()
         stopRenderer()
         super.onDestroy()
     }
@@ -43,16 +71,22 @@ class RendererService : Service(), RendererCallbacks {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startRenderer() {
+        if (destroyed) return
+
         val preferences = getSharedPreferences(PREFS, MODE_PRIVATE)
         val target = preferences.getString(KEY_SPEAKER_IP, "").orEmpty().trim()
         if (!isReasonableIpv4(target)) {
             lastStatus = "Set a valid M5 IPv4 address first."
+            stopRenderer()
             stopSelf()
             return
         }
 
-        if (renderer != null && speakerIp == target) return
-        stopRenderer()
+        if (renderer != null && speakerIp == target) {
+            publish(lastStatus)
+            return
+        }
+        stopRenderer(removeForeground = false)
 
         speakerIp = target
         val clientUuid = preferences.getString(KEY_CLIENT_UUID, null)
@@ -64,28 +98,47 @@ class RendererService : Service(), RendererCallbacks {
                 preferences.edit().putString(KEY_RENDERER_UDN, it).apply()
             }
 
+        var channel: SamsungWamChannel? = null
+        var activeRenderer: UpnpRenderer? = null
         try {
-            val channel = SamsungWamChannel(speakerIp, clientUuid)
+            channel = SamsungWamChannel(speakerIp, clientUuid)
             channel.connect()
+            if (destroyed || Thread.currentThread().isInterrupted) return
+
             val state = RendererState(rendererUdn)
-            val activeRenderer = UpnpRenderer(this, state, this)
+            activeRenderer = UpnpRenderer(this, state, this)
             activeRenderer.start()
+            if (destroyed || Thread.currentThread().isInterrupted) return
 
             wamChannel = channel
             rendererState = state
             renderer = activeRenderer
+            channel = null
+            activeRenderer = null
+
             ownsPlayback = false
             running = true
-            lastStatus = "Ready · ${activeRenderer.localAddress.hostAddress}:${activeRenderer.port} → $speakerIp"
-            startForeground(NOTIFICATION_ID, buildNotification(lastStatus))
+            lastStatus = "Ready · ${renderer!!.localAddress.hostAddress}:${renderer!!.port} → $speakerIp"
+            publish(lastStatus)
         } catch (error: Exception) {
             lastStatus = "Could not start adapter: ${error.message ?: error.javaClass.simpleName}"
             stopRenderer()
             stopSelf()
+        } finally {
+            try {
+                activeRenderer?.close()
+            } catch (_: Exception) {
+                // Best effort while abandoning a partially started renderer.
+            }
+            try {
+                channel?.close()
+            } catch (_: Exception) {
+                // Best effort while abandoning a partial WAM connection.
+            }
         }
     }
 
-    private fun stopRenderer() {
+    private fun stopRenderer(removeForeground: Boolean = true) {
         rendererState?.transportState = "STOPPED"
         if (ownsPlayback) {
             try {
@@ -110,7 +163,7 @@ class RendererService : Service(), RendererCallbacks {
         wamChannel = null
         running = false
         speakerIp = ""
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        if (removeForeground) stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     override fun onPlay(rendererStreamUrl: String) {
@@ -147,6 +200,11 @@ class RendererService : Service(), RendererCallbacks {
         rendererState?.muted = muted
     }
 
+    private fun promoteToForeground(message: String) {
+        lastStatus = message
+        startForeground(NOTIFICATION_ID, buildNotification(message))
+    }
+
     private fun publish(message: String) {
         lastStatus = message
         getSystemService(NotificationManager::class.java)
@@ -157,7 +215,7 @@ class RendererService : Service(), RendererCallbacks {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "WAM Bridge",
+                "trvny.wambridge.mobile",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
                 description = "Mobile UPnP adapter status"
@@ -191,7 +249,7 @@ class RendererService : Service(), RendererCallbacks {
         }
         return builder
             .setSmallIcon(R.drawable.ic_qs_tile)
-            .setContentTitle("WAM Bridge")
+            .setContentTitle("trvny.wambridge.mobile")
             .setContentText(message)
             .setContentIntent(openPendingIntent)
             .setOngoing(true)

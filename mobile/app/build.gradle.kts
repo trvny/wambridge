@@ -7,7 +7,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.trvny.wambridge.mobile"
+        applicationId = "trvny.wambridge.mobile"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
