@@ -263,24 +263,6 @@ std::atomic<int> g_volumeMax{kDefaultVolumeMax};
 // recovery that works and gets audio back in about two and a half seconds. Only
 // starts that never got there count here.
 std::atomic<int> g_consecutiveFailedStarts{0};
-// Set the moment a helper process exists and cleared by exactly one thing:
-// that helper reaching PLAYING. Every start that ends any other way is charged
-// by the next start_child. A dead helper is noticed in three different places
-// and the protocol reader usually gets there first, so a counter maintained
-// where the death is seen stayed at zero in exactly the scenario it exists for.
-//
-// Deliberate teardowns are deliberately NOT exempt, and that is a correction of
-// a measured mistake rather than an oversight. Every candidate discriminator -
-// m_failure, m_restart, m_childStopping - is reset by foobar on the failure
-// path itself: flush() clears m_failure and raises m_restart, and foobar calls
-// it after the failure is reported and before the object is destroyed. Exempting
-// on any of them wiped the verdict precisely when it mattered, measured
-// 2026-08-19 as a flat 0.23 s between relaunches with the budget stuck at zero.
-//
-// The cost of not exempting is one charge when the listener stops during a
-// start that had not reached PLAYING yet. That is half a second on the next
-// start, and the whole budget decays after kFailedStartDecay of calm.
-std::atomic<bool> g_startAwaitingVerdict{false};
 // steady_clock milliseconds of the last charged failure, 0 when there is none.
 std::atomic<long long> g_lastFailedStartMs{0};
 
@@ -920,7 +902,6 @@ private:
                     m_childReachedPlaying.store(true);
                     // Reaching PLAYING is the only thing that proves a start
                     // worked, so it is the only thing that clears the budget.
-                    g_startAwaitingVerdict.store(false);
                     g_consecutiveFailedStarts.store(0);
                     g_lastFailedStartMs.store(0);
                     // Not when the helper was launched: between the spawn and
@@ -1058,8 +1039,14 @@ private:
         g_lastFailedStartMs.store(0);
     }
 
-    // The previous helper existed and never proved itself. Charge it.
-    static void note_failed_start() {
+    // Charged the moment a helper process exists, on the assumption it will
+    // fail; reaching PLAYING is what refunds it. Counting the spawn itself
+    // rather than a verdict settled later is what makes this reliable: flush()
+    // bumps the generation and zeroes the format, so the start attempt that
+    // spawned a helper is routinely abandoned before it can report anything,
+    // and any accounting that had to survive until then lost roughly two
+    // charges in three (measured 2026-08-19).
+    static void note_start_attempt() {
         decay_failed_starts();
         g_consecutiveFailedStarts.fetch_add(1);
         g_lastFailedStartMs.store(steady_now_ms());
@@ -1113,11 +1100,10 @@ private:
             }
         }
 
-        // Settle the previous launch here rather than where its death was
-        // noticed. start_child is the single funnel every helper passes
-        // through, so charging on the way in covers all three teardown paths
-        // and does not care which thread saw the corpse first.
-        if (g_startAwaitingVerdict.exchange(false)) note_failed_start();
+        // How long to hold off is decided by how many spawns in a row have
+        // failed to reach PLAYING. The wait can be cut short by the session
+        // moving on, and that is fine - the budget is charged at the spawn, so
+        // an abandoned attempt cannot lose the count.
         if (!wait_out_failed_start_backoff(generation, sampleRate, channels)) {
             return false;
         }
@@ -1278,9 +1264,8 @@ private:
             m_childStdout = stdoutRead;
         }
 
-        // A helper process exists from here on, so from here on its fate is
-        // owed to the budget.
-        g_startAwaitingVerdict.store(true);
+        // A helper process exists from here on, so from here on it is charged.
+        note_start_attempt();
 
         bool stale = false;
         {

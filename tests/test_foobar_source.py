@@ -51,10 +51,12 @@ class FoobarSourceTests(TestCase):
             1,
             "exactly one place may charge the budget",
         )
-        charge = source.index("g_consecutiveFailedStarts.fetch_add")
-        helper = source.index("static void note_failed_start()")
-        self.assertLess(helper, charge)
-        self.assertIn("g_startAwaitingVerdict.exchange(false)", source)
+        self.assertIn("static void note_start_attempt()", source)
+        # Charged at the spawn itself. flush() bumps the generation and zeroes
+        # the format, so the attempt that spawned a helper is routinely
+        # abandoned before any later verdict could be recorded; accounting that
+        # waited for one lost roughly two charges in three.
+        self.assertIn("note_start_attempt();", source)
 
         # Reaching PLAYING is the only success, and a teardown the listener
         # asked for is neither a success nor a failure.
@@ -64,11 +66,16 @@ class FoobarSourceTests(TestCase):
         # the failure path, so every other discriminator erased the verdict
         # exactly when it was needed.
         self.assertNotIn("forget_pending_start", source)
+        self.assertNotIn("g_startAwaitingVerdict", source)
+        # Two resets and no third: reaching PLAYING refunds the budget, and
+        # decay drops one nothing has topped up for a while. Anything else
+        # zeroing it silently is the bug this test exists for.
         self.assertEqual(
-            source.count("g_startAwaitingVerdict.store(false)"),
-            1,
-            "only reaching PLAYING may clear the pending verdict",
+            source.count("g_consecutiveFailedStarts.store(0)"),
+            2,
+            "only PLAYING and the decay may zero the budget",
         )
+        self.assertIn("static void decay_failed_starts()", source)
 
         # The retry waits, the wait has a ceiling, and the ceiling is short
         # enough that an ordinary press of play is never left in silence.
