@@ -366,8 +366,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
 
     private fun publish(message: String) {
         lastStatus = message
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildNotification(message))
+        startForeground(NOTIFICATION_ID, buildNotification(message))
     }
 
     private fun createNotificationChannel() {
