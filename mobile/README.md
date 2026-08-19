@@ -20,6 +20,7 @@ The Android adapter provides:
 - idle/session release so stopped playback does not keep the M5 awake;
 - a Quick Settings tile: tap toggles the renderer, long-press opens settings;
 - optional launcher-icon hiding;
+- native TuneIn preset browsing and safe playback through the speaker CPM API;
 - an M5-style app/renderer icon exposed through UPnP for players such as Neutron;
 
 Physical phone + M5 playback through Neutron is confirmed.
