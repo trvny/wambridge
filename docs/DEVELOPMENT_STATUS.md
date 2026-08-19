@@ -373,6 +373,13 @@ operating system records.
     that still says no write API is known) and **browsing the catalogue** for stations not
     already saved (`GetUpperRadioList`, `GetCurrentRadioList`, `SetSelectRadio`,
     `GetGenreStations`, `SearchQuery`). A dockable panel still waits on output transport.
+
+    The concrete want behind this is the **physical Radio button**, which cycles the three
+    presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
+    already readable with `--tunein-list`; what is missing is putting a different station
+    there without Samsung's app. `WAM_PROTOCOL.md` has the three write commands, the shape of
+    `SetSavePreset` (no arguments - it stores whatever is selected), and an ordered way to
+    find out whether `SetMovePreset` can simply promote a `my` entry into slots 0-2.
 13. ~~**Take the Samsung Android app apart.**~~ **Done 2026-08-19.** 242 commands recovered
     and written up in `WAM_PROTOCOL.md`; 26 of them were already in use here. What follows from
     it is spread across items 7, 12 and the new item 15 rather than kept as one lump.

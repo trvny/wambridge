@@ -608,6 +608,65 @@ Bass, treble, balance, DRC, woofer and rear levels, a seven-band EQ with saved c
 and `GetAudioQuality`/`SetAudioQuality`. None of it is needed to play audio, all of it is
 reachable from the same socket.
 
+### The three presets behind the physical Radio button
+
+`README.md` says the WAM Bridge station list "does not overwrite the three presets selected by
+the physical button on the speaker", and that is true of that feature. It is worth writing down
+what those three actually are, because they are already visible and the commands to change them
+are now known.
+
+Measured 2026-08-19, `wambridge --device M5 --tunein-list` against the physical M5:
+
+```text
+0   speaker   98.8 | PR3 Trójka (Variety)
+1   speaker   Czwórka - Polskie Radio (Top 40 & Pop Music)
+2   speaker   98.8 | BBC Radio 1 (Pop Country)
+3   my        BBC Radio 6 Music (Music)
+4   my        96.0 | RMF FM (Adult Hits)
+...             (12 more of kind `my`)
+```
+
+So the speaker's own three are simply the entries of kind `speaker`, and this project already
+distinguishes them: `WamPreset.preset_type` maps `speaker` to `1` and `my` to `0`, which is the
+`presettype` that `SetPlayPreset` carries. Reading and playing them is solved. Changing which
+stations they are is not.
+
+The three write commands, exactly as the app sends them:
+
+```text
+CPM?cmd=<name>SetSavePreset</name>                     (no arguments at all)
+
+CPM?cmd=<name>SetRemovePreset</name>
+       <p type="dec" name="presetindex" val="%s"/>
+
+CPM?cmd=<name>SetMovePreset</name>
+       <p type="dec" name="presetfromindex" val="%s"/>
+       <p type="dec" name="presettoindex"   val="%s"/>
+       <p type="dec" name="movedirection"   val="%s"/>
+```
+
+`SetSavePreset` taking **no arguments** is the whole shape of the feature: it saves whatever is
+currently selected, so a station has to be playing or selected before it can be stored. That is
+also why browsing matters - `GetUpperRadioList` / `GetCurrentRadioList` / `SetSelectRadio` are
+how the app reaches a station that is not already a preset.
+
+**Untested hypothesis, and the reason to be careful.** The list above is one sequence, with the
+three `speaker` entries at indices 0-2 and `my` from 3 onwards. If that ordering is the speaker's
+own and not a presentation choice by this client, then `SetMovePreset` from an index in the `my`
+range to 0, 1 or 2 would promote an existing station into the physical-button set without having
+to browse or re-save anything. That would make the whole feature two commands. It is a guess:
+nothing has been sent, and `movedirection` has an unknown meaning and an unknown valid range.
+
+Order to settle it, cheapest first, and **dump `--tunein-list` to a file before the first write**
+- `SetRemovePreset` takes only an index and there is no undo:
+
+1. Re-read `--tunein-list` after any change; it is the only way to see the result.
+2. `SetMovePreset` between two adjacent `my` entries, far from the speaker slots. Harmless if it
+   works, informative if it errors, and it settles what `movedirection` wants.
+3. Only then a move that crosses into 0-2, which is the interesting one.
+4. `SetSavePreset` last, since it needs a selected station and therefore needs browsing first.
+
+
 ### Adopting any of this, safest first
 
 The vocabulary is large and the speaker is the only one there is. This is the order to take
