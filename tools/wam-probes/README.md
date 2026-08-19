@@ -11,7 +11,7 @@ cover them.
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `WAM_SPEAKER` | speaker address | `192.168.1.50` |
+| `WAM_SPEAKER` | speaker address | `192.168.1.50` (the M5 has since moved to another subnet - always pass this) |
 | `WAM_HOST` | this machine as seen by the speaker | `192.168.1.10` |
 | `WAM_MEDIA` | audio file | `sample.mp3` |
 | `WAM_SCRATCH` | generated files | `_scratch/` |
@@ -28,6 +28,8 @@ cover them.
 | `probe_livestream.py` | `SetUrlPlayback` accepts streams with no known length |
 | `probe_backpressure.py` | Speaker HTTP throughput converges toward real time without `-re` |
 | `probe_clock_drift.py` | A run settles near 1.00x; the old `+21..23 s` number includes startup and is not a speaker-buffer target |
+| `probe_rung1_reads.py` | Rung 1 read sweep; three EQ commands and `SpkInGroup` are silent on this firmware |
+| `probe_radio_browse.py` | The radio catalogue is a tree walked with `GetSelectRadioList`, and browsing strands the speaker in `submode=cp` |
 | `capture.py` | Produced the preserved official-client session in `capture.log` |
 | `wamtap.py` | Standalone event and port diagnostics |
 
@@ -38,6 +40,11 @@ cover them.
   `AUDIO_STARTED` without a matching event before the former timeout.
 - Do not run `probe_clock_drift.py`, `wamtap sniff` or another 55001 listener beside active
   `pcm_cli`; the extra connection can disrupt playback.
+- `probe_radio_browse.py` costs a power cycle. It leaves the speaker in `submode=cp`, where
+  foobar output and DLNA push connect, transfer and stay silent. Do not run it on a speaker
+  somebody is about to use.
+- The CPM endpoint wedges under a fast series of calls: empty lists first, then 20-30 s of
+  silence on `CPM` while `UIC` still answers. An empty list is not evidence of an empty level.
 - A process-start-relative drift value includes discovery, URL handoff and helper startup.
   Do not publish it as a measured M5 cushion.
 - `ReadTransferCount` and the tested process I/O counters are unusable on the current test

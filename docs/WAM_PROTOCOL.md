@@ -577,11 +577,10 @@ What the app has and this project does not is on either side of that:
   plugin because no reliable write API is known". The app has `SetSavePreset`,
   `SetRemovePreset` (`presetindex`) and `SetMovePreset`. Untested here, but they are not
   unknown any more.
-- **Finding stations that are not already saved.** `GetUpperRadioList` and
-  `GetCurrentRadioList` are both paginated and together imply a browsable tree rather than a
-  flat list, with `SetSelectRadio` descending into it; `GetGenreStations`, `SearchQuery` and
-  `GlobalSearch` sit beside them. Nothing here browses the catalogue - only what the speaker
-  already holds.
+- **Finding stations that are not already saved.** The catalogue really is a tree, and it has
+  now been walked - see "Walking the radio tree" below for the measured shapes, and for the
+  price of doing it. Nothing in this project browses it yet; only what the speaker already
+  holds. `GetGenreStations`, `SearchQuery` and `GlobalSearch` sit beside it, untried.
 
 ### A second power lever, on the port we already hold open
 
@@ -641,8 +640,139 @@ Measured the same day, all read-only:
 ### Sound shaping
 
 Bass, treble, balance, DRC, woofer and rear levels, a seven-band EQ with saved custom modes,
-and `GetAudioQuality`/`SetAudioQuality`. None of it is needed to play audio, all of it is
-reachable from the same socket.
+and `GetAudioQuality`/`SetAudioQuality`. None of it is needed to play audio.
+
+**Measured 2026-08-19, and only part of it is reachable on this speaker.** Read against the
+physical M5 by `tools/wam-probes/probe_rung1_reads.py`:
+
+```text
+GetEQBass         eqbass=0            GetWooferLevel    (silent)
+GetEQTreble       eqtreble=0          GetRearLevel      (silent)
+GetEQBalance      eqbalance=0         GetAudioQuality   (silent)
+GetEQDrc          eqdrc=on
+GetCurrentEQMode  presetindex=0, presetname=None, eqvalue1..7=0
+Get7BandEQList    5 modes: None, Pop, Jazz, Classic, "1 uzytkownika"
+```
+
+The silent three are the point. Woofer and rear levels belong to a soundbar with satellites and
+`GetAudioQuality` to a different product tier; the M5 has one enclosure and its firmware simply
+does not answer. So the 242-command vocabulary lifted from the app is the *app's* vocabulary,
+not this speaker's, and the only way to tell the two apart is to send the command. The same
+sweep found `SpkInGroup` silent while `GetGroupName` answers with an empty name.
+
+Note also that `Get7BandEQList` came back with a Polish preset name. The speaker localises what
+it returns, so a client must not match on these strings.
+
+### Walking the radio tree
+
+**Measured 2026-08-19** with `tools/wam-probes/probe_radio_browse.py` against the physical M5.
+The command shapes below are not guessed: they are the format strings lifted out of the
+official app's DEX, so the parameter names are the app's own.
+
+```text
+CPM?cmd=<name>SetSelectRadio</name>                    (no arguments - enters TuneIn)
+
+CPM?cmd=<name>GetCurrentRadioList</name>               (the level the cursor is on)
+       <p type="dec" name="startindex" val="%s"/>
+       <p type="dec" name="listcount"  val="%s"/>
+
+CPM?cmd=<name>GetSelectRadioList</name>                (descend into one entry)
+       <p type="dec" name="contentid"  val="%s"/>
+       <p type="dec" name="startindex" val="0"/>
+       <p type="dec" name="listcount"  val="%s"/>
+
+CPM?cmd=<name>GetUpperRadioList</name>                 (back up one level)
+       <p type="dec" name="startindex" val="0"/>
+       <p type="dec" name="listcount"  val="%s"/>
+
+CPM?cmd=<name>GetStationData</name>                    (detail of one station)
+       <p type="dec" name="selectitemid" val="%s"/>
+```
+
+An earlier revision of this file said `SetSelectRadio` was what descended into the tree. It is
+not; it only selects the provider. Descending is `GetSelectRadioList` with a `contentid`, and
+the name being a `Get` hides that it moves the cursor.
+
+**It is a tree, and the cursor lives in the speaker.** The root answers `<category isroot="1">`
+with twelve folders, and there is no path in the request - every call is relative to wherever
+the speaker's cursor currently is:
+
+```text
+[ 0] Favorites   [ 3] Trending      [ 6] Talk           [ 9] By Location
+[ 1] Local Radio [ 4] Recommended   [ 7] Sports         [10] By Language
+[ 2] Recents     [ 5] Music         [ 8] News & Talk    [11] Podcasts
+```
+
+Two shapes of `menuitem`, distinguished by `type`:
+
+```xml
+<menuitem type="0">                              <!-- folder -->
+    <title>Local Radio</title>
+    <contentid>1</contentid>
+</menuitem>
+
+<menuitem type="2" cat="stations">               <!-- station -->
+    <thumbnail>http://cdn-profiles.tunein.com/s87779/images/logot.jpg</thumbnail>
+    <description>Hity Na Czasie</description>
+    <mediaid>s87779</mediaid>
+    <title>ESKA Krakow 97.7 (Christian Contemporary)</title>
+    <contentid>0</contentid>
+</menuitem>
+```
+
+`contentid` is the index **within the current page**, not a stable identifier - it restarts at 0
+on every level. The stable one is `mediaid`, which is the TuneIn station id. `Local Radio`
+answered `totallistcount=90` for a `listcount` of 30, so paging is real and the geolocation is
+the speaker's, not the client's: the local list came back Polish.
+
+`GetStationData` is the interesting one. For `selectitemid` = the station's `contentid` it
+returns, besides the title and artwork, a ready-to-play URL:
+
+```xml
+<stationurl>http://opml.radiotime.com/Tune.ashx?id=s87779&amp;partnerId=...&amp;serial=...</stationurl>
+```
+
+That is a plain HTTP stream URL carrying the speaker's own TuneIn partner id and serial. It
+means browsing does not have to end in a preset write: browse, read the station URL, hand it to
+`SetUrlPlayback`, which this project already implements. The whole of rung 3 can stay untouched.
+The `partnerId` and `serial` are the speaker's credentials with TuneIn and are redacted here.
+
+**And now the price, which is the reason this is not a free read.** `SetSelectRadio` puts the
+speaker into `submode=cp`, and `samsung.py:require_local_playback_mode` already documents what
+that costs: in `cp` the speaker still fetches an offered URL or DLNA object over HTTP and then
+stays silent. Nothing clears it. Re-measured the same day, after browsing:
+
+```text
+CPM SetPlaybackControl stop   -> "Current track token is empty."   submode still cp
+UIC SetPlaybackControl stop   -> result="ng"                       submode still cp
+UIC SetFunc wifi              -> accepted, answers submode=cp      submode still cp
+```
+
+A power cycle does clear it. Measured the same evening, after the speaker was unplugged and
+plugged back in: `function=bt, submode=""`.
+
+**But do not read the `SetFunc` line above as "SetFunc does nothing".** That was the reading
+taken at first and it is wrong. The speaker came back from its power cycle on the Bluetooth
+source, and `SetFunc wifi` moved it to `function=wifi, submode=dlna` immediately. The command
+works. It did nothing against `cp` because the speaker was *already* on `wifi` - it was told to
+become what it already was.
+
+That leaves an untested hypothesis worth one experiment: **a round trip through another source**
+(`SetFunc bt`, then `SetFunc wifi`) may reset the submode out of `cp` the same way the power
+cycle did, since the power cycle's own recovery ended in `dlna`. If it works, the "power-cycle
+only" wording in `samsung.py:require_local_playback_mode` is too strong and the trap becomes a
+two-command recovery. Nothing has been sent - testing it means deliberately entering `cp` first,
+so it wants a speaker nobody is waiting on.
+
+So browsing is read-only with respect to presets and destructive with respect to playback. Any
+feature built on it has to treat entering the radio surface as a mode switch the user chose,
+not as a background lookup - and a client must never browse to enrich a now-playing display.
+
+**One more failure mode, worth expecting.** Under a fast series of CPM calls the whole CPM
+endpoint wedges: first it answers lists with `totallistcount=0`, then it stops answering `CPM`
+entirely for 20-30 seconds while `UIC` keeps replying normally, then it recovers on its own. An
+empty level is therefore not proof of an empty category, which is why the probe retries before
+believing it.
 
 ### The three presets behind the physical Radio button
 
@@ -683,8 +813,8 @@ CPM?cmd=<name>SetMovePreset</name>
 
 `SetSavePreset` taking **no arguments** is the whole shape of the feature: it saves whatever is
 currently selected, so a station has to be playing or selected before it can be stored. That is
-also why browsing matters - `GetUpperRadioList` / `GetCurrentRadioList` / `SetSelectRadio` are
-how the app reaches a station that is not already a preset.
+also why browsing matters - `SetSelectRadio`, `GetCurrentRadioList`, `GetSelectRadioList` and
+`GetUpperRadioList` are how the app reaches a station that is not already a preset.
 
 **Untested hypothesis, and the reason to be careful.** The list above is one sequence, with the
 three `speaker` entries at indices 0-2 and `my` from 3 onwards. If that ordering is the speaker's
@@ -714,12 +844,22 @@ constraint that already applies to every probe in this file: **not while PCM pla
 running**, because a second connection on `55001` competes with the helper and has knocked the
 player over before.
 
-- `GetUpperRadioList`, `GetCurrentRadioList` - settles whether the radio surface is a tree or a
-  flat list, which decides what browsing would even look like.
-- `GetCurrentEQMode`, `Get7BandEQList`, `GetEQBass`, `GetEQTreble`, `GetEQBalance`, `GetEQDrc`,
-  `GetWooferLevel`, `GetRearLevel`, `GetAudioQuality` - the whole sound-shaping surface, read.
+- `GetCurrentEQMode`, `Get7BandEQList`, `GetEQBass`, `GetEQTreble`, `GetEQBalance`, `GetEQDrc`
+  - the sound-shaping surface, read. `GetWooferLevel`, `GetRearLevel` and `GetAudioQuality` are
+  in the app but silent on this speaker.
 - `GetSpeakerStatus`, `GetPlayStatus`, `GetAvSourceAll`, `GetLed`, `GetBatteryStatus`,
-  `GetGroupName`, `SpkInGroup`, `GetAlarmInfo`.
+  `GetGroupName`, `GetAlarmInfo`. `SpkInGroup` is silent.
+
+**Done 2026-08-19** by `tools/wam-probes/probe_rung1_reads.py`; results are in the sections
+above. `GetBatteryStatus` answers `batteryrate=50, batterymode=battery` on a mains-powered M5,
+which reads like a stub rather than a measurement - do not build on it.
+
+**Rung 1b - reads that are not free.** The radio browse calls belong here rather than above.
+`SetSelectRadio`, `GetCurrentRadioList`, `GetSelectRadioList`, `GetUpperRadioList` and
+`GetStationData` touch no preset and no setting, but entering the radio surface leaves the
+speaker in `submode=cp`, where locally offered playback goes silent. A power cycle definitely
+clears it; whether a `SetFunc` round trip does is the open question under "Walking the radio
+tree".
 
 **Rung 2 - writes that restore themselves.** Read the current value, write, write it back. Safe
 because the old value is known before anything changes, and none of it survives being set back.
