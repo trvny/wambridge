@@ -65,10 +65,12 @@ facts from a physical `SPK-WAM550` are in
 ## Foobar2000 output
 
 Rolling prerelease,
-[`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha)
+[`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha), rebuilt whenever `main`
+moves. The link does not change and both halves always come from the same commit. The
+version comes from `version` in `pyproject.toml`, the only place it is written down:
 
 - `foo_out_wam.fb2k-component` - the foobar2000 output
-- `wambridge-alpha-<date>-<commit>.apk` - the Android adapter
+- `wambridge-<version>-alpha.<date>.<commit>.apk` - the Android adapter
 - a source archive
 
 Open the `.fb2k-component` file with foobar2000 2.x x64, then select:

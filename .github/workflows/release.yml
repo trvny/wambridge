@@ -49,6 +49,10 @@ jobs:
       title: ${{ steps.parse.outputs.title }}
       rolling: ${{ steps.parse.outputs.rolling }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Decide what is being published
         id: parse
         shell: bash
@@ -57,10 +61,13 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # versionCode has to rise on its own, for ever, without anyone
-          # maintaining it. Whole hours since the epoch does that: it is
-          # monotonic, unique per hour, comfortably inside Android's limit and
-          # already far above every code shipped by hand before this.
+          # The displayed version and the versionCode answer different
+          # questions and are kept apart on purpose. The version says how mature
+          # this is and lives in exactly one place, pyproject.toml, so nothing
+          # can disagree with it again. The code only has to keep rising, which
+          # whole hours since the epoch does on its own: monotonic, unique per
+          # hour, comfortably inside Android's limit and already far above every
+          # code shipped by hand before this.
           code=$(( $(date -u +%s) / 3600 ))
 
           if [[ -n "${REQUESTED:-}" ]]; then
@@ -75,7 +82,9 @@ jobs:
             echo "title=WAMbridge ${name}" >> "$GITHUB_OUTPUT"
             echo "rolling=false" >> "$GITHUB_OUTPUT"
           else
-            name="alpha-$(date -u +%Y%m%d)-${SHA:0:7}"
+            base="$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)"
+            test -n "$base"
+            name="${base}-alpha.$(date -u +%Y%m%d).${SHA:0:7}"
             echo "tag=alpha" >> "$GITHUB_OUTPUT"
             echo "name=$name" >> "$GITHUB_OUTPUT"
             echo "title=WAM Bridge alpha" >> "$GITHUB_OUTPUT"
