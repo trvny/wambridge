@@ -19,7 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class RadioProxyServer(
     context: Context,
     private val speakerIp: String,
-    private val station: MobileRadioStation,
+    // Already ordered: a freshly resolved TuneIn stream first when the station
+    // carries an id, the saved URLs behind it as the static fallbacks.
+    private val sources: List<String>,
     private val listener: Listener,
 ) : AutoCloseable {
     interface Listener {
@@ -98,7 +100,7 @@ internal class RadioProxyServer(
         }
 
         var lastError: Exception? = null
-        for (source in station.urls) {
+        for (source in sources) {
             val opened = try {
                 openSource(source)
             } catch (error: Exception) {

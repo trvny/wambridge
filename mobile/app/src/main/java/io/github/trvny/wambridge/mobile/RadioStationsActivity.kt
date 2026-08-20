@@ -13,6 +13,7 @@ import android.widget.TextView
 class RadioStationsActivity : Activity() {
     private lateinit var aliasInput: EditText
     private lateinit var urlsInput: EditText
+    private lateinit var tuneInInput: EditText
     private lateinit var statusView: TextView
     private lateinit var stationsView: LinearLayout
     private val store by lazy { RadioStationStore(this) }
@@ -32,7 +33,7 @@ class RadioStationsActivity : Activity() {
             textSize = 24f
         })
         content.addView(TextView(this).apply {
-            text = "\nSave a direct HTTP/HTTPS audio stream. Put fallbacks on following lines. MP3/AAC/FLAC-style direct streams can be relayed; HLS and Ogg still need a mobile transcoder."
+            text = "\nSave a direct HTTP/HTTPS audio stream. Put fallbacks on following lines. MP3/AAC/FLAC-style direct streams can be relayed; HLS and Ogg still need a mobile transcoder.\n\nA TuneIn station id like s15984 is optional. It is looked up again every time the station plays, so it keeps working after the broadcaster moves its stream; the saved URLs stay behind it as fallbacks."
             textSize = 14f
         })
 
@@ -50,6 +51,12 @@ class RadioStationsActivity : Activity() {
                 InputType.TYPE_TEXT_FLAG_MULTI_LINE
         }
         content.addView(urlsInput)
+
+        tuneInInput = EditText(this).apply {
+            hint = "TuneIn station id (optional, e.g. s15984)"
+            setSingleLine(true)
+        }
+        content.addView(tuneInInput)
 
         content.addView(Button(this).apply {
             text = "Save station"
@@ -85,7 +92,11 @@ class RadioStationsActivity : Activity() {
     private fun saveStation() {
         val originalAlias = editingAlias
         val result = runCatching {
-            val station = store.upsert(aliasInput.text.toString(), urlsInput.text.toString().lines())
+            val station = store.upsert(
+                aliasInput.text.toString(),
+                urlsInput.text.toString().lines(),
+                tuneInInput.text.toString(),
+            )
             if (originalAlias != null && !originalAlias.equals(station.alias, ignoreCase = true)) {
                 store.remove(originalAlias)
             }
@@ -96,6 +107,7 @@ class RadioStationsActivity : Activity() {
                 editingAlias = null
                 aliasInput.text.clear()
                 urlsInput.text.clear()
+                tuneInInput.text.clear()
                 statusView.text = "Saved ${station.alias}."
                 refreshStations()
             },
@@ -123,7 +135,8 @@ class RadioStationsActivity : Activity() {
                 setPadding(0, 16, 0, 0)
             })
             stationsView.addView(TextView(this).apply {
-                text = station.urls.joinToString("\n")
+                val tuneInLine = station.tuneInId?.let { "TuneIn $it" }
+                text = (listOfNotNull(tuneInLine) + station.urls).joinToString("\n")
                 textSize = 12f
             })
             stationsView.addView(LinearLayout(this).apply {
@@ -138,6 +151,7 @@ class RadioStationsActivity : Activity() {
                         editingAlias = station.alias
                         aliasInput.setText(station.alias)
                         urlsInput.setText(station.urls.joinToString("\n"))
+                        tuneInInput.setText(station.tuneInId.orEmpty())
                     }
                 })
                 addView(Button(this@RadioStationsActivity).apply {
@@ -148,6 +162,7 @@ class RadioStationsActivity : Activity() {
                             editingAlias = null
                             aliasInput.text.clear()
                             urlsInput.text.clear()
+                            tuneInInput.text.clear()
                         }
                         refreshStations()
                     }
