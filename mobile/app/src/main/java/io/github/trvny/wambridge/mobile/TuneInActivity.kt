@@ -176,7 +176,7 @@ class TuneInActivity : Activity() {
                 preferences.edit().putString(KEY_CLIENT_UUID, it).apply()
             }
         val channel = SamsungWamChannel(applicationContext, target, clientUuid)
-        try {
+        val confirmDeadline = try {
             channel.connect()
             // Not a redundant pair, so do not collapse it into one call: SetFunc aimed at
             // wifi while the speaker is already on wifi does nothing at all - it is told to
@@ -185,11 +185,13 @@ class TuneInActivity : Activity() {
             // app expects. Measured on the M5 on 2026-08-19, where SetPlaybackControl stop
             // was refused on both CPM ("Current track token is empty.") and UIC (result="ng").
             channel.selectFunction("bt")
-            Thread.sleep(FUNCTION_SETTLE_MS)
+            Thread.sleep(FUNCTION_SWITCH_PAUSE_MS)
             channel.selectFunction("wifi")
+            val deadline = SystemClock.elapsedRealtime() + STOP_CONFIRM_TIMEOUT_MS
             // Sends are fire-and-forget here, so let the last one leave before the socket
-            // closes, and give the speaker the same moment to settle before it is asked.
-            Thread.sleep(FUNCTION_SETTLE_MS)
+            // closes. Waiting for the speaker to settle is the poll's job below.
+            Thread.sleep(FUNCTION_SWITCH_PAUSE_MS)
+            deadline
         } finally {
             channel.close()
         }
@@ -197,21 +199,39 @@ class TuneInActivity : Activity() {
         // A write that left the phone is not a stop. Neither SetFunc is acknowledged to
         // the caller on this channel, so the state is read back and only what GetFunc
         // actually answered gets reported.
-        val state = runCatching { SamsungWamChannel.readFunction(applicationContext, target) }
-        val reading = state.fold(
-            onSuccess = { read ->
-                "function=${read.function.orEmpty().ifBlank { "?" }} · " +
-                    "submode=${read.submode.orEmpty().ifBlank { "(empty)" }}"
-            },
-            onFailure = { error ->
-                "GetFunc did not answer: ${error.message ?: error.javaClass.simpleName}"
-            },
-        )
-        val stopped = state.getOrNull()?.let { read ->
-            read.function.equals("wifi", ignoreCase = true) &&
-                !read.submode.isNullOrBlank() &&
-                !read.submode.equals("cp", ignoreCase = true)
-        } == true
+        //
+        // Read it repeatedly, not once: the M5 leaves cp between two and three seconds
+        // after SetFunc wifi (measured 2026-08-20), so a single read at a fixed delay
+        // lands on submode=cp and calls a stop that worked unconfirmed.
+        var lastRead: SamsungWamChannel.FunctionState? = null
+        var lastError: Throwable? = null
+        var stopped = false
+        while (true) {
+            val attempt = runCatching { SamsungWamChannel.readFunction(applicationContext, target) }
+            val read = attempt.getOrNull()
+            if (read == null) {
+                // A read that failed is not a verdict; keep asking until the deadline.
+                lastError = attempt.exceptionOrNull()
+            } else {
+                lastRead = read
+                stopped = read.function.equals("wifi", ignoreCase = true) &&
+                    !read.submode.isNullOrBlank() &&
+                    !read.submode.equals("cp", ignoreCase = true)
+            }
+            if (stopped) break
+            val remaining = confirmDeadline - SystemClock.elapsedRealtime()
+            if (remaining <= 0) break
+            Thread.sleep(minOf(STOP_POLL_INTERVAL_MS, remaining))
+        }
+
+        val finalRead = lastRead
+        val reading = if (finalRead != null) {
+            "function=${finalRead.function.orEmpty().ifBlank { "?" }} · " +
+                "submode=${finalRead.submode.orEmpty().ifBlank { "(empty)" }}"
+        } else {
+            val error = lastError
+            "GetFunc did not answer: ${error?.message ?: error?.javaClass?.simpleName ?: "no reply"}"
+        }
         return if (stopped) {
             "Playback stopped · $reading"
         } else {
@@ -262,7 +282,16 @@ class TuneInActivity : Activity() {
 
     companion object {
         private const val OWNER_STOP_TIMEOUT_MS = 2_500L
-        private const val FUNCTION_SETTLE_MS = 2_000L
+
+        /** Gap between `SetFunc bt` and `SetFunc wifi`, and the flush after the last send. */
+        private const val FUNCTION_SWITCH_PAUSE_MS = 2_000L
+
+        /** How long to keep asking `GetFunc` whether the speaker has left `cp`. */
+        private const val STOP_CONFIRM_TIMEOUT_MS = 8_000L
+
+        /** Gap between those reads - this firmware wedges under rapid calls. */
+        private const val STOP_POLL_INTERVAL_MS = 1_000L
+
         private const val KEY_CLIENT_UUID = "tunein_client_uuid"
     }
 }

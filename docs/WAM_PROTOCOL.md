@@ -806,6 +806,12 @@ already on `wifi` - it was told to become what it already was. A round trip thro
 source is what moves it. What still refuses to shift `cp` in place: `SetPlaybackControl stop` on
 both `CPM` (`"Current track token is empty."`) and `UIC` (`result="ng"`).
 
+**The switch is not instant, and that matters to anything checking it.** Polling `GetFunc` after
+the second command on 2026-08-20 still read `submode=cp` two seconds in, then `dlna` at three
+seconds and stable from there. A verifier therefore has to poll rather than read once at a fixed
+delay: the mobile Stop button did exactly that and reported a stop that had audibly worked as
+unconfirmed.
+
 So `samsung.py:require_local_playback_mode` saying "no command clears this state - power-cycle
 the speaker and retry" is wrong on both halves, and `docs/DEVELOPMENT_STATUS.md` had already
 recorded the rule it breaks: *no URL startup gate or power-cycle advice may depend on that
