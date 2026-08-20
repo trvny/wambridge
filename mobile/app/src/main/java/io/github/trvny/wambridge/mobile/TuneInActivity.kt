@@ -12,6 +12,7 @@ import android.widget.TextView
 class TuneInActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var refreshButton: Button
+    private lateinit var stopButton: Button
     private lateinit var presetsView: LinearLayout
 
     private val preferences by lazy {
@@ -40,7 +41,18 @@ class TuneInActivity : Activity() {
             text = "Refresh presets"
             setOnClickListener { loadPresets() }
         }
-        content.addView(refreshButton)
+        stopButton = Button(this).apply {
+            text = "Stop"
+            setOnClickListener { stopPlayback() }
+        }
+        // Both controls sit at the top so Stop stays reachable above a long preset list.
+        content.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(refreshButton)
+                addView(stopButton)
+            },
+        )
 
         statusView = TextView(this).apply {
             textSize = 15f
@@ -68,7 +80,7 @@ class TuneInActivity : Activity() {
 
     private fun loadPresets() {
         val target = speakerIp() ?: return
-        refreshButton.isEnabled = false
+        setButtonsEnabled(false)
         presetsView.removeAllViews()
         statusView.text = "Reading TuneIn presets from $target…"
 
@@ -78,7 +90,7 @@ class TuneInActivity : Activity() {
                 SamsungTuneIn.getPresets(applicationContext, target)
             }
             runOnUiThread {
-                refreshButton.isEnabled = true
+                setButtonsEnabled(true)
                 result.fold(
                     onSuccess = ::showPresets,
                     onFailure = { error ->
@@ -136,8 +148,80 @@ class TuneInActivity : Activity() {
         }, "wam-mobile-tunein-play").start()
     }
 
+    private fun stopPlayback() {
+        val target = speakerIp() ?: return
+        setButtonsEnabled(false)
+        statusView.text = "Stopping playback on $target…"
+
+        Thread({
+            val result = runCatching {
+                releasePlaybackOwners()
+                endSpeakerPlayback(target)
+            }
+            runOnUiThread {
+                setButtonsEnabled(true)
+                result.fold(
+                    onSuccess = { report -> statusView.text = report },
+                    onFailure = { error ->
+                        statusView.text = "Could not stop playback: ${error.message ?: error.javaClass.simpleName}"
+                    },
+                )
+            }
+        }, "wam-mobile-tunein-stop").start()
+    }
+
+    private fun endSpeakerPlayback(target: String): String {
+        val clientUuid = preferences.getString(KEY_CLIENT_UUID, null)
+            ?: SamsungWamChannel.newClientUuid().also {
+                preferences.edit().putString(KEY_CLIENT_UUID, it).apply()
+            }
+        val channel = SamsungWamChannel(applicationContext, target, clientUuid)
+        try {
+            channel.connect()
+            // Not a redundant pair, so do not collapse it into one call: SetFunc aimed at
+            // wifi while the speaker is already on wifi does nothing at all - it is told to
+            // become what it already is. Ending a preset takes the detour through another
+            // source, which also lands back in submode=dlna, the idle state the rest of this
+            // app expects. Measured on the M5 on 2026-08-19, where SetPlaybackControl stop
+            // was refused on both CPM ("Current track token is empty.") and UIC (result="ng").
+            channel.selectFunction("bt")
+            Thread.sleep(FUNCTION_SETTLE_MS)
+            channel.selectFunction("wifi")
+            // Sends are fire-and-forget here, so let the last one leave before the socket
+            // closes, and give the speaker the same moment to settle before it is asked.
+            Thread.sleep(FUNCTION_SETTLE_MS)
+        } finally {
+            channel.close()
+        }
+
+        // A write that left the phone is not a stop. Neither SetFunc is acknowledged to
+        // the caller on this channel, so the state is read back and only what GetFunc
+        // actually answered gets reported.
+        val state = runCatching { SamsungWamChannel.readFunction(applicationContext, target) }
+        val reading = state.fold(
+            onSuccess = { read ->
+                "function=${read.function.orEmpty().ifBlank { "?" }} · " +
+                    "submode=${read.submode.orEmpty().ifBlank { "(empty)" }}"
+            },
+            onFailure = { error ->
+                "GetFunc did not answer: ${error.message ?: error.javaClass.simpleName}"
+            },
+        )
+        val stopped = state.getOrNull()?.let { read ->
+            read.function.equals("wifi", ignoreCase = true) &&
+                !read.submode.isNullOrBlank() &&
+                !read.submode.equals("cp", ignoreCase = true)
+        } == true
+        return if (stopped) {
+            "Playback stopped · $reading"
+        } else {
+            "SetFunc bt/wifi sent, but the stop could not be confirmed · $reading"
+        }
+    }
+
     private fun setButtonsEnabled(enabled: Boolean) {
         refreshButton.isEnabled = enabled
+        stopButton.isEnabled = enabled
         for (index in 0 until presetsView.childCount) {
             presetsView.getChildAt(index).isEnabled = enabled
         }
@@ -178,5 +262,7 @@ class TuneInActivity : Activity() {
 
     companion object {
         private const val OWNER_STOP_TIMEOUT_MS = 2_500L
+        private const val FUNCTION_SETTLE_MS = 2_000L
+        private const val KEY_CLIENT_UUID = "tunein_client_uuid"
     }
 }
