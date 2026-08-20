@@ -31,6 +31,7 @@ cover them.
 | `probe_rung1_reads.py` | Rung 1 read sweep; three EQ commands and `SpkInGroup` are silent on this firmware |
 | `probe_radio_browse.py` | The radio catalogue is a tree walked with `GetSelectRadioList`; browsing leaves the submode untouched |
 | `probe_cp_escape.py` | `cp` is the submode URL playback runs in, and `SetFunc bt` then `SetFunc wifi` returns the speaker to `dlna` |
+| `probe_radio_search.py` | `SearchQuery` works and is paginated; results mix categories, stations (`s…`) and podcast episodes (`t…`) |
 | `capture.py` | Produced the preserved official-client session in `capture.log` |
 | `wamtap.py` | Standalone event and port diagnostics |
 

@@ -117,6 +117,11 @@ def _print_stations(store: StationStore) -> int:
         print("No custom radio stations saved")
         return 0
     for station in stations:
+        # The id is listed first because it is what gets tried first, and because
+        # a station having one is otherwise invisible: the saved URLs look
+        # identical whether or not they are about to be overtaken.
+        if station.tunein_id:
+            print(f"{station.alias}\ttunein\t{station.tunein_id}")
         print(f"{station.alias}\tprimary\t{station.url}")
         for fallback in station.fallback_urls:
             print(f"{station.alias}\tfallback\t{fallback}")
