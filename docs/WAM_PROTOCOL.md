@@ -850,9 +850,35 @@ nothing measurable on that query, so nothing here depends on it.
 `"API not implemented for current service."` That is a real answer rather than the silence an
 unknown command produces, so the command exists and TuneIn simply does not serve it.
 
-`GlobalSearch` was not reached. It wants `cpnames` as `str_arr`, and `build_command` in
-`samsung.py` only emits `str`, `dec` and `cdata` - sending it as a plain `str` timed out. Adding
-array support is the prerequisite, not a bug in the call.
+**`GlobalSearch` reaches the speaker and returns nothing, and that is the end of it.** The
+array encoding was the first obstacle and is now known: items go inside the element body as
+`<item>` children, not in a `val` attribute, which the app's own format strings show and the
+speaker accepts -
+
+```text
+CPM?cmd=<name>GlobalSearch</name>
+       <p type="str_arr" name="cpnames"><item>TuneIn</item></p>
+       <p type="str" name="query"      val="%s"/>
+       <p type="dec" name="startindex" val="%s"/>
+       <p type="dec" name="listcount"  val="%s"/>
+       <p type="str" name="type"       val="%s"/>
+       <p type="str" name="timestamp"  val="%s"/>
+```
+
+Sent as a plain `str` it times out; sent with `<item>` it answers `GlobalSearch` immediately.
+But the answer is empty every time - no `totallistcount`, no entries, **no error either** - with
+`type` tried as `all`, `fast`, `station` and `radio`, with and without `timestamp`.
+
+The explanation is already in this file: `GetCpList` returns 20 providers, every one
+`signinstatus=0`, and **TuneIn is not among them** because it is reached through the radio
+surface rather than as a content provider. So `cpnames=TuneIn` matches nothing, and there is
+nothing else signed in to match instead.
+
+**Consequence for the code: do not add array support to `build_command` for this.** It emits
+`str`, `dec` and `cdata`, and the only caller that would need more is a command that cannot
+return results on this speaker. The `<item>` shape is written down here so that whoever needs it
+for `AddToFavorite`, `BookmarkStation` or `SetDeleteStation` - all of which take array forms, and
+all of which are writes - does not have to rediscover it.
 
 **The result list mixes three things, and telling them apart matters:**
 
