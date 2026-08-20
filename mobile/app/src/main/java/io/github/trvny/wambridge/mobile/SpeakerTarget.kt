@@ -9,7 +9,10 @@ internal object SpeakerTarget {
         val saved = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
         val savedIsValid = RendererService.isReasonableIpv4(saved)
 
-        if (savedIsValid && (!verifySaved || SamsungWamChannel.probe(appContext, saved))) {
+        if (
+            savedIsValid &&
+            (RadioService.running || !verifySaved || SamsungWamChannel.probe(appContext, saved))
+        ) {
             return saved
         }
 
