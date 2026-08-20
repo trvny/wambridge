@@ -797,14 +797,33 @@ Two reading traps come with that submode, both measured:
 with a stream running:
 
 ```text
-SetFunc bt      -> function=bt    submode=""
+SetFunc aux     -> function=aux   submode=""
 SetFunc wifi    -> function=wifi  submode=dlna
 ```
 
 `SetFunc` had looked useless earlier only because it was aimed at `wifi` while the speaker was
 already on `wifi` - it was told to become what it already was. A round trip through another
-source is what moves it. What still refuses to shift `cp` in place: `SetPlaybackControl stop` on
-both `CPM` (`"Current track token is empty."`) and `UIC` (`result="ng"`).
+source is what moves it.
+
+**Which source, though, is not a free choice.** `bt`, `aux` and `soundshare` all clear `cp` and
+all land back in `dlna`, but the speaker **says "Bluetooth is ready" out loud** every time it is
+switched to `bt`, which turned a stop button into a talking one. `aux` and `soundshare` do the
+same job in silence (measured 2026-08-20, confirmed by ear). `bt` was in the code first only
+because the probe tried sources alphabetically and stopped at the first that worked - not
+because it was better. Use `aux`.
+
+What still refuses to shift `cp` in place, both re-measured **on a live stream** rather than on
+an idle speaker, which is what makes them conclusive:
+
+```text
+UIC SetPlaybackControl pause  -> PlaybackStatus, no error   playstatus stayed 'play'
+UIC SetPlaybackControl stop   -> "SetPlaybackControl fail"  playstatus stayed 'play'
+CPM SetPlaybackControl stop   -> "Current track token is empty."
+```
+
+`pause` is the dangerous one: it answers cleanly and does nothing, so anything trusting the
+reply rather than the state will believe playback was paused. There is no quiet stop on this
+firmware - the source detour is the only way, and the announcement is a cost, not a defect.
 
 **The switch is not instant, and that matters to anything checking it.** Polling `GetFunc` after
 the second command on 2026-08-20 still read `submode=cp` two seconds in, then `dlna` at three

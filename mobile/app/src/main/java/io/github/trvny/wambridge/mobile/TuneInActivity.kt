@@ -183,8 +183,14 @@ class TuneInActivity : Activity() {
             // become what it already is. Ending a preset takes the detour through another
             // source, which also lands back in submode=dlna, the idle state the rest of this
             // app expects. Measured on the M5 on 2026-08-19, where SetPlaybackControl stop
-            // was refused on both CPM ("Current track token is empty.") and UIC (result="ng").
-            channel.selectFunction("bt")
+            // was refused on both CPM ("Current track token is empty.") and UIC (result="ng")
+            // and, on a live stream, pause answered without error and changed nothing.
+            //
+            // aux rather than bt, and that is the whole point of the choice: the speaker
+            // announces "Bluetooth is ready" out loud every time it is switched to bt, which
+            // made a stop button talk. aux and soundshare both clear cp exactly as well and
+            // say nothing (measured 2026-08-20). Do not "simplify" this back to bt.
+            channel.selectFunction("aux")
             Thread.sleep(FUNCTION_SWITCH_PAUSE_MS)
             channel.selectFunction("wifi")
             val deadline = SystemClock.elapsedRealtime() + STOP_CONFIRM_TIMEOUT_MS
