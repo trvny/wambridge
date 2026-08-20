@@ -111,12 +111,30 @@ def show(label: str, body: str) -> list[dict[str, str]]:
     return items
 
 
+def normalise_to_root(attempts: int = 5) -> None:
+    """Walk up until the speaker's browse cursor is at the catalogue root.
+
+    The cursor lives in the speaker and **survives the client process**, so a
+    fresh run does not start at the root - it starts wherever the last one
+    stopped. Descending from there lands somewhere unintended and returns an
+    empty level, which is indistinguishable from the CPM wedge this file also
+    documents. Cost two debugging detours on 2026-08-19 before it was noticed.
+    """
+    for _ in range(attempts):
+        body = cpm("GetUpperRadioList", [("startindex", 0, "dec"), ("listcount", 30, "dec")])
+        if re.search(r'<category isroot="1"', body):
+            return
+        time.sleep(1.0)
+    print("  (nie udalo sie dojsc do korzenia - wyniki ponizej moga byc z innego poziomu)")
+
+
 def main() -> None:
     SCRATCH.mkdir(parents=True, exist_ok=True)
     print(f"glosnik: {SPEAKER}")
 
     cpm("SetSelectRadio")
     time.sleep(0.4)
+    normalise_to_root()
     root = show(
         "KORZEN (GetCurrentRadioList)",
         fetch_list("GetCurrentRadioList", [("startindex", 0, "dec"), ("listcount", 30, "dec")]),
