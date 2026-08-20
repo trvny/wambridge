@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.widget.RemoteViews
 import android.widget.Toast
 
@@ -46,18 +47,34 @@ class WamBridgeWidget : AppWidgetProvider() {
                 },
             )
             updateAll(context, active = false)
-            refreshAfterTransition(context)
+            refreshAfterTransition(context, expectedActive = false)
             return
         }
 
-        val target = speakerIp(context) ?: return
-        context.startForegroundService(
-            Intent(context, RendererService::class.java).apply {
-                action = RendererService.ACTION_START
-            },
-        )
         updateAll(context, active = true)
-        refreshAfterTransition(context)
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        Thread({
+            try {
+                val target = SpeakerTarget.resolve(appContext)
+                if (target == null) {
+                    showToast(appContext, "No WAM speaker found")
+                    openSettings(appContext)
+                    return@Thread
+                }
+                appContext.startForegroundService(
+                    Intent(appContext, RendererService::class.java).apply {
+                        action = RendererService.ACTION_START
+                    },
+                )
+                awaitRendererState(expectedActive = true)
+            } catch (error: Exception) {
+                showToast(appContext, error.message ?: error.javaClass.simpleName)
+            } finally {
+                updateAll(appContext)
+                pending.finish()
+            }
+        }, "wam-widget-start").start()
     }
 
     private fun runRemoteAction(context: Context, action: String) {
@@ -68,7 +85,12 @@ class WamBridgeWidget : AppWidgetProvider() {
                 check(!RendererService.running && !RadioService.running) {
                     "The local adapter currently owns speaker control"
                 }
-                val target = speakerIp(appContext) ?: return@Thread
+                val target = SpeakerTarget.resolve(appContext, verifySaved = false)
+                if (target == null) {
+                    showToast(appContext, "No WAM speaker found")
+                    openSettings(appContext)
+                    return@Thread
+                }
                 val message = when (action) {
                     ACTION_PLAY_PAUSE -> when (SpeakerRemote.toggleNativePlayback(appContext, target)) {
                         SpeakerRemote.PlaybackToggleResult.PAUSED -> "TuneIn paused"
@@ -97,27 +119,33 @@ class WamBridgeWidget : AppWidgetProvider() {
         }, "wam-widget-control").start()
     }
 
-    private fun speakerIp(context: Context): String? {
-        val preferences = context.getSharedPreferences(RendererService.PREFS, Context.MODE_PRIVATE)
-        val target = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
-        if (RendererService.isReasonableIpv4(target)) return target
-        context.startActivity(
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-        return null
-    }
-
-    private fun refreshAfterTransition(context: Context) {
+    private fun refreshAfterTransition(context: Context, expectedActive: Boolean) {
         val pending = goAsync()
         val appContext = context.applicationContext
         Thread({
             try {
-                Thread.sleep(TRANSITION_REFRESH_MS)
+                awaitRendererState(expectedActive)
                 updateAll(appContext)
             } finally {
                 pending.finish()
             }
         }, "wam-widget-refresh").start()
+    }
+
+    private fun awaitRendererState(expectedActive: Boolean) {
+        val deadline = SystemClock.elapsedRealtime() + TRANSITION_TIMEOUT_MS
+        while (
+            RendererService.running != expectedActive &&
+            SystemClock.elapsedRealtime() < deadline
+        ) {
+            Thread.sleep(100)
+        }
+    }
+
+    private fun openSettings(context: Context) {
+        context.startActivity(
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     private fun showToast(context: Context, message: String) {
@@ -132,7 +160,7 @@ class WamBridgeWidget : AppWidgetProvider() {
         private const val ACTION_MUTE = "trvny.wambridge.mobile.WIDGET_MUTE"
         private const val ACTION_VOLUME_DOWN = "trvny.wambridge.mobile.WIDGET_VOLUME_DOWN"
         private const val ACTION_VOLUME_UP = "trvny.wambridge.mobile.WIDGET_VOLUME_UP"
-        private const val TRANSITION_REFRESH_MS = 1_500L
+        private const val TRANSITION_TIMEOUT_MS = 8_000L
         private const val EXPANDED_MIN_DP = 100
 
         fun updateAll(context: Context, active: Boolean = RendererService.running) {
@@ -170,7 +198,7 @@ class WamBridgeWidget : AppWidgetProvider() {
             )
             views.setContentDescription(
                 R.id.widget_icon,
-                if (active) "WAM Bridge on" else "WAM Bridge off",
+                if (active) "WAM Bridge renderer on" else "WAM Bridge renderer off",
             )
             views.setOnClickPendingIntent(
                 R.id.widget_root,
