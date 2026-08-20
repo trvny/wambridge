@@ -932,9 +932,30 @@ What would settle it is hearing the resolved `:8954/` through the speaker's own 
 has not been done - it was assumed playable because it was plain HTTP, which is exactly the
 inference this section had to retract once already.
 
-BBC Radio 1 remains genuinely unplayable here - HLS from TuneIn and HLS in the personal
-playlists in `trvny/stuff/playlists` alike - so a preset holding it cannot work whatever else is
-fixed.
+**BBC Radio 1 was called unplayable here, and it is not.** It started from the presets screen on
+the physical speaker on 2026-08-20, through the speaker's own TuneIn player. The claim came from
+seeing HLS behind every BBC address and carrying over the URL-path limit, which does not apply
+to this path.
+
+The formats requested are what decides it. `Tune.ashx` answers per the `formats` parameter:
+
+```text
+s24939  formats=mp3,wma,aac,qt,hls   -> an open.live.bbc.co.uk address (what the speaker asks for)
+s24939  formats=mp3,aac              -> #STATUS: 400        (what this project asks for)
+```
+
+Adding the speaker's `partnerId` and `serial` changes nothing either way; only `formats` does.
+So there are **three** playback paths on this speaker, not two, and the third is the widest:
+
+| path | who decodes | HLS |
+| --- | --- | --- |
+| local server, FFmpeg upstream | our FFmpeg | yes |
+| the speaker's own TuneIn player - presets, the Radio button | the speaker | **yes** |
+| a remote URL to `SetUrlPlayback` | the speaker | no, and it has wedged the control port |
+
+`resolve_tunein_station` asking for `mp3,aac` is still right: what it resolves is destined for
+`SetUrlPlayback`, and a `400` there simply falls through to the saved URLs. What was wrong was
+concluding from that `400` that the station cannot play at all.
 
 **And the owner's history closes the question.** Preset playback started roughly **one attempt
 in five** even years ago, with the official app and TuneIn both in good health. So
