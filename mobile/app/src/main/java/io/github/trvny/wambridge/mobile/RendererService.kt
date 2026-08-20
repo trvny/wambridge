@@ -5,10 +5,13 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import android.service.quicksettings.TileService
+import android.util.Log
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
@@ -134,6 +137,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
             ownsPlayback = false
             safeVolumeApplied = false
             running = true
+            notifyRunningStateChanged()
             lastStatus = "Ready · ${renderer!!.localAddress.hostAddress}:${renderer!!.port} → $speakerIp · speaker released"
             publish(lastStatus)
         } catch (error: Exception) {
@@ -240,6 +244,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         renderer = null
         rendererState = null
         running = false
+        notifyRunningStateChanged()
         speakerIp = ""
         clientUuid = ""
         if (removeForeground) stopForeground(STOP_FOREGROUND_REMOVE)
@@ -386,6 +391,28 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         startForeground(NOTIFICATION_ID, buildNotification(message))
     }
 
+    /**
+     * Tell the widget and the quick-settings tile that [running] has changed.
+     * Both read the flag themselves, so they only need waking up; neither call
+     * needs the main thread, and neither may take playback down if it fails.
+     */
+    private fun notifyRunningStateChanged() {
+        val context = applicationContext
+        try {
+            WamBridgeWidget.updateAll(context)
+        } catch (error: Exception) {
+            Log.d(TAG, "Could not refresh the widget", error)
+        }
+        try {
+            TileService.requestListeningState(
+                context,
+                ComponentName(context, WamBridgeTileService::class.java),
+            )
+        } catch (error: Exception) {
+            Log.d(TAG, "Could not refresh the quick-settings tile", error)
+        }
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -447,6 +474,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         private const val RADIO_STOP_TIMEOUT_MS = 2_500L
         private const val CONTROL_ACTION_TIMEOUT_MS = 5_000L
         private const val WORKER_THREAD_NAME = "wam-mobile-service"
+        private const val TAG = "WamBridgeRenderer"
 
         @Volatile var running: Boolean = false
             private set
