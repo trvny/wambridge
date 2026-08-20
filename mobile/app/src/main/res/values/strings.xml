@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">WAM Bridge</string>
+    <string name="widget_play_pause">Play or pause TuneIn</string>
+    <string name="widget_mute">Mute or unmute speaker</string>
+    <string name="widget_volume_down">Volume down</string>
+    <string name="widget_volume_up">Volume up</string>
 </resources>
