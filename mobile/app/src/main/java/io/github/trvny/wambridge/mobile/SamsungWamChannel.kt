@@ -82,7 +82,9 @@ internal class SamsungWamChannel(
     }
 
     fun setVolumeRaw(step: Int) {
-        require(step in 0..30) { "M5 volume step must be 0..30" }
+        require(step in MIN_VOLUME_STEP..MAX_VOLUME_STEP) {
+            "M5 volume step must be $MIN_VOLUME_STEP..$MAX_VOLUME_STEP"
+        }
         send(
             method = "SetVolume",
             arguments = listOf(Argument("volume", step.toString(), Kind.DEC)),
@@ -307,8 +309,15 @@ internal class SamsungWamChannel(
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
         )
         private val SUCCESS_ERROR_CODES = setOf("0", "00", "000", "0000")
+        // The speaker's own scale, not a percentage. UPnP speaks percent and
+        // RendererService converts, which is why a phone player's slider moves in
+        // dead zones - about 3.3% of travel per real step. Our own UI uses these.
+        const val MIN_VOLUME_STEP = 0
+        const val MAX_VOLUME_STEP = 30
+
         private val FUNCTION_REGEX = Regex("<function>([^<]*)</function>", RegexOption.IGNORE_CASE)
         private val SUBMODE_REGEX = Regex("<submode>([^<]*)</submode>", RegexOption.IGNORE_CASE)
+        private val VOLUME_REGEX = Regex("<volume>([0-9]{1,3})</volume>", RegexOption.IGNORE_CASE)
 
         fun newClientUuid(): String = UUID.randomUUID().toString()
 
@@ -337,6 +346,35 @@ internal class SamsungWamChannel(
                         function = FUNCTION_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim(),
                         submode = SUBMODE_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim(),
                     )
+                } catch (error: Exception) {
+                    lastError = error
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            throw lastError ?: IOException("No active Wi-Fi network")
+        }
+
+        /** Read the speaker's current raw volume step, on the same 0..30 scale it takes. */
+        fun readVolumeRaw(context: Context, speakerIp: String): Int {
+            val command = Uri.encode("<name>GetVolume</name>")
+            val url = URL("http://$speakerIp:$PORT/UIC?cmd=$command")
+            var lastError: Exception? = null
+            for (connection in WifiLan.openHttpConnections(context.applicationContext, url)) {
+                connection.apply {
+                    connectTimeout = CONNECT_TIMEOUT_MS
+                    readTimeout = CONNECT_TIMEOUT_MS
+                    useCaches = false
+                    requestMethod = "GET"
+                }
+                try {
+                    if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                        throw IOException("WAM HTTP ${connection.responseCode}")
+                    }
+                    val body = connection.inputStream.use { it.bufferedReader().readText() }
+                    val value = VOLUME_REGEX.find(body)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        ?: throw IOException("GetVolume returned no volume")
+                    return value.coerceIn(MIN_VOLUME_STEP, MAX_VOLUME_STEP)
                 } catch (error: Exception) {
                     lastError = error
                 } finally {

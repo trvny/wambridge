@@ -15,9 +15,14 @@ class RadioStationsActivity : Activity() {
     private lateinit var urlsInput: EditText
     private lateinit var tuneInInput: EditText
     private lateinit var statusView: TextView
+    private lateinit var volumeView: TextView
     private lateinit var stationsView: LinearLayout
     private val store by lazy { RadioStationStore(this) }
     private var editingAlias: String? = null
+
+    // Last value read from the speaker, or null when it has never answered. Kept so a
+    // step lands next to the truth rather than next to whatever was last displayed.
+    private var volumeStep: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +73,29 @@ class RadioStationsActivity : Activity() {
             setOnClickListener { stopRadio() }
         })
 
+        // The M5 has thirty volume steps, not a hundred. Stepping the raw scale means every
+        // press moves the speaker; a 0-100 slider divided down would ignore two presses in
+        // three, which is exactly how this speaker feels from a phone player over UPnP.
+        content.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(Button(this@RadioStationsActivity).apply {
+                    text = "Vol −"
+                    setOnClickListener { stepVolume(-1) }
+                })
+                addView(Button(this@RadioStationsActivity).apply {
+                    text = "Vol +"
+                    setOnClickListener { stepVolume(+1) }
+                })
+                volumeView = TextView(this@RadioStationsActivity).apply {
+                    textSize = 15f
+                    setPadding(padding, 0, 0, 0)
+                    text = "volume …"
+                }
+                addView(volumeView)
+            },
+        )
+
         statusView = TextView(this).apply {
             textSize = 15f
             setPadding(0, padding / 2, 0, padding / 2)
@@ -87,6 +115,10 @@ class RadioStationsActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::statusView.isInitialized) refreshStatus()
+        // Re-read rather than trust the last shown value: the speaker's volume can be
+        // changed from its own buttons, from foobar or from another app while this screen
+        // is away, and a stale reading would make the next press jump.
+        if (::volumeView.isInitialized) refreshVolume()
     }
 
     private fun saveStation() {
@@ -201,11 +233,100 @@ class RadioStationsActivity : Activity() {
         window.decorView.postDelayed({ refreshStatus() }, 300)
     }
 
+    /** Stable per-screen client identity, in the same shape the other screens keep theirs. */
+    private fun clientUuid(): String {
+        val preferences = getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
+        return preferences.getString(KEY_CLIENT_UUID, null)
+            ?: SamsungWamChannel.newClientUuid().also {
+                preferences.edit().putString(KEY_CLIENT_UUID, it).apply()
+            }
+    }
+
+    private fun speakerAddress(): String? {
+        val target = getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
+            .getString(RendererService.KEY_SPEAKER_IP, "")
+            .orEmpty()
+            .trim()
+        return if (RendererService.isReasonableIpv4(target)) target else null
+    }
+
+    /** Read the speaker's volume so the buttons start from its value, not from a guess. */
+    private fun refreshVolume() {
+        val target = speakerAddress() ?: run {
+            volumeView.text = "volume —"
+            return
+        }
+        val appContext = applicationContext
+        Thread({
+            val read = runCatching { SamsungWamChannel.readVolumeRaw(appContext, target) }
+            runOnUiThread {
+                read.fold(
+                    onSuccess = { step ->
+                        volumeStep = step
+                        volumeView.text = "volume $step/${SamsungWamChannel.MAX_VOLUME_STEP}"
+                    },
+                    onFailure = {
+                        volumeStep = null
+                        volumeView.text = "volume ?"
+                    },
+                )
+            }
+        }, "wam-radio-volume-read").start()
+    }
+
+    private fun stepVolume(delta: Int) {
+        val target = speakerAddress() ?: run {
+            statusView.text = "Configure the M5 address in WAM Bridge first."
+            return
+        }
+        val appContext = applicationContext
+        Thread({
+            // Re-read before stepping when the current value is unknown, so a press cannot
+            // jump the speaker somewhere unintended - it has no volume-relative command.
+            val current = volumeStep
+                ?: runCatching { SamsungWamChannel.readVolumeRaw(appContext, target) }.getOrNull()
+            if (current == null) {
+                runOnUiThread {
+                    volumeView.text = "volume ?"
+                    statusView.text = "Could not read the speaker volume."
+                }
+                return@Thread
+            }
+            val wanted = (current + delta)
+                .coerceIn(SamsungWamChannel.MIN_VOLUME_STEP, SamsungWamChannel.MAX_VOLUME_STEP)
+            val applied = runCatching {
+                val channel = SamsungWamChannel(appContext, target, clientUuid())
+                try {
+                    channel.connect()
+                    channel.setVolumeRaw(wanted)
+                } finally {
+                    channel.close()
+                }
+            }
+            runOnUiThread {
+                applied.fold(
+                    onSuccess = {
+                        volumeStep = wanted
+                        volumeView.text = "volume $wanted/${SamsungWamChannel.MAX_VOLUME_STEP}"
+                    },
+                    onFailure = { error ->
+                        statusView.text =
+                            "Could not set volume: ${error.message ?: error.javaClass.simpleName}"
+                    },
+                )
+            }
+        }, "wam-radio-volume-step").start()
+    }
+
     private fun refreshStatus() {
         statusView.text = if (RadioService.running) {
             "● ${RadioService.lastStatus}"
         } else {
             "○ ${RadioService.lastStatus}"
         }
+    }
+
+    companion object {
+        private const val KEY_CLIENT_UUID = "radio_stations_client_uuid"
     }
 }
