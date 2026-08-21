@@ -66,6 +66,7 @@ jobs:
             > .gemini/context.json
 
       - name: Run Gemini
+        id: gemini
         uses: google-github-actions/run-gemini-cli@v0
         env:
           GEMINI_CLI_TRUST_WORKSPACE: 'true'
@@ -84,7 +85,7 @@ jobs:
                 "github": {
                   "command": "docker",
                   "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server:v0.27.0"],
-                  "includeTools": ["add_issue_comment", "add_comment_to_pending_review", "get_commit", "get_file_contents", "issue_read", "list_commits", "pull_request_read", "pull_request_review_write", "search_code"],
+                  "includeTools": ["get_commit", "get_file_contents", "issue_read", "list_commits", "pull_request_read", "search_code"],
                   "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"}
                 }
               },
@@ -97,7 +98,7 @@ jobs:
 
             Before acting, read AGENTS.md when present and follow repository-specific rules.
             Gather only the context needed for a confident answer. Do not modify repository files,
-            branches, commits, labels, or issue state.
+            branches, commits, labels, issue state, reviews, or comments.
 
             If mode is "review":
             - Inspect the PR diff and relevant surrounding code.
@@ -105,13 +106,33 @@ jobs:
               security problems, broken behavior, unsafe edge cases, or explicit repo-rule violations.
             - Ignore formatting, naming taste, README/changelog omissions, speculative refactors,
               and low-value nits unless they materially affect correctness or maintainability.
-            - Prefer a few precise inline comments. Do not restate or praise the PR.
-            - Publish the result to the pull request through the GitHub MCP tools; do not merely return it in the CLI response.
-            - Submit one COMMENT review. Add inline comments before submitting when there are actionable findings.
-            - If there are no actionable findings, submit a short COMMENT review saying "No actionable findings."
+            - Return only the concise review body that should be published on the PR.
+            - Include precise file/line references when useful.
+            - If there are no actionable findings, return exactly: No actionable findings.
 
             If mode is "assist":
             - Answer the maintainer's request directly using repository evidence.
             - Be concise; skip ceremonial plans, resource estimates, and progress narration.
             - If information is insufficient, explain exactly what is missing instead of guessing.
-            - Post the useful result as a single issue/PR comment.
+            - Return only the useful answer that should be posted as one issue/PR comment.
+
+      - name: Publish result
+        uses: actions/github-script@v7
+        env:
+          MODE: ${{ inputs.mode }}
+          NUMBER: ${{ inputs.issue_number }}
+          SUMMARY: ${{ steps.gemini.outputs.summary }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
+          script: |
+            const mode = process.env.MODE;
+            const number = Number(process.env.NUMBER);
+            let body = (process.env.SUMMARY || '').trim();
+            if (!body) body = mode === 'review' ? 'No actionable findings.' : 'Gemini returned no response.';
+            if (body.length > 60000) body = `${body.slice(0, 59900)}\n\n[truncated]`;
+            const { owner, repo } = context.repo;
+            if (mode === 'review') {
+              await github.rest.pulls.createReview({ owner, repo, pull_number: number, event: 'COMMENT', body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+            }
