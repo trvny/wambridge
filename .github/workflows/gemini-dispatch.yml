@@ -14,7 +14,8 @@ jobs:
     if: >-
       (github.event_name == 'pull_request' &&
        github.event.pull_request.draft == false &&
-       github.event.pull_request.head.repo.fork == false) ||
+       github.event.pull_request.head.repo.fork == false &&
+       github.event.pull_request.user.login != 'dependabot[bot]') ||
       (github.event_name == 'issue_comment' &&
        github.event.sender.type == 'User' &&
        startsWith(github.event.comment.body || '', '@gemini-cli') &&
@@ -60,4 +61,6 @@ jobs:
       issue_number: ${{ needs.dispatch.outputs.issue_number }}
       is_pull_request: ${{ needs.dispatch.outputs.is_pull_request == 'true' }}
       additional_context: ${{ needs.dispatch.outputs.additional_context }}
-    secrets: inherit
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
