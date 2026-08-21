@@ -106,7 +106,9 @@ jobs:
             - Ignore formatting, naming taste, README/changelog omissions, speculative refactors,
               and low-value nits unless they materially affect correctness or maintainability.
             - Prefer a few precise inline comments. Do not restate or praise the PR.
-            - If there are no actionable findings, say so briefly.
+            - Publish the result to the pull request through the GitHub MCP tools; do not merely return it in the CLI response.
+            - Submit one COMMENT review. Add inline comments before submitting when there are actionable findings.
+            - If there are no actionable findings, submit a short COMMENT review saying "No actionable findings."
 
             If mode is "assist":
             - Answer the maintainer's request directly using repository evidence.
