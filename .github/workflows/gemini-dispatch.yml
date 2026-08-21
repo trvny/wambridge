@@ -19,6 +19,7 @@ jobs:
       (github.event_name == 'issue_comment' &&
        github.event.sender.type == 'User' &&
        startsWith(github.event.comment.body || '', '@gemini-cli') &&
+       (!startsWith(github.event.comment.body || '', '@gemini-cli /review') || github.event.issue.pull_request) &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     outputs:
