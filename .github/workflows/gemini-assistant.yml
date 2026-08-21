@@ -28,7 +28,6 @@ jobs:
     timeout-minutes: 8
     permissions:
       contents: read
-      id-token: write
       issues: write
       pull-requests: write
     steps:
@@ -77,8 +76,6 @@ jobs:
           gemini_model: gemini-3.7-flash
           gemini_debug: ${{ fromJSON(vars.GEMINI_DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}
           workflow_name: gemini-assistant
-          github_pr_number: ${{ inputs.is_pull_request && inputs.issue_number || '' }}
-          github_issue_number: ${{ !inputs.is_pull_request && inputs.issue_number || '' }}
           settings: |-
             {
               "model": {"maxSessionTurns": 16},
