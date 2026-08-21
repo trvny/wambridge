@@ -1,0 +1,26 @@
+name: Gemini Dispatch
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    if: ${{ github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false }}
+    uses: ./.github/workflows/gemini-assistant.yml
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    with:
+      mode: review
+      issue_number: ${{ github.event.pull_request.number }}
+      is_pull_request: true
+      additional_context: ''
+    secrets: inherit
