@@ -16,6 +16,11 @@ on:
         type: string
         required: false
         default: ''
+    secrets:
+      GEMINI_API_KEY:
+        required: true
+      APP_PRIVATE_KEY:
+        required: false
 
 jobs:
   gemini:
