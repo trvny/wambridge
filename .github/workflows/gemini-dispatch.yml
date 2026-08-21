@@ -54,7 +54,6 @@ jobs:
     uses: ./.github/workflows/gemini-assistant.yml
     permissions:
       contents: read
-      id-token: write
       issues: write
       pull-requests: write
     with:
