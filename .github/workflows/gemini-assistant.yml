@@ -69,7 +69,6 @@ jobs:
           gemini_model: gemini-3.7-flash
           gemini_debug: ${{ fromJSON(vars.GEMINI_DEBUG || vars.ACTIONS_STEP_DEBUG || false) }}
           workflow_name: gemini-review
-          github_pr_number: ${{ inputs.issue_number }}
           extensions: |-
             ["https://github.com/gemini-cli-extensions/code-review"]
           settings: |-
