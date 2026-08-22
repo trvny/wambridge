@@ -1,7 +1,7 @@
 name: Gemini Dispatch
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened]
   issue_comment:
     types: [created]
@@ -12,7 +12,7 @@ permissions:
 jobs:
   dispatch:
     if: >-
-      (github.event_name == 'pull_request' &&
+      (github.event_name == 'pull_request_target' &&
        github.event.pull_request.draft == false &&
        github.event.pull_request.head.repo.fork == false &&
        github.event.pull_request.user.login != 'dependabot[bot]') ||
@@ -35,7 +35,7 @@ jobs:
           REQUEST: ${{ github.event.comment.body || '' }}
         with:
           script: |
-            const automatic = context.eventName === 'pull_request';
+            const automatic = context.eventName === 'pull_request_target';
             const isPullRequest = automatic || Boolean(context.payload.issue?.pull_request);
             const number = context.payload.pull_request?.number || context.payload.issue?.number;
             const request = process.env.REQUEST || '';
