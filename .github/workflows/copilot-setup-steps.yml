@@ -1,0 +1,62 @@
+name: Copilot setup
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/copilot-setup-steps.yml"
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install media and archive tools
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v 7z >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg p7zip-full
+          fi
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-python: true
+
+      - name: Install Python dependencies
+        run: uv sync --locked
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          gradle-version: "9.5.0"
+
+      - name: Prepare Android project
+        run: gradle -p mobile --no-daemon help
+
+      - name: Download foobar2000 SDK
+        run: |
+          mkdir -p external/foobar-sdk
+          curl -fsSL --retry 3 \
+            https://www.foobar2000.org/downloads/SDK-2025-03-07.7z \
+            -o external/foobar-sdk.7z
+          7z x external/foobar-sdk.7z -oexternal/foobar-sdk -y >/dev/null
+
+          sdk_project="$(find external/foobar-sdk -type f -name foobar2000_SDK.vcxproj -print -quit)"
+          test -n "$sdk_project"
+          sdk_root="$(dirname "$(dirname "$(dirname "$sdk_project")")")"
+          echo "FOOBAR_SDK_ROOT=$GITHUB_WORKSPACE/$sdk_root" >> "$GITHUB_ENV"
