@@ -388,7 +388,7 @@ def get_volume(
     port: int = DEFAULT_PORT,
     timeout: float = 5.0,
 ) -> int:
-    """Return the current speaker volume as a value from 0 to 100."""
+    """Return the current speaker volume as a raw step, 0..30 on tested firmware."""
     response = request(speaker_ip, "GetVolume", port=port, timeout=timeout)
     raw_volume = _first_value(
         response,
@@ -422,7 +422,14 @@ def set_volume(
     port: int = DEFAULT_PORT,
     timeout: float = 5.0,
 ) -> WamResponse:
-    """Set the speaker volume to an explicit value from 0 to 100."""
+    """Set the speaker volume to an explicit raw step.
+
+    The bound below is the protocol's outer limit, not the speaker's: the
+    tested firmware tops out at step 30 and answers anything higher with a
+    silent clamp and `ok`. Callers bound to the real scale before this point
+    (RAW_MAX_VOLUME in cli_common); this stays permissive so a differently
+    scaled model is not rejected by the transport layer.
+    """
     volume = _validate_volume(level)
     return request(
         speaker_ip,
