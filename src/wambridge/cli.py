@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .cli_common import (
     DEFAULT_MAX_START_VOLUME,
+    RAW_MAX_VOLUME,
+    RAW_MIN_VOLUME,
     add_target_arguments,
     bounded_int,
     configure_logging,
@@ -23,8 +25,6 @@ from .profiles import (
     remember_device,
 )
 from .samsung import (
-    MAX_VOLUME,
-    MIN_VOLUME,
     WamApiError,
     get_status,
     get_volume,
@@ -40,8 +40,14 @@ from .stream import AudioStreamServer, OUTPUT_PROFILES, StreamError
 
 LOGGER = logging.getLogger("wambridge")
 
-volume_level = bounded_int("volume", minimum=MIN_VOLUME, maximum=MAX_VOLUME)
-"""Parse a raw WAM volume level for argparse."""
+volume_level = bounded_int("volume", minimum=RAW_MIN_VOLUME, maximum=RAW_MAX_VOLUME)
+"""Parse a raw WAM volume level for argparse.
+
+Bounded by the speaker's own scale, not by the 0..100 the API layer still
+accepts: a level above 30 is clamped to maximum by the firmware and answered
+with success, so a mistyped percentage would reach full volume silently and
+be reported back as the level that was asked for.
+"""
 
 
 RECOVERY_VOLUME = 3
@@ -98,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--volume",
         type=volume_level,
-        help="Explicit startup volume from 0 to 100",
+        help=f"Explicit startup volume from {RAW_MIN_VOLUME} to {RAW_MAX_VOLUME}",
     )
     parser.add_argument(
         "--max-start-volume",

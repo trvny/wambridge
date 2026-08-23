@@ -42,8 +42,15 @@ class VolumeSafetyTests(TestCase):
 
     def test_parses_valid_volume(self) -> None:
         self.assertEqual(volume_level("0"), 0)
-        self.assertEqual(volume_level("100"), 100)
+        self.assertEqual(volume_level("30"), 30)
 
     def test_rejects_invalid_volume(self) -> None:
         with self.assertRaises(ArgumentTypeError):
-            volume_level("101")
+            volume_level("31")
+
+    def test_rejects_a_percentage_mistaken_for_a_step(self) -> None:
+        # The speaker clamps anything above 30 to maximum and still answers
+        # `ok`, so a level that reaches it unchecked is loud and reports fine.
+        for percentage in ("50", "100"):
+            with self.assertRaises(ArgumentTypeError):
+                volume_level(percentage)
