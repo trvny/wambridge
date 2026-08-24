@@ -17,6 +17,8 @@ internal object SamsungTuneIn {
         val title: String,
         val kind: String,
         val description: String? = null,
+        val mediaId: String? = null,
+        val thumbnail: String? = null,
     ) {
         val presetType: Int
             get() = when (kind.lowercase()) {
@@ -254,6 +256,8 @@ internal object SamsungTuneIn {
                                     title = title,
                                     kind = kind,
                                     description = values["description"],
+                                    mediaId = values["mediaid"],
+                                    thumbnail = values["thumbnail"],
                                 )
                             }
                         }

@@ -2,18 +2,43 @@ package io.github.trvny.wambridge.mobile
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.LruCache
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
 
 class TuneInActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var refreshButton: Button
+    private lateinit var playPauseButton: Button
     private lateinit var stopButton: Button
+    private lateinit var muteButton: Button
+    private lateinit var volumeDownButton: Button
+    private lateinit var volumeUpButton: Button
+    private lateinit var volumeView: TextView
     private lateinit var presetsView: LinearLayout
+
+    private val artworkExecutor = Executors.newFixedThreadPool(3)
+    private val artworkCache = object : LruCache<String, Bitmap>(4 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+    }
 
     private val preferences by lazy {
         getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
@@ -22,43 +47,37 @@ class TuneInActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val padding = (24 * resources.displayMetrics.density).toInt()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(padding, padding, padding, padding)
+            setPadding(dp(20), dp(20), dp(20), dp(24))
         }
 
         content.addView(TextView(this).apply {
-            text = "TuneIn presets"
-            textSize = 24f
+            text = "TuneIn"
+            textSize = 28f
+            typeface = Typeface.DEFAULT_BOLD
         })
         content.addView(TextView(this).apply {
-            text = "\nNative presets stored by the Samsung speaker. WAM Bridge reads and starts them; editing the TuneIn account still belongs to Samsung's plugin."
+            text = "Native radio on the Samsung speaker"
             textSize = 14f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(2), 0, dp(14))
         })
 
-        refreshButton = Button(this).apply {
-            text = "Refresh presets"
-            setOnClickListener { loadPresets() }
-        }
-        stopButton = Button(this).apply {
-            text = "Stop"
-            setOnClickListener { stopPlayback() }
-        }
-        // Both controls sit at the top so Stop stays reachable above a long preset list.
-        content.addView(
-            LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(refreshButton)
-                addView(stopButton)
-            },
-        )
+        content.addView(buildControls())
 
         statusView = TextView(this).apply {
-            textSize = 15f
-            setPadding(0, padding / 2, 0, padding / 2)
+            textSize = 14f
+            setPadding(dp(2), dp(12), dp(2), dp(12))
         }
         content.addView(statusView)
+
+        content.addView(TextView(this).apply {
+            text = "Presets"
+            textSize = 19f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(2), dp(4), 0, dp(8))
+        })
 
         presetsView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -69,32 +88,80 @@ class TuneInActivity : Activity() {
         loadPresets()
     }
 
-    private fun speakerIp(): String? {
-        val value = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
-        if (!RendererService.isReasonableIpv4(value)) {
-            statusView.text = "Configure the M5 address in WAM Bridge first."
-            return null
+    private fun buildControls(): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = roundedBackground()
         }
-        return value
+
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            refreshButton = compactButton("Refresh") { loadPresets() }
+            playPauseButton = compactButton("Play / pause") { togglePlayback() }
+            stopButton = compactButton("Stop") { stopPlayback() }
+            addWeighted(refreshButton)
+            addWeighted(playPauseButton)
+            addWeighted(stopButton)
+        })
+
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+            volumeDownButton = compactButton("−") { changeVolume(-1) }
+            volumeUpButton = compactButton("+") { changeVolume(+1) }
+            muteButton = compactButton("Mute") { toggleMute() }
+            volumeView = TextView(this@TuneInActivity).apply {
+                text = "Volume"
+                textSize = 14f
+                gravity = Gravity.CENTER
+            }
+            addView(volumeDownButton, LinearLayout.LayoutParams(0, dp(44), 0.75f))
+            addView(volumeView, LinearLayout.LayoutParams(0, dp(44), 1.4f))
+            addView(volumeUpButton, LinearLayout.LayoutParams(0, dp(44), 0.75f))
+            addView(muteButton, LinearLayout.LayoutParams(0, dp(44), 1.2f))
+        })
+        return card
     }
 
+    private fun LinearLayout.addWeighted(view: View) {
+        addView(view, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+            marginEnd = dp(4)
+        })
+    }
+
+    private fun compactButton(label: String, click: () -> Unit): Button = Button(this).apply {
+        text = label
+        isAllCaps = false
+        textSize = 12f
+        minWidth = 0
+        setPadding(dp(6), 0, dp(6), 0)
+        setOnClickListener { click() }
+    }
+
+    private fun resolveSpeaker(verifySaved: Boolean = true): String =
+        SpeakerTarget.resolve(applicationContext, verifySaved)
+            ?: throw IOException("No WAM speaker found on Wi-Fi")
+
     private fun loadPresets() {
-        val target = speakerIp() ?: return
         setButtonsEnabled(false)
         presetsView.removeAllViews()
-        statusView.text = "Reading TuneIn presets from $target…"
+        statusView.text = "Finding M5 and reading TuneIn presets…"
 
         Thread({
             val result = runCatching {
                 releasePlaybackOwners()
-                SamsungTuneIn.getPresets(applicationContext, target)
+                val target = resolveSpeaker()
+                target to SamsungTuneIn.getPresets(applicationContext, target)
             }
             runOnUiThread {
                 setButtonsEnabled(true)
                 result.fold(
-                    onSuccess = ::showPresets,
+                    onSuccess = { (_, presets) -> showPresets(presets) },
                     onFailure = { error ->
-                        statusView.text = "Could not read TuneIn presets: ${error.message ?: error.javaClass.simpleName}"
+                        statusView.text = "Could not read TuneIn: ${error.message ?: error.javaClass.simpleName}"
                     },
                 )
             }
@@ -107,61 +174,175 @@ class TuneInActivity : Activity() {
             statusView.text = "The speaker returned no TuneIn presets."
             return
         }
-        statusView.text = "${presets.size} TuneIn preset${if (presets.size == 1) "" else "s"}."
+        statusView.text = "${presets.size} preset${if (presets.size == 1) "" else "s"} ready."
+        presets.forEach { preset -> presetsView.addView(presetCard(preset)) }
+    }
 
-        presets.forEach { preset ->
-            presetsView.addView(Button(this).apply {
-                text = "${preset.contentId} · ${preset.title}"
-                isAllCaps = false
-                setOnClickListener { playPreset(preset) }
-            })
-            preset.description?.takeIf { it.isNotBlank() }?.let { description ->
-                presetsView.addView(TextView(this).apply {
-                    text = description
-                    textSize = 13f
-                })
-            }
+    private fun presetCard(preset: SamsungTuneIn.Preset): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = roundedBackground()
+            setOnClickListener { playPreset(preset) }
         }
+        row.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(8) }
+
+        val logo = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setImageResource(R.mipmap.ic_launcher)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(10).toFloat()
+                setColor(Color.argb(14, 0, 0, 0))
+            }
+            clipToOutline = true
+        }
+        row.addView(logo, LinearLayout.LayoutParams(dp(58), dp(58)).apply { marginEnd = dp(12) })
+        loadArtwork(logo, preset.thumbnail)
+
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(TextView(this).apply {
+            text = preset.title
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            maxLines = 2
+        })
+        val detail = listOfNotNull(
+            preset.description?.takeIf { it.isNotBlank() },
+            preset.mediaId?.takeIf { it.isNotBlank() },
+        ).joinToString(" · ")
+        if (detail.isNotBlank()) {
+            copy.addView(TextView(this).apply {
+                text = detail
+                textSize = 12f
+                setTextColor(Color.DKGRAY)
+                maxLines = 2
+            })
+        }
+        row.addView(copy, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(Button(this).apply {
+            text = "Play"
+            isAllCaps = false
+            setOnClickListener { playPreset(preset) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(46)))
+        return row
     }
 
     private fun playPreset(preset: SamsungTuneIn.Preset) {
-        val target = speakerIp() ?: return
         setButtonsEnabled(false)
         statusView.text = "Starting ${preset.title}…"
 
         Thread({
             val result = runCatching {
                 releasePlaybackOwners()
+                val target = resolveSpeaker()
                 SamsungTuneIn.playSafely(applicationContext, target, preset)
             }
             runOnUiThread {
                 setButtonsEnabled(true)
                 result.fold(
                     onSuccess = {
-                        statusView.text = "Playing TuneIn · ${preset.title} · volume 3"
+                        statusView.text = "Playing · ${preset.title}"
+                        volumeView.text = "Volume 3/30"
+                        playPauseButton.text = "Pause"
                     },
                     onFailure = { error ->
-                        statusView.text = "TuneIn start failed; speaker left muted for safety: ${error.message ?: error.javaClass.simpleName}"
+                        statusView.text = "TuneIn start failed; speaker kept muted: ${error.message ?: error.javaClass.simpleName}"
                     },
                 )
             }
         }, "wam-mobile-tunein-play").start()
     }
 
-    private fun stopPlayback() {
-        val target = speakerIp() ?: return
+    private fun togglePlayback() {
+        runSpeakerControl(
+            progress = "Toggling playback…",
+            action = { target ->
+                when (SpeakerRemote.toggleNativePlayback(applicationContext, target)) {
+                    SpeakerRemote.PlaybackToggleResult.PAUSED -> "Paused"
+                    SpeakerRemote.PlaybackToggleResult.PLAYING -> "Playing"
+                    SpeakerRemote.PlaybackToggleResult.NO_NATIVE_PLAYBACK ->
+                        "No native TuneIn playback to control"
+                }
+            },
+            onSuccess = { message ->
+                if (message == "Paused") playPauseButton.text = "Play"
+                if (message == "Playing") playPauseButton.text = "Pause"
+            },
+        )
+    }
+
+    private fun toggleMute() {
+        runSpeakerControl(
+            progress = "Toggling mute…",
+            action = { target ->
+                if (SpeakerRemote.toggleMute(applicationContext, target)) "Muted" else "Unmuted"
+            },
+            onSuccess = { message ->
+                muteButton.text = if (message == "Muted") "Unmute" else "Mute"
+            },
+        )
+    }
+
+    private fun changeVolume(delta: Int) {
+        runSpeakerControl(
+            progress = "Changing volume…",
+            action = { target ->
+                val value = SpeakerRemote.changeVolume(applicationContext, target, delta)
+                "Volume $value/30"
+            },
+            onSuccess = { message -> volumeView.text = message },
+        )
+    }
+
+    private fun runSpeakerControl(
+        progress: String,
+        action: (String) -> String,
+        onSuccess: (String) -> Unit = {},
+    ) {
         setButtonsEnabled(false)
-        statusView.text = "Stopping playback on $target…"
+        statusView.text = progress
+        Thread({
+            val result = runCatching {
+                val target = resolveSpeaker(verifySaved = false)
+                action(target)
+            }
+            runOnUiThread {
+                setButtonsEnabled(true)
+                result.fold(
+                    onSuccess = { message ->
+                        onSuccess(message)
+                        statusView.text = message
+                    },
+                    onFailure = { error ->
+                        statusView.text = error.message ?: error.javaClass.simpleName
+                    },
+                )
+            }
+        }, "wam-mobile-tunein-control").start()
+    }
+
+    private fun stopPlayback() {
+        setButtonsEnabled(false)
+        statusView.text = "Stopping TuneIn…"
 
         Thread({
             val result = runCatching {
                 releasePlaybackOwners()
+                val target = resolveSpeaker(verifySaved = false)
                 endSpeakerPlayback(target)
             }
             runOnUiThread {
                 setButtonsEnabled(true)
                 result.fold(
-                    onSuccess = { report -> statusView.text = report },
+                    onSuccess = { report ->
+                        statusView.text = report
+                        playPauseButton.text = "Play / pause"
+                    },
                     onFailure = { error ->
                         statusView.text = "Could not stop playback: ${error.message ?: error.javaClass.simpleName}"
                     },
@@ -169,6 +350,67 @@ class TuneInActivity : Activity() {
             }
         }, "wam-mobile-tunein-stop").start()
     }
+
+    private fun loadArtwork(view: ImageView, url: String?) {
+        val key = url?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return
+        view.tag = key
+        synchronized(artworkCache) { artworkCache.get(key) }?.let {
+            view.setImageBitmap(it)
+            return
+        }
+        artworkExecutor.execute {
+            val bitmap = runCatching { downloadArtwork(key) }.getOrNull() ?: return@execute
+            synchronized(artworkCache) { artworkCache.put(key, bitmap) }
+            runOnUiThread {
+                if (!isFinishing && view.tag == key) view.setImageBitmap(bitmap)
+            }
+        }
+    }
+
+    private fun downloadArtwork(address: String): Bitmap {
+        var lastError: Exception? = null
+        for (connection in WifiLan.openHttpConnections(applicationContext, URL(address))) {
+            connection.apply {
+                connectTimeout = ARTWORK_TIMEOUT_MS
+                readTimeout = ARTWORK_TIMEOUT_MS
+                useCaches = true
+                instanceFollowRedirects = true
+                requestMethod = "GET"
+            }
+            try {
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                    throw IOException("Artwork HTTP ${connection.responseCode}")
+                }
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(8 * 1024)
+                connection.inputStream.use { input ->
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (out.size() + count > MAX_ARTWORK_BYTES) throw IOException("Artwork too large")
+                        out.write(buffer, 0, count)
+                    }
+                }
+                val bytes = out.toByteArray()
+                return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: throw IOException("Unsupported artwork image")
+            } catch (error: Exception) {
+                lastError = error
+            } finally {
+                connection.disconnect()
+            }
+        }
+        throw lastError ?: IOException("No active Wi-Fi network")
+    }
+
+    private fun roundedBackground(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(14).toFloat()
+        setColor(Color.argb(16, 0, 0, 0))
+        setStroke(dp(1), Color.argb(24, 0, 0, 0))
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun endSpeakerPlayback(target: String): String {
         val clientUuid = preferences.getString(KEY_CLIENT_UUID, null)
@@ -241,16 +483,34 @@ class TuneInActivity : Activity() {
         return if (stopped) {
             "Playback stopped · $reading"
         } else {
-            "SetFunc bt/wifi sent, but the stop could not be confirmed · $reading"
+            "SetFunc aux/wifi sent, but the stop could not be confirmed · $reading"
         }
     }
 
     private fun setButtonsEnabled(enabled: Boolean) {
         refreshButton.isEnabled = enabled
+        playPauseButton.isEnabled = enabled
         stopButton.isEnabled = enabled
+        muteButton.isEnabled = enabled
+        volumeDownButton.isEnabled = enabled
+        volumeUpButton.isEnabled = enabled
         for (index in 0 until presetsView.childCount) {
-            presetsView.getChildAt(index).isEnabled = enabled
+            setViewTreeEnabled(presetsView.getChildAt(index), enabled)
         }
+    }
+
+    private fun setViewTreeEnabled(view: View, enabled: Boolean) {
+        view.isEnabled = enabled
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) {
+                setViewTreeEnabled(view.getChildAt(index), enabled)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        artworkExecutor.shutdownNow()
+        super.onDestroy()
     }
 
     private fun releasePlaybackOwners() {
@@ -288,8 +548,10 @@ class TuneInActivity : Activity() {
 
     companion object {
         private const val OWNER_STOP_TIMEOUT_MS = 2_500L
+        private const val ARTWORK_TIMEOUT_MS = 5_000
+        private const val MAX_ARTWORK_BYTES = 1024 * 1024
 
-        /** Gap between `SetFunc bt` and `SetFunc wifi`, and the flush after the last send. */
+        /** Gap between `SetFunc aux` and `SetFunc wifi`, and the flush after the last send. */
         private const val FUNCTION_SWITCH_PAUSE_MS = 2_000L
 
         /** How long to keep asking `GetFunc` whether the speaker has left `cp`. */
