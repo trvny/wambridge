@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-19.
+Last reviewed: 2026-08-25.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -39,7 +39,9 @@ branch or implementing another timing layer.
   ceiling; the budget is forgotten after a minute with nothing failing. A helper that reached
   `PLAYING` and then died restarts immediately, which is the recovery that works.
 - An Android adapter under `mobile/`, exposing the speaker to phone players over UPnP.
-  Physical Neutron playback to the M5 is confirmed.
+  Physical Neutron playback to the M5 is confirmed. As of PR #97, renderer starts from the
+  app, Quick Settings tile and widget all auto-resolve/discover the WAM target; the native
+  TuneIn screen exposes station artwork/metadata plus play/pause, mute, raw-volume and Stop.
 
 The stable universal transport is local HTTP started through `SetUrlPlayback`. The speaker
 paces the HTTP side through TCP backpressure. Finite share/DLNA playback is proven as a
@@ -389,19 +391,20 @@ operating system records.
     than further cosmetic work on the renderer.
 
     ~~**Open, small, and asked for while testing on 2026-08-19: the mobile radio screen has no
-    stop button.**~~ **Wired up 2026-08-19, unmeasured on hardware.** `TuneInActivity` now
-    carries a Stop button beside Refresh, and it stops the preset the only way that works on
-    this firmware: `SetFunc bt`, a two-second pause, `SetFunc wifi`. Neither `SetPlaybackControl
-    stop` variant moves it - see the `cp` section of `WAM_PROTOCOL.md` for the measurements.
-    Nothing on that channel acknowledges a command, so the screen reads the result back with
-    `GetFunc` and reports the `function` and `submode` it got rather than assuming a stop.
+    stop button.**~~ **Wired up 2026-08-19 and refined from the 2026-08-20 measurements.**
+    `TuneInActivity` now has a confirmed Stop control. The measured silent source detour is
+    `SetFunc aux`, a two-second pause, then `SetFunc wifi`; `bt` was retired because the speaker
+    announces Bluetooth readiness aloud. Neither `SetPlaybackControl stop` variant moves the
+    native TuneIn stream - see the `cp` section of `WAM_PROTOCOL.md`. Because the SetFunc sends
+    are fire-and-forget, the screen polls `GetFunc` and reports the returned `function` and
+    `submode` rather than assuming the stop worked.
 
-    **Next concrete step, agreed 2026-08-19: a TuneIn id in the station store.**
-    `RadioStation` already carries `url` and `fallback_urls`. Adding the station's TuneIn id
-    gives each entry a **dynamic** address - `GetStationData` resolves it to whatever stream the
-    broadcaster serves today - with the existing static URLs as the loose fallbacks underneath.
-    That covers the two ways this breaks: a broadcaster moving its endpoint, which kills a
-    hardcoded URL, and TuneIn answering with HLS or not at all, which the fallbacks absorb.
+    ~~**Next concrete step, agreed 2026-08-19: a TuneIn id in the station store.**~~
+    **Done on desktop and mobile by 2026-08-20.** Saved stations can carry an id such as
+    `s15984`; it is resolved at play time so a broadcaster can move its endpoint without
+    invalidating the station. The resolved HTTP stream is tried before the saved static URLs,
+    while timeouts, empty/HLS-only answers and failed resolution fall through to those saved
+    URLs. Mobile also expands TuneIn `.pls` answers before handing candidates to the relay.
 
     Both halves are measured. `s15984` resolves to `http://stream3.polskieradio.pl:8954/`, and
     the `czworka` pack entry plays on its primary `http://stream3.polskieradio.pl:8906/;stream`
@@ -438,8 +441,9 @@ operating system records.
     `GetRadioInfo` all answered and are written up. Second round the same day: the whole rung-1
     read sweep plus the radio tree, by `tools/wam-probes/probe_rung1_reads.py` and
     `probe_radio_browse.py`. Silent on this firmware: `GetWooferLevel`, `GetRearLevel`,
-    `GetAudioQuality`, `SpkInGroup`. Next, still read-only: `SearchQuery` and
-    `GetGenreStations`; only then anything with `Set`.
+    `GetAudioQuality`, `SpkInGroup`. The read-only follow-up is also done: `SearchQuery`
+    works and `GetGenreStations` cleanly reports that the API is not implemented for the
+    current service. Anything further here is now write-side probing, not another read sweep.
 
     Open and worth one run: **`SetPlayPreset` answers `StopPlaybackEvent` and nothing plays**,
     on both the hand-built command and `tunein.py:play_tunein_preset`, while `--tunein-list`
@@ -448,11 +452,13 @@ operating system records.
     Record each as measured or as silent in `WAM_PROTOCOL.md`, the same way the rest of that
     file distinguishes them - a command that exists in the app and dies on this firmware is
     worth writing down exactly once.
-15. Finish the mobile adapter's own list: it currently has discovery, an AVTransport facade,
-    the WAV/LPCM proxy, a Quick Settings tile, a 1x1 widget and TuneIn presets. The LAN scan
-    goes quiet on subnets wider than /22 and reports "nothing found" rather than
-    "not scanned", and the renderer still serves its stream to any host on the Wi-Fi that
-    guesses the per-session path.
+15. Finish the mobile adapter's own list. The renderer path now has automatic discovery from
+    every start surface, an AVTransport facade, WAV/LPCM/MP3/FLAC proxying, a Quick Settings
+    tile, compact and expanded widgets, native TuneIn controls with artwork, and saved direct
+    radio stations. Remaining rough edges are narrower: the LAN scan goes quiet on subnets
+    wider than /22 and reports "nothing found" rather than "not scanned", the renderer still
+    serves its stream to any host on the Wi-Fi that guesses the per-session path, and the
+    richer TuneIn catalogue/search UI from item 12 is still unfinished.
 
 ## What the 7-8 s speaker figure was
 
