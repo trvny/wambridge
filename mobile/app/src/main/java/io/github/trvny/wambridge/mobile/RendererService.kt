@@ -99,9 +99,12 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         releaseRadio()
 
         val preferences = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val target = preferences.getString(KEY_SPEAKER_IP, "").orEmpty().trim()
-        if (!isReasonableIpv4(target)) {
-            lastStatus = "Set a valid M5 IPv4 address first."
+        lastStatus = "Finding WAM speaker on Wi-Fi…"
+        publish(lastStatus)
+        val target = SpeakerTarget.resolve(applicationContext)
+        if (target == null) {
+            lastStatus = "No WAM speaker found on Wi-Fi."
+            publish(lastStatus)
             stopRenderer()
             stopSelf()
             return

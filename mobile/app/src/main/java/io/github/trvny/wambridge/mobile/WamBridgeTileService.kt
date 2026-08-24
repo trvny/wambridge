@@ -28,36 +28,16 @@ class WamBridgeTileService : TileService() {
         }
 
         showTile(Tile.STATE_ACTIVE, "Finding M5…")
-        val appContext = applicationContext
-        Thread({
-            val target = SpeakerTarget.resolve(appContext)
-            if (target == null) {
-                Handler(Looper.getMainLooper()).post {
-                    showTile(Tile.STATE_INACTIVE, "M5 not found")
-                }
-                return@Thread
-            }
-
-            try {
-                appContext.startForegroundService(
-                    Intent(appContext, RendererService::class.java).apply {
-                        action = RendererService.ACTION_START
-                    },
-                )
-                Handler(Looper.getMainLooper()).post {
-                    showTile(Tile.STATE_ACTIVE, "Starting…")
-                }
-                refreshAfterTransition(expectedActive = true)
-            } catch (_: IllegalStateException) {
-                Handler(Looper.getMainLooper()).post {
-                    showTile(Tile.STATE_INACTIVE, "Start blocked")
-                }
-            } catch (_: SecurityException) {
-                Handler(Looper.getMainLooper()).post {
-                    showTile(Tile.STATE_INACTIVE, "Start blocked")
-                }
-            }
-        }, "wam-tile-start").start()
+        try {
+            startForegroundService(
+                Intent(this, RendererService::class.java).apply { action = RendererService.ACTION_START },
+            )
+            refreshAfterTransition(expectedActive = true)
+        } catch (_: IllegalStateException) {
+            showTile(Tile.STATE_INACTIVE, "Start blocked")
+        } catch (_: SecurityException) {
+            showTile(Tile.STATE_INACTIVE, "Start blocked")
+        }
     }
 
     private fun refreshAfterTransition(expectedActive: Boolean) {
@@ -97,6 +77,6 @@ class WamBridgeTileService : TileService() {
     }
 
     companion object {
-        private const val TRANSITION_TIMEOUT_MS = 8_000L
+        private const val TRANSITION_TIMEOUT_MS = 20_000L
     }
 }

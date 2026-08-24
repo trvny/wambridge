@@ -51,30 +51,19 @@ class WamBridgeWidget : AppWidgetProvider() {
             return
         }
 
-        updateAll(context, active = true)
-        val pending = goAsync()
         val appContext = context.applicationContext
-        Thread({
-            try {
-                val target = SpeakerTarget.resolve(appContext)
-                if (target == null) {
-                    showToast(appContext, "No WAM speaker found")
-                    openSettings(appContext)
-                    return@Thread
-                }
-                appContext.startForegroundService(
-                    Intent(appContext, RendererService::class.java).apply {
-                        action = RendererService.ACTION_START
-                    },
-                )
-                awaitRendererState(expectedActive = true)
-            } catch (error: Exception) {
-                showToast(appContext, error.message ?: error.javaClass.simpleName)
-            } finally {
-                updateAll(appContext)
-                pending.finish()
-            }
-        }, "wam-widget-start").start()
+        updateAll(appContext, active = true)
+        try {
+            appContext.startForegroundService(
+                Intent(appContext, RendererService::class.java).apply {
+                    action = RendererService.ACTION_START
+                },
+            )
+            refreshAfterTransition(appContext, expectedActive = true)
+        } catch (error: Exception) {
+            updateAll(appContext, active = false)
+            showToast(appContext, error.message ?: error.javaClass.simpleName)
+        }
     }
 
     private fun runRemoteAction(context: Context, action: String) {
@@ -160,7 +149,7 @@ class WamBridgeWidget : AppWidgetProvider() {
         private const val ACTION_MUTE = "trvny.wambridge.mobile.WIDGET_MUTE"
         private const val ACTION_VOLUME_DOWN = "trvny.wambridge.mobile.WIDGET_VOLUME_DOWN"
         private const val ACTION_VOLUME_UP = "trvny.wambridge.mobile.WIDGET_VOLUME_UP"
-        private const val TRANSITION_TIMEOUT_MS = 8_000L
+        private const val TRANSITION_TIMEOUT_MS = 20_000L
         private const val EXPANDED_MIN_DP = 100
 
         fun updateAll(context: Context, active: Boolean = RendererService.running) {

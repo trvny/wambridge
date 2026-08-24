@@ -220,12 +220,19 @@ class MainActivity : Activity() {
     }
 
     private fun startRenderer() {
-        saveSpeakerIp() ?: return
+        val manualTarget = speakerIp.text.toString().trim()
+        if (manualTarget.isNotEmpty()) {
+            if (!RendererService.isReasonableIpv4(manualTarget)) {
+                speakerIp.error = "Enter an IPv4 address or leave it empty for auto-discovery"
+                return
+            }
+            preferences.edit().putString(RendererService.KEY_SPEAKER_IP, manualTarget).apply()
+        }
         val intent = Intent(this, RendererService::class.java).apply {
             action = RendererService.ACTION_START
         }
         startForegroundService(intent)
-        statusView.text = "Starting…"
+        statusView.text = "Finding M5 and starting renderer…"
         window.decorView.postDelayed({ refreshStatus() }, 750)
     }
 
