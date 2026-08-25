@@ -26,7 +26,7 @@ val releaseSigningReady = listOf(
 
 android {
     namespace = "io.github.trvny.wambridge.mobile"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "trvny.wambridge.mobile"

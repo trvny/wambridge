@@ -20,7 +20,7 @@ Windows-first bridge for streaming audio over Wi-Fi to Samsung Wireless Audio Mu
    the bundled `wambridge-pcm` helper (PyInstaller onedir build of
    `foobar/wambridge_pcm_entry.py`).
 3. **Android adapter** (`mobile/`): Kotlin app, Gradle 9.5.0, AGP 9.3.1, Java 17,
-   compileSdk/targetSdk 36, minSdk 26, no Gradle wrapper checked in. UPnP MediaRenderer
+   compileSdk 37, targetSdk 36, minSdk 26, Gradle wrapper 9.5.0 checked in. UPnP MediaRenderer
    facade proxying to the M5. Sources in
    `mobile/app/src/main/java/io/github/trvny/wambridge/mobile/`.
 
@@ -76,10 +76,10 @@ The project treats **warnings as errors** (`/WX`, WarningLevel 4). C++ sources m
 ASCII (a test enforces this for `foo_out_wam.cpp`). `console::printf` is pfc's formatter:
 use `%u`/`%s`, never `%lu`/`%llu`.
 
-Android (Linux/macOS/Windows; no wrapper — install Gradle 9.5.0 and JDK 17):
+Android (Linux/macOS/Windows; use the checked-in Gradle 9.5.0 wrapper with JDK 17):
 
 ```bash
-cd mobile && gradle :app:lintDebug :app:assembleDebug   # what CI runs
+cd mobile && ./gradlew :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
 ```
 
 ## CI workflows (replicate before opening a PR)
@@ -90,7 +90,7 @@ cd mobile && gradle :app:lintDebug :app:assembleDebug   # what CI runs
   `--help`-smoke-tested) → SDK download + MSBuild → packaging. Docs-only changes do not
   trigger it.
 - `.github/workflows/mobile.yml` — runs on PRs touching `mobile/**`:
-  `gradle :app:lintDebug :app:assembleDebug` with Java 17, Gradle 9.5.0.
+  `./gradlew :app:lintDebug :app:testDebugUnitTest :app:assembleDebug` with Java 17 and the checked-in Gradle 9.5.0 wrapper.
 - `.github/workflows/release.yml` — push to main rebuilds the rolling `alpha` prerelease;
   do not edit release mechanics.
 
