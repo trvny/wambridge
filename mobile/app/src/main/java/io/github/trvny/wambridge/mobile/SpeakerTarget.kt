@@ -16,7 +16,7 @@ internal object SpeakerTarget {
             return saved
         }
 
-        val discovered = WamDiscovery.discover(appContext, allowScan = true)
+        val discovered = WamDiscovery.discover(appContext, allowScan = true).speakers
         val selected = when {
             discovered.size == 1 -> discovered.single()
             savedIsValid -> discovered.firstOrNull { it.ip == saved }

@@ -457,10 +457,18 @@ operating system records.
 15. Finish the mobile adapter's own list. The renderer path now has automatic discovery from
     every start surface, an AVTransport facade, WAV/LPCM/MP3/FLAC proxying, a Quick Settings
     tile, compact and expanded widgets, native TuneIn controls with artwork, and saved direct
-    radio stations. Remaining rough edges are narrower: the LAN scan goes quiet on subnets
-    wider than /22 and reports "nothing found" rather than "not scanned", the renderer still
-    serves its stream to any host on the Wi-Fi that guesses the per-session path, and the
-    richer TuneIn catalogue/search UI from item 12 is still unfinished.
+    radio stations. Remaining rough edges are narrower: the renderer still serves its stream to
+    any host on the Wi-Fi that guesses the per-session path, and the richer TuneIn
+    catalogue/search UI from item 12 is still unfinished.
+
+    The LAN-scan half is done. It never went quiet, which is what this item used to claim: past
+    `MAX_SCAN_HOSTS` (1024 usable, so anything wider than a /22) `subnetPlan` narrows to the /24
+    window around the phone rather than spraying a /16. What was wrong is what it then said —
+    an empty result reported "No WAM speaker found. Enter the IP manually if discovery is blocked
+    by the network", which sends the reader after a firewall when the app had checked 254 of
+    65 534 addresses. `discover` now returns the coverage alongside the speakers
+    (`Scan.Full` / `Narrowed` / `NoAddresses` / `NotRun`), and only a full sweep is allowed to
+    say "not found".
 
 ## What the 7-8 s speaker figure was
 

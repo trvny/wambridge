@@ -160,12 +160,13 @@ class MainActivity : Activity() {
         }
 
         Thread({
-            val speakers = WamDiscovery.discover(applicationContext, allowScan = allowScan)
+            val result = WamDiscovery.discover(applicationContext, allowScan = allowScan)
+            val speakers = result.speakers
             runOnUiThread {
                 discoverButton.isEnabled = true
                 when {
                     speakers.isEmpty() && allowScan -> {
-                        statusView.text = "No WAM speaker found. Enter the IP manually if discovery is blocked by the network."
+                        statusView.text = emptyScanMessage(result.scan)
                     }
 
                     speakers.isEmpty() -> {
@@ -177,6 +178,28 @@ class MainActivity : Activity() {
                 }
             }
         }, "wam-mobile-discovery").start()
+    }
+
+    /**
+     * What to say when the sweep came back empty. Only a full sweep licenses
+     * "not found"; a narrowed one has to admit it did not look, or the reader
+     * goes hunting for a network problem that is not there.
+     */
+    private fun emptyScanMessage(scan: WamDiscovery.Scan): String = when (scan) {
+        is WamDiscovery.Scan.Narrowed ->
+            "Scanned ${scan.hosts} addresses around this phone. This Wi-Fi is a /${scan.prefixLength} " +
+                "(${scan.subnetHosts} addresses), too wide to sweep, so a speaker outside that range " +
+                "was not checked. Enter the IP manually."
+
+        WamDiscovery.Scan.NoAddresses ->
+            "This Wi-Fi has no other addresses to scan. Enter the speaker IP manually."
+
+        WamDiscovery.Scan.NotRun ->
+            "No Wi-Fi network available for discovery. Enter the speaker IP manually."
+
+        is WamDiscovery.Scan.Full ->
+            "No WAM speaker found on any of the ${scan.hosts} addresses on this Wi-Fi. " +
+                "Enter the IP manually if discovery is blocked by the network."
     }
 
     private fun chooseDiscoveredSpeaker(speakers: List<WamDiscovery.Speaker>) {
