@@ -967,21 +967,38 @@ The audible confirmations tonight were all on `;`-suffixed addresses -
 also the form the station pack already carried. Whether the speaker's own player copes with the
 bare `:8954/` form is untested; it was assumed, not heard.
 
-`s15984` is the exact entry sitting in preset 0, and **the station is not ruled out** - an
-earlier revision of this paragraph said it was, on the strength of the table above before that
-table was corrected. With `:8954/` now known to answer `200 text/html` rather than a stream, the
-station is back to being a live suspect for `SetPlayPreset` returning `StopPlaybackEvent`.
+`s15984` is the exact entry sitting in preset 0, and **the station is the cause** - an earlier
+revision of this paragraph said it was ruled out, on the strength of the table above before that
+table was corrected. With `:8954/` known to answer `200 text/html` rather than a stream, it was
+a live suspect; the 2026-08-25 sweep below turned that into the answer.
 
-The evidence available points that way rather than away from it, though it is two data points
-and not a finding:
-
-- Trójka, whose resolved address does not stream, is the preset that failed here every time.
+- Trójka, whose resolved address does not stream, is the preset that failed here every time -
+  across every combination of `presettype` tried.
 - Czwórka, whose resolved address does stream once its `.pls` is read, is the preset that
   started on the first try from `wambridge-mobile`.
+- Presets 2, 3 and 10 all started on the physical M5 on 2026-08-25, so the command itself is
+  sound and only this station is not.
 
-What would settle it is hearing the resolved `:8954/` through the speaker's own player, which
-has not been done - it was assumed playable because it was plain HTTP, which is exactly the
-inference this section had to retract once already.
+### `StopPlaybackEvent` is an acknowledgement, not an error (measured 2026-08-25)
+
+Every `SetPlayPreset` answers `StopPlaybackEvent`, **including the calls that then play**. It
+reports that the previous playback was torn down. Treating it as a failure is what produced the
+long-standing "SetPlayPreset answers StopPlaybackEvent and nothing plays" entry in the open list.
+
+Start latency also varies: the same preset (3, `my`, BBC Radio 6 Music) reached
+`playstatus=play` at **2.2 s on one attempt and 4.5 s on the next**. A fixed short check
+therefore returns contradictory results run to run - two sweeps here disagreed about which
+preset worked before the latency was measured. Poll `GetRadioInfo` until `playstatus=play`;
+`radio_cli._wait_for_tunein_playback` allows 25 s and that is the right shape.
+
+Confirmed at the same time, all read from a live speaker rather than inferred:
+
+| Fact | Value |
+|---|---|
+| `contentid` in `GetPresetList` | the list position, `0..N-1` - not a TuneIn station id |
+| `presettype` | `kind=speaker` -> 1, `kind=my` -> 0, as `tunein.py` already maps it |
+| `signinstatus` | `0`, and the `my` presets still play - no account needed |
+| `presetlisttype` | `0` for the whole list, regardless of the per-entry `kind` |
 
 **BBC Radio 1 was called unplayable here, and it is not.** It started from the presets screen on
 the physical speaker on 2026-08-20, through the speaker's own TuneIn player. The claim came from
@@ -1008,25 +1025,33 @@ So there are **three** playback paths on this speaker, not two, and the third is
 `SetUrlPlayback`, and a `400` there simply falls through to the saved URLs. What was wrong was
 concluding from that `400` that the station cannot play at all.
 
-**And the owner's history closes the question.** Preset playback started roughly **one attempt
-in five** even years ago, with the official app and TuneIn both in good health. So
-`SetPlayPreset` answering `StopPlaybackEvent` is not a regression, not something this project
-broke, and not worth chasing: the speaker's own preset path has always been that unreliable.
+**The "one attempt in five" reading was the sampling artefact, not the speaker (revised
+2026-08-25).** This section used to close the question by pointing at the owner's memory of
+preset playback starting roughly one time in five years ago, and concluded that the preset path
+is inherently unreliable, that the failure sits in the call, and that no amount of getting the
+call right changes it. The measurements above say otherwise: `StopPlaybackEvent` comes back on
+the successful calls too, and a start that takes 2-5 s reads as `stop` to anything that samples
+once. Both halves of the old evidence are explained by that without any unreliability at all.
 
-Confirmed from both ends the same evening. Every attempt from this machine failed, and then
-`czworka` started on the first try from `wambridge-mobile`, whose `SamsungTuneIn.kt` sends the
-identical call - `SetPlayPreset` with `presettype` before `presetindex`. Same command, same
-speaker, minutes apart, different outcome. The mechanism works; it is the reliability that does
-not, and no amount of getting the call right changes that.
+What was seen from both ends the same evening still stands as an observation - every attempt
+from this machine failed while `czworka` started on the first try from `wambridge-mobile` - but
+the attempts from this machine were on **preset 0**, whose station does not stream, and were
+judged by a single early read. Same command, same speaker, different preset and a different
+verification window.
 
-Which settles the design. Browsing to a station, reading `stationurl` and handing it to
-`SetUrlPlayback` is not merely an alternative to the preset path - it is **more reliable than
-the speaker's own**, and it starts on the first try. Preset writing buys nothing except the
-physical button, and the button inherits the one-in-five behaviour anyway.
+**Held back deliberately: this is 6 successful starts across 3 presets in one session, not a
+long run.** It is enough to retire "the failure sits in the call", because presets 2, 3 and 10
+started repeatably while 0 never did and has a demonstrably dead URL. It is not enough to
+promise that no preset ever drops one. If a preset with a known-good stream fails while
+`GetRadioInfo` is polled to the full 25 s, that is a new finding and this paragraph is where it
+belongs.
 
-**Overwriting a preset is therefore not a fix.** Swapping a playable station for another
-playable station changes nothing while the failure sits in the call, and `SetRemovePreset` has
-no undo.
+Which changes the design question rather than settling it. Browsing to a station, reading
+`stationurl` and handing it to `SetUrlPlayback` remains useful because it reaches stations the
+speaker has not saved - not because the preset path is broken. And **overwriting a preset is
+worth reconsidering**: swapping preset 0's dead Trójka for a station that streams is now the
+obvious repair, where the previous conclusion said it would change nothing. `SetRemovePreset`
+still has no undo, so that is a decision to take deliberately, not a side effect.
 
 **What the speaker cannot reach directly, it can reach through us.** BBC Radio 1 plays instantly
 in a browser and never on this speaker, because the modern stream is HTTPS and HLS and the 2015

@@ -447,10 +447,30 @@ operating system records.
     works and `GetGenreStations` cleanly reports that the API is not implemented for the
     current service. Anything further here is now write-side probing, not another read sweep.
 
-    Open and worth one run: **`SetPlayPreset` answers `StopPlaybackEvent` and nothing plays**,
-    on both the hand-built command and `tunein.py:play_tunein_preset`, while `--tunein-list`
-    still returns all 15 presets. Whether TuneIn preset playback is broken on the service side
-    or the call needs state this project does not set is unsettled.
+    **Settled 2026-08-25, and neither side of the old question was right.** `SetPlayPreset`
+    works; `--tunein-play "Radio Paradise (Alternative Rock)"` printed `Playing TuneIn preset
+    10` after `_wait_for_tunein_playback` confirmed it, and presets 2, 3 and 10 all started on
+    the physical M5. What made it look broken was the observation method:
+
+    - **`StopPlaybackEvent` is the acknowledgement `SetPlayPreset` always returns**, including
+      on the calls that then played. It reports that the previous playback was torn down, not
+      that the new one failed. Reading it as an error is where "nothing plays" came from.
+    - **Start latency is 2-5 s and varies for the same preset** - measured 2.2 s and 4.5 s on
+      two consecutive attempts at preset 3. Any fixed short check returns contradictory
+      results, which is exactly what two sweeps here did before the latency was measured.
+      `GetRadioInfo` polled to `playstatus=play` is the only honest test, and
+      `radio_cli._wait_for_tunein_playback` already does it with a 25 s budget.
+
+    Two arguments were suspected and both are correct as they stand: `contentid` in
+    `GetPresetList` **is** the list position 0..N-1, so `WamPreset.preset_index` returning
+    `int(content_id)` is right, and the `kind`-to-`presettype` mapping (`speaker` 1, `my` 0)
+    matches what the speaker accepts. `signinstatus` is `0` and the `my` presets still play, so
+    playback needs no signed-in account.
+
+    What does not play is **preset 0 specifically**, on every attempt - which confirms the
+    suspicion already recorded in `WAM_PROTOCOL.md`: its station is Trójka `s15984`, whose
+    resolved address answers `200 text/html` rather than audio. That is a broken station, not a
+    broken command.
     Record each as measured or as silent in `WAM_PROTOCOL.md`, the same way the rest of that
     file distinguishes them - a command that exists in the app and dies on this firmware is
     worth writing down exactly once.
