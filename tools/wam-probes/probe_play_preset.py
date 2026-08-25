@@ -106,15 +106,19 @@ def leave_cp(budget: float = 15.0) -> None:
     call("UIC", "SetFunc", [("function", "aux", "str")])
     time.sleep(2)
     call("UIC", "SetFunc", [("function", "wifi", "str")])
+
+    # Czekamy na powrot na `wifi`, nie na samo opuszczenie `cp`. Przelaczenie
+    # idzie przez `aux`, wiec "submode != cp" jest prawda juz w polowie drogi
+    # i zameldowaloby sukces przy glosniku zostawionym na wejsciu liniowym.
     deadline = time.monotonic() + budget
     while time.monotonic() < deadline:
         func = call("UIC", "GetFunc")
-        if field(func, "submode") != "cp":
-            print(f"    wyszlo z cp: function={field(func, 'function')} "
-                  f"submode={field(func, 'submode')}")
+        function, submode = field(func, "function"), field(func, "submode")
+        if function == "wifi" and submode != "cp":
+            print(f"    wrocil: function={function} submode={submode}")
             return
         time.sleep(2)
-    print("    NADAL w cp - glosnik zostal grajacy, zatrzymaj recznie")
+    print("    NIE wrocil na wifi - sprawdz glosnik recznie")
 
 
 def main() -> None:
