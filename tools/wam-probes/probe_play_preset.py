@@ -7,19 +7,26 @@ zatrzymania. Dwie hipotezy warte rozroznienia:
   H1  Usluga TuneIn po stronie Samsunga juz nie dziala i zaden argument nie pomoze.
   H2  Wolamy poprawna komende ze zlym argumentem.
 
-H2 ma konkretny ksztalt. `WamPreset.preset_index` (tunein.py:45-52) zwraca
-`int(content_id)`, czyli identyfikator stacji w TuneIn. Ale parametr nazywa sie
-`presetindex`, a w oficjalnej aplikacji indeks presetu to zwykle **pozycja na
-liscie** (0..N-1). Jesli glosnik dostaje numer, ktorego nie ma wsrod swoich
-pozycji, zatrzymanie odtwarzania jest dokladnie tym, czego nalezy sie spodziewac.
+**Odpowiedz, zmierzona 25.08.2026: zadna z nich.** Komenda dziala, a mylila
+metoda obserwacji. `StopPlaybackEvent` wraca po **kazdym** `SetPlayPreset`, takze
+po tych, ktore zaraz potem graja - to potwierdzenie zerwania poprzedniego
+odtwarzania, nie blad. Do tego start trwa 2-5 s i waha sie dla tego samego
+presetu, wiec pojedyncza probka po stalym czasie raz mowi `play`, raz `stop`.
+Dwa pierwsze przebiegi tej proby wskazaly z tego powodu **rozne** dzialajace
+presety, zanim zmierzono samo opoznienie.
 
-Ta proba: czyta liste surowo (zeby zobaczyc, czy wezly niosa wlasny indeks),
-potem probuje `SetPlayPreset` obiema interpretacjami i po kazdej pyta glosnik,
-co faktycznie gra.
+Obalone przy okazji: `contentid` w `GetPresetList` **jest** pozycja na liscie
+(0..N-1), wiec `WamPreset.preset_index` zwracajacy `int(content_id)` jest
+poprawny, a mapowanie `kind` na `presettype` zgadza sie z tym, co glosnik
+przyjmuje.
+
+Ta proba zostaje jako narzedzie: czyta liste surowo, probuje trzech wariantow
+i po kazdym **odpytuje** do skutku zamiast probkowac raz.
 
 ODTWARZA DZWIEK. Ustawia glosnosc na 3 przed pierwsza proba (regula z AGENTS.md)
-i zatrzymuje odtwarzanie na koniec. Nie odpalac przy zywym PCM - port 55001 ma
-miec jednego wlasciciela.
+i na koniec wychodzi z `cp` objazdem przez `aux` - `SetPlaybackControl stop`
+odpowiada czysto i nie zatrzymuje niczego. Nie odpalac przy zywym PCM: port
+55001 ma miec jednego wlasciciela.
 
 Podsystem CPM zacina sie przy szybkiej serii zapytan (patrz probe_radio_browse),
 stad pauzy.
@@ -63,8 +70,51 @@ def show(label: str, body: str) -> None:
     print("    " + body.strip()[:600].replace("\n", "\n    "))
 
 
-def now_playing() -> None:
-    show("GetRadioInfo", call("CPM", "GetRadioInfo"))
+def field(body: str, name: str) -> str:
+    match = re.search(rf"<{name}>([^<]*)</{name}>", body)
+    return match.group(1) if match else "-"
+
+
+def wait_for_play(budget: float = 25.0) -> None:
+    """Odpytuj, az zagra - jedna probka po stalym czasie klamie.
+
+    Start trwa 2-5 s i waha sie dla tego samego presetu, wiec pojedynczy odczyt
+    po czterech sekundach raz mowi `play`, raz `stop`. To jest dokladnie ten blad,
+    ktory kazal uznac cala komende za zepsuta.
+    """
+    deadline = time.monotonic() + budget
+    while time.monotonic() < deadline:
+        info = call("CPM", "GetRadioInfo")
+        elapsed = budget - (deadline - time.monotonic())
+        status = field(info, "playstatus")
+        if status == "play":
+            print(f"    +{elapsed:4.1f}s GRA  idx={field(info, 'presetindex')} "
+                  f"title={field(info, 'title')[:40]}")
+            return
+        time.sleep(2)
+    print(f"    nie ruszylo w {budget:.0f} s")
+
+
+def leave_cp(budget: float = 15.0) -> None:
+    """Wyjdz z `cp` udokumentowanym objazdem przez inne zrodlo.
+
+    `SetPlaybackControl stop` i `pause` odpowiadaja czysto i nie robia nic
+    (WAM_PROTOCOL.md, "Leaving cp takes two commands"). Jedyne, co przenosi
+    glosnik, to podroz przez inne zrodlo - `aux`, bo `bt` mowi na glos
+    "Bluetooth is ready". Przelaczenie nie jest natychmiastowe, stad odpytywanie.
+    """
+    call("UIC", "SetFunc", [("function", "aux", "str")])
+    time.sleep(2)
+    call("UIC", "SetFunc", [("function", "wifi", "str")])
+    deadline = time.monotonic() + budget
+    while time.monotonic() < deadline:
+        func = call("UIC", "GetFunc")
+        if field(func, "submode") != "cp":
+            print(f"    wyszlo z cp: function={field(func, 'function')} "
+                  f"submode={field(func, 'submode')}")
+            return
+        time.sleep(2)
+    print("    NADAL w cp - glosnik zostal grajacy, zatrzymaj recznie")
 
 
 def main() -> None:
@@ -106,8 +156,7 @@ def main() -> None:
         call("CPM", "SetPlayPreset",
              [("presettype", preset_type, "dec"), ("presetindex", int(ids[0]), "dec")]),
     )
-    time.sleep(PAUSE)
-    now_playing()
+    wait_for_play()
 
     # Wariant B: pozycja na liscie.
     time.sleep(PAUSE)
@@ -116,8 +165,7 @@ def main() -> None:
         call("CPM", "SetPlayPreset",
              [("presettype", preset_type, "dec"), ("presetindex", 0, "dec")]),
     )
-    time.sleep(PAUSE)
-    now_playing()
+    wait_for_play()
 
     # Wariant C: druga pozycja, zeby odroznic "0 tez nie dziala" od "indeks dziala".
     time.sleep(PAUSE)
@@ -126,13 +174,11 @@ def main() -> None:
         call("CPM", "SetPlayPreset",
              [("presettype", preset_type, "dec"), ("presetindex", 1, "dec")]),
     )
-    time.sleep(PAUSE)
-    now_playing()
+    wait_for_play()
 
-    # Cisza po sobie.
-    time.sleep(PAUSE)
-    show("SetPlaybackControl stop",
-         call("UIC", "SetPlaybackControl", [("playbackcontrol", "stop", "str")]))
+    # Cisza po sobie - objazdem, bo stop i pause nic tu nie robia.
+    print("\n### wyjscie z cp")
+    leave_cp()
     show("GetFunc (po)", call("UIC", "GetFunc"))
 
 
