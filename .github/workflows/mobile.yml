@@ -48,16 +48,22 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Ensure Android SDK 37
+        shell: bash
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager"
+          test -d "$ANDROID_HOME/platforms/android-37.0" || "$sdkmanager" "platforms;android-37.0"
+          test -d "$ANDROID_HOME/build-tools/36.0.0" || "$sdkmanager" "build-tools;36.0.0"
+
       - uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: "9.5.0"
 
       - name: Build Android adapter
         if: ${{ !inputs.signed }}
         working-directory: mobile
         run: |
           set -euo pipefail
-          gradle :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
+          ./gradlew :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
 
       - uses: actions/upload-artifact@v7
         if: ${{ !inputs.signed }}
@@ -95,7 +101,7 @@ jobs:
           set -euo pipefail
           test -n "$VERSION"
           test -n "$VERSION_CODE"
-          gradle :app:lintRelease :app:assembleRelease \
+          ./gradlew :app:lintRelease :app:assembleRelease \
             "-PwamVersionName=$VERSION" \
             "-PwamVersionCode=$VERSION_CODE"
           mkdir -p dist
