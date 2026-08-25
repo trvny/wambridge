@@ -22,13 +22,51 @@ import java.util.concurrent.Executors
 internal object WamDiscovery {
     data class Speaker(val ip: String, val source: String)
 
+    /**
+     * How much of the Wi-Fi subnet the LAN fallback actually probed.
+     *
+     * An empty speaker list means two very different things, and the caller has
+     * to be able to tell them apart: "probed every address and the speaker is
+     * not there" is a finding, while "probed 254 of 65 534 because the subnet is
+     * a /16" is not. Reporting the second as the first is how the UI ended up
+     * telling people their network was blocking discovery when the app had
+     * simply not looked.
+     */
+    sealed interface Scan {
+        /** SSDP answered, or the caller did not ask for the fallback. */
+        object NotRun : Scan
+
+        /** Every usable address in the subnet was probed. */
+        data class Full(val hosts: Int) : Scan
+
+        /**
+         * The subnet is wider than [MAX_SCAN_HOSTS], so only the /24 window
+         * around this phone was probed. [subnetHosts] is what a full sweep
+         * would have covered.
+         */
+        data class Narrowed(val hosts: Int, val prefixLength: Int, val subnetHosts: Long) : Scan
+
+        /**
+         * Two active Wi-Fi networks share addresses, and each shared address was
+         * probed on the first of them only. Rare, but 192.168.1.0/24 is the most
+         * reused range there is, so a speaker on the second network can sit in
+         * the swept range and still never be asked.
+         */
+        data class Overlapping(val hosts: Int, val shared: Int) : Scan
+
+        /** The subnet yielded no probeable address at all. */
+        object NoAddresses : Scan
+    }
+
+    data class Result(val speakers: List<Speaker>, val scan: Scan)
+
     fun discover(
         context: Context,
         allowScan: Boolean,
         ssdpTimeoutMs: Long = 2_500,
-    ): List<Speaker> {
+    ): Result {
         val targets = WifiLan.targets(context)
-        if (targets.isEmpty()) return emptyList()
+        if (targets.isEmpty()) return Result(emptyList(), Scan.NotRun)
 
         val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
         val multicastLock = wifiManager?.createMulticastLock("wambridge-discovery")?.apply {
@@ -38,7 +76,7 @@ internal object WamDiscovery {
 
         return try {
             val ssdp = discoverSsdp(targets, ssdpTimeoutMs)
-            if (ssdp.isNotEmpty() || !allowScan) ssdp else scanLocalLan(targets)
+            if (ssdp.isNotEmpty() || !allowScan) Result(ssdp, Scan.NotRun) else scanLocalLan(targets)
         } finally {
             if (multicastLock?.isHeld == true) multicastLock.release()
         }
@@ -84,16 +122,40 @@ internal object WamDiscovery {
         return found.values.sortedBy { it.ip }
     }
 
-    private fun scanLocalLan(targets: List<WifiLan.Target>): List<Speaker> {
+    private fun scanLocalLan(targets: List<WifiLan.Target>): Result {
         val ownAddresses = targets.map { it.address.hostAddress }.toSet()
         val candidates = linkedMapOf<String, Network>()
+        // Several Wi-Fi addresses can be active at once. If any of them had to be
+        // narrowed, the sweep as a whole is partial, so that is what gets reported.
+        var widest: Plan? = null
+
+        // An address claimed by a second Wi-Fi network is probed on the first one
+        // only, because the probe binds to a specific Network. Count those rather
+        // than let the sweep call itself complete.
+        var shared = 0
 
         for (target in targets) {
-            for (ip in subnetHosts(target)) {
-                if (ip !in ownAddresses) candidates.putIfAbsent(ip, target.network)
+            val plan = subnetPlan(target)
+            val previous = widest
+            if (plan.narrowed && (previous == null || plan.subnetHosts > previous.subnetHosts)) {
+                widest = plan
+            }
+            for (ip in plan.hosts) {
+                if (ip in ownAddresses) continue
+                val owner = candidates.putIfAbsent(ip, target.network)
+                if (owner != null && owner != target.network) shared++
             }
         }
-        if (candidates.isEmpty()) return emptyList()
+
+        val narrowed = widest
+        val scan = when {
+            candidates.isEmpty() -> Scan.NoAddresses
+            narrowed != null ->
+                Scan.Narrowed(candidates.size, narrowed.prefixLength, narrowed.subnetHosts)
+            shared > 0 -> Scan.Overlapping(candidates.size, shared)
+            else -> Scan.Full(candidates.size)
+        }
+        if (candidates.isEmpty()) return Result(emptyList(), scan)
 
         val executor = Executors.newFixedThreadPool(minOf(32, candidates.size))
         val completion = ExecutorCompletionService<Speaker?>(executor)
@@ -109,23 +171,43 @@ internal object WamDiscovery {
                 val speaker = runCatching { completion.take().get() }.getOrNull()
                 if (speaker != null) found[speaker.ip] = speaker
             }
-            found.values.sortedBy { it.ip }
+            Result(found.values.sortedBy { it.ip }, scan)
         } finally {
             executor.shutdownNow()
         }
     }
 
-    private fun subnetHosts(target: WifiLan.Target): Sequence<String> {
-        val prefix = target.prefixLength.coerceIn(0, 32)
+    /** The addresses one Wi-Fi address contributes, plus whether that is the whole subnet. */
+    internal class Plan(
+        val hosts: Sequence<String>,
+        val narrowed: Boolean,
+        val prefixLength: Int,
+        val subnetHosts: Long,
+    )
+
+    private fun subnetPlan(target: WifiLan.Target): Plan =
+        scanPlan(ipv4ToLong(target.address), target.prefixLength)
+
+    /**
+     * Which addresses to probe for one Wi-Fi address, expressed as plain integers.
+     *
+     * Split out from [subnetPlan] so the arithmetic can be tested without an
+     * Android [Network]: the numbers are the part that is easy to get wrong
+     * (the /30-/32 edges, the /22 threshold, a window that falls outside the
+     * subnet), and none of them need a device to check.
+     */
+    internal fun scanPlan(address: Long, prefixLength: Int): Plan {
+        val prefix = prefixLength.coerceIn(0, 32)
         val hostBits = 32 - prefix
         val addressCount = 1L shl hostBits
         val usableCount = when {
             prefix <= 30 -> (addressCount - 2).coerceAtLeast(0)
             else -> addressCount
         }
-        if (usableCount == 0L) return emptySequence()
+        if (usableCount == 0L) {
+            return Plan(emptySequence(), narrowed = false, prefixLength = prefix, subnetHosts = 0L)
+        }
 
-        val address = ipv4ToLong(target.address)
         val mask = if (prefix == 0) 0L else (0xffff_ffffL shl hostBits) and 0xffff_ffffL
         val network = address and mask
         val broadcast = network + addressCount - 1
@@ -133,7 +215,8 @@ internal object WamDiscovery {
         val subnetLast = if (prefix <= 30) broadcast - 1 else broadcast
 
         if (usableCount <= MAX_SCAN_HOSTS) {
-            return (subnetFirst..subnetLast).asSequence().map(::longToIpv4)
+            val hosts = (subnetFirst..subnetLast).asSequence().map(::longToIpv4)
+            return Plan(hosts, narrowed = false, prefixLength = prefix, subnetHosts = usableCount)
         }
 
         // Do not spray tens of thousands of probes across a /16. On broad
@@ -142,18 +225,19 @@ internal object WamDiscovery {
         val localWindow = address and LOCAL_WINDOW_MASK
         val first = maxOf(subnetFirst, localWindow + 1)
         val last = minOf(subnetLast, localWindow + 254)
-        return if (first <= last) {
+        val hosts = if (first <= last) {
             (first..last).asSequence().map(::longToIpv4)
         } else {
             emptySequence()
         }
+        return Plan(hosts, narrowed = true, prefixLength = prefix, subnetHosts = usableCount)
     }
 
-    private fun ipv4ToLong(address: Inet4Address): Long = address.address.fold(0L) { result, byte ->
+    internal fun ipv4ToLong(address: Inet4Address): Long = address.address.fold(0L) { result, byte ->
         (result shl 8) or (byte.toInt() and 0xff).toLong()
     }
 
-    private fun longToIpv4(value: Long): String = listOf(
+    internal fun longToIpv4(value: Long): String = listOf(
         (value ushr 24) and 0xff,
         (value ushr 16) and 0xff,
         (value ushr 8) and 0xff,

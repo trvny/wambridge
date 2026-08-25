@@ -57,7 +57,7 @@ jobs:
         working-directory: mobile
         run: |
           set -euo pipefail
-          gradle :app:lintDebug :app:assembleDebug
+          gradle :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
 
       - uses: actions/upload-artifact@v7
         if: ${{ !inputs.signed }}
