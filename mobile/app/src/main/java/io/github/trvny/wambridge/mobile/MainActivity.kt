@@ -191,6 +191,10 @@ class MainActivity : Activity() {
                 "(${scan.subnetHosts} addresses), too wide to sweep, so a speaker outside that range " +
                 "was not checked. Enter the IP manually."
 
+        is WamDiscovery.Scan.Overlapping ->
+            "Scanned ${scan.hosts} addresses, but ${scan.shared} of them exist on more than one " +
+                "Wi-Fi network here and were checked on only one. Enter the IP manually."
+
         WamDiscovery.Scan.NoAddresses ->
             "This Wi-Fi has no other addresses to scan. Enter the speaker IP manually."
 

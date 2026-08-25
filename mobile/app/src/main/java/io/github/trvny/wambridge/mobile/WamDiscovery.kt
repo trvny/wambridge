@@ -46,6 +46,14 @@ internal object WamDiscovery {
          */
         data class Narrowed(val hosts: Int, val prefixLength: Int, val subnetHosts: Long) : Scan
 
+        /**
+         * Two active Wi-Fi networks share addresses, and each shared address was
+         * probed on the first of them only. Rare, but 192.168.1.0/24 is the most
+         * reused range there is, so a speaker on the second network can sit in
+         * the swept range and still never be asked.
+         */
+        data class Overlapping(val hosts: Int, val shared: Int) : Scan
+
         /** The subnet yielded no probeable address at all. */
         object NoAddresses : Scan
     }
@@ -121,6 +129,11 @@ internal object WamDiscovery {
         // narrowed, the sweep as a whole is partial, so that is what gets reported.
         var widest: Plan? = null
 
+        // An address claimed by a second Wi-Fi network is probed on the first one
+        // only, because the probe binds to a specific Network. Count those rather
+        // than let the sweep call itself complete.
+        var shared = 0
+
         for (target in targets) {
             val plan = subnetPlan(target)
             val previous = widest
@@ -128,7 +141,9 @@ internal object WamDiscovery {
                 widest = plan
             }
             for (ip in plan.hosts) {
-                if (ip !in ownAddresses) candidates.putIfAbsent(ip, target.network)
+                if (ip in ownAddresses) continue
+                val owner = candidates.putIfAbsent(ip, target.network)
+                if (owner != null && owner != target.network) shared++
             }
         }
 
@@ -137,6 +152,7 @@ internal object WamDiscovery {
             candidates.isEmpty() -> Scan.NoAddresses
             narrowed != null ->
                 Scan.Narrowed(candidates.size, narrowed.prefixLength, narrowed.subnetHosts)
+            shared > 0 -> Scan.Overlapping(candidates.size, shared)
             else -> Scan.Full(candidates.size)
         }
         if (candidates.isEmpty()) return Result(emptyList(), scan)
