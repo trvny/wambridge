@@ -967,21 +967,38 @@ The audible confirmations tonight were all on `;`-suffixed addresses -
 also the form the station pack already carried. Whether the speaker's own player copes with the
 bare `:8954/` form is untested; it was assumed, not heard.
 
-`s15984` is the exact entry sitting in preset 0, and **the station is not ruled out** - an
-earlier revision of this paragraph said it was, on the strength of the table above before that
-table was corrected. With `:8954/` now known to answer `200 text/html` rather than a stream, the
-station is back to being a live suspect for `SetPlayPreset` returning `StopPlaybackEvent`.
+`s15984` is the exact entry sitting in preset 0, and **the station is the cause** - an earlier
+revision of this paragraph said it was ruled out, on the strength of the table above before that
+table was corrected. With `:8954/` known to answer `200 text/html` rather than a stream, it was
+a live suspect; the 2026-08-25 sweep below turned that into the answer.
 
-The evidence available points that way rather than away from it, though it is two data points
-and not a finding:
-
-- Trójka, whose resolved address does not stream, is the preset that failed here every time.
+- Trójka, whose resolved address does not stream, is the preset that failed here every time -
+  across every combination of `presettype` tried.
 - Czwórka, whose resolved address does stream once its `.pls` is read, is the preset that
   started on the first try from `wambridge-mobile`.
+- Presets 2, 3 and 10 all started on the physical M5 on 2026-08-25, so the command itself is
+  sound and only this station is not.
 
-What would settle it is hearing the resolved `:8954/` through the speaker's own player, which
-has not been done - it was assumed playable because it was plain HTTP, which is exactly the
-inference this section had to retract once already.
+### `StopPlaybackEvent` is an acknowledgement, not an error (measured 2026-08-25)
+
+Every `SetPlayPreset` answers `StopPlaybackEvent`, **including the calls that then play**. It
+reports that the previous playback was torn down. Treating it as a failure is what produced the
+long-standing "SetPlayPreset answers StopPlaybackEvent and nothing plays" entry in the open list.
+
+Start latency also varies: the same preset (3, `my`, BBC Radio 6 Music) reached
+`playstatus=play` at **2.2 s on one attempt and 4.5 s on the next**. A fixed short check
+therefore returns contradictory results run to run - two sweeps here disagreed about which
+preset worked before the latency was measured. Poll `GetRadioInfo` until `playstatus=play`;
+`radio_cli._wait_for_tunein_playback` allows 25 s and that is the right shape.
+
+Confirmed at the same time, all read from a live speaker rather than inferred:
+
+| Fact | Value |
+|---|---|
+| `contentid` in `GetPresetList` | the list position, `0..N-1` - not a TuneIn station id |
+| `presettype` | `kind=speaker` -> 1, `kind=my` -> 0, as `tunein.py` already maps it |
+| `signinstatus` | `0`, and the `my` presets still play - no account needed |
+| `presetlisttype` | `0` for the whole list, regardless of the per-entry `kind` |
 
 **BBC Radio 1 was called unplayable here, and it is not.** It started from the presets screen on
 the physical speaker on 2026-08-20, through the speaker's own TuneIn player. The claim came from
