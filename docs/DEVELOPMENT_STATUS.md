@@ -32,8 +32,10 @@ branch or implementing another timing layer.
   another source and back to `wifi` - not a power cycle. In `cp`, `GetPlayStatus` omits
   `playstatus` and `GetMusicInfo` answers `errCode: Wifi Sub Mode is CP`; neither means the
   playback failed.
-- Speaker-facing output profiles `flac` (default), `wav` and `mp3`, selected by `format` in
-  the INI or `--format` on the helper. Only `flac` has played a full track on hardware.
+- Speaker-facing output profiles `flac` (default), `wav`, `wav24` and `mp3`, selected by
+  `format` in the INI or `--format` on the helper. Only `flac` has played a full track on
+  hardware; `wav24` was accepted by the M5 on 2026-08-15 but dropped the stream twice at
+  thirteen minutes. See `FOOBAR_PLUGIN.md` for what each one costs.
 - A bounded helper restart loop from merged PR #55, measured on hardware. A spawn that never
   reaches `PLAYING` is charged and the next one waits 0.5 s, then 1 s, 2 s, 4 s, up to an 8 s
   ceiling; the budget is forgotten after a minute with nothing failing. A helper that reached
