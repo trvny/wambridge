@@ -65,3 +65,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    // Plain JVM unit tests only. The parts worth testing here are arithmetic
+    // (subnet planning) rather than anything that needs a device or Robolectric,
+    // so the adapter stays free of an instrumentation harness.
+    testImplementation("junit:junit:4.13.2")
+}

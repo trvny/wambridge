@@ -162,15 +162,26 @@ internal object WamDiscovery {
     }
 
     /** The addresses one Wi-Fi address contributes, plus whether that is the whole subnet. */
-    private class Plan(
+    internal class Plan(
         val hosts: Sequence<String>,
         val narrowed: Boolean,
         val prefixLength: Int,
         val subnetHosts: Long,
     )
 
-    private fun subnetPlan(target: WifiLan.Target): Plan {
-        val prefix = target.prefixLength.coerceIn(0, 32)
+    private fun subnetPlan(target: WifiLan.Target): Plan =
+        scanPlan(ipv4ToLong(target.address), target.prefixLength)
+
+    /**
+     * Which addresses to probe for one Wi-Fi address, expressed as plain integers.
+     *
+     * Split out from [subnetPlan] so the arithmetic can be tested without an
+     * Android [Network]: the numbers are the part that is easy to get wrong
+     * (the /30-/32 edges, the /22 threshold, a window that falls outside the
+     * subnet), and none of them need a device to check.
+     */
+    internal fun scanPlan(address: Long, prefixLength: Int): Plan {
+        val prefix = prefixLength.coerceIn(0, 32)
         val hostBits = 32 - prefix
         val addressCount = 1L shl hostBits
         val usableCount = when {
@@ -181,7 +192,6 @@ internal object WamDiscovery {
             return Plan(emptySequence(), narrowed = false, prefixLength = prefix, subnetHosts = 0L)
         }
 
-        val address = ipv4ToLong(target.address)
         val mask = if (prefix == 0) 0L else (0xffff_ffffL shl hostBits) and 0xffff_ffffL
         val network = address and mask
         val broadcast = network + addressCount - 1
@@ -207,11 +217,11 @@ internal object WamDiscovery {
         return Plan(hosts, narrowed = true, prefixLength = prefix, subnetHosts = usableCount)
     }
 
-    private fun ipv4ToLong(address: Inet4Address): Long = address.address.fold(0L) { result, byte ->
+    internal fun ipv4ToLong(address: Inet4Address): Long = address.address.fold(0L) { result, byte ->
         (result shl 8) or (byte.toInt() and 0xff).toLong()
     }
 
-    private fun longToIpv4(value: Long): String = listOf(
+    internal fun longToIpv4(value: Long): String = listOf(
         (value ushr 24) and 0xff,
         (value ushr 16) and 0xff,
         (value ushr 8) and 0xff,
