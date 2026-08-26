@@ -188,34 +188,51 @@ internal class UpnpRenderer(
                 socket.soTimeout = CLIENT_TIMEOUT_MS
                 val request = readRequest(BufferedInputStream(socket.getInputStream()))
                 val output = BufferedOutputStream(socket.getOutputStream())
-                val localControl = isLocalControlPeer(socket.inetAddress)
-                val speakerPeer = socket.inetAddress.hostAddress == speakerIp
-                when {
-                    request.method == "GET" && request.path == streamPath && speakerPeer ->
-                        proxyStream(socket, output)
-                    request.path == streamPath ->
-                        textResponse(output, 403, "text/plain", "Speaker stream only")
-                    !localControl -> textResponse(output, 403, "text/plain", "Local control only")
-                    request.method == "GET" && request.path == "/description.xml" ->
-                        textResponse(output, 200, "text/xml; charset=utf-8", descriptionXml())
-                    request.method == "GET" && request.path == "/icon.png" -> iconResponse(output)
-                    request.method == "GET" && request.path == "/upnp/avtransport.xml" ->
-                        textResponse(output, 200, "text/xml; charset=utf-8", avTransportScpd())
-                    request.method == "GET" && request.path == "/upnp/renderingcontrol.xml" ->
-                        textResponse(output, 200, "text/xml; charset=utf-8", renderingControlScpd())
-                    request.method == "GET" && request.path == "/upnp/connectionmanager.xml" ->
-                        textResponse(output, 200, "text/xml; charset=utf-8", connectionManagerScpd())
-                    request.method == "POST" && request.path == "/upnp/control/avtransport" ->
-                        handleAvTransport(output, request)
-                    request.method == "POST" && request.path == "/upnp/control/renderingcontrol" ->
-                        handleRenderingControl(output, request)
-                    request.method == "POST" && request.path == "/upnp/control/connectionmanager" ->
-                        handleConnectionManager(output, request)
-                    request.method == "SUBSCRIBE" && request.path.startsWith("/upnp/event/") ->
-                        subscriptionResponse(output, request)
-                    request.method == "UNSUBSCRIBE" && request.path.startsWith("/upnp/event/") ->
-                        rawResponse(output, 200, "OK", emptyMap(), ByteArray(0))
-                    else -> textResponse(output, 404, "text/plain", "Not found")
+                // Who may reach what is decided in RendererRouting, away from the
+                // socket, so it can be tested. Nothing below re-checks the peer.
+                val route = RendererRouting.route(
+                    method = request.method,
+                    path = request.path,
+                    peer = socket.inetAddress,
+                    streamPath = streamPath,
+                    speakerIp = speakerIp,
+                    localAddress = localAddress,
+                )
+                when (route) {
+                    is RendererRoute.Denied ->
+                        textResponse(output, 403, "text/plain", route.message)
+                    RendererRoute.NotFound ->
+                        textResponse(output, 404, "text/plain", "Not found")
+                    is RendererRoute.Allowed -> when (route.endpoint) {
+                        RendererEndpoint.STREAM -> proxyStream(socket, output)
+                        RendererEndpoint.DESCRIPTION ->
+                            textResponse(output, 200, "text/xml; charset=utf-8", descriptionXml())
+                        RendererEndpoint.ICON -> iconResponse(output)
+                        RendererEndpoint.AV_TRANSPORT_SCPD ->
+                            textResponse(output, 200, "text/xml; charset=utf-8", avTransportScpd())
+                        RendererEndpoint.RENDERING_CONTROL_SCPD ->
+                            textResponse(
+                                output,
+                                200,
+                                "text/xml; charset=utf-8",
+                                renderingControlScpd(),
+                            )
+                        RendererEndpoint.CONNECTION_MANAGER_SCPD ->
+                            textResponse(
+                                output,
+                                200,
+                                "text/xml; charset=utf-8",
+                                connectionManagerScpd(),
+                            )
+                        RendererEndpoint.AV_TRANSPORT_CONTROL -> handleAvTransport(output, request)
+                        RendererEndpoint.RENDERING_CONTROL_CONTROL ->
+                            handleRenderingControl(output, request)
+                        RendererEndpoint.CONNECTION_MANAGER_CONTROL ->
+                            handleConnectionManager(output, request)
+                        RendererEndpoint.SUBSCRIBE -> subscriptionResponse(output, request)
+                        RendererEndpoint.UNSUBSCRIBE ->
+                            rawResponse(output, 200, "OK", emptyMap(), ByteArray(0))
+                    }
                 }
             } catch (error: Exception) {
                 state.lastError = error.message ?: error.javaClass.simpleName
@@ -485,9 +502,6 @@ internal class UpnpRenderer(
         write(((value ushr 16) and 0xff).toInt())
         write(((value ushr 24) and 0xff).toInt())
     }
-
-    private fun isLocalControlPeer(address: InetAddress): Boolean =
-        address.isLoopbackAddress || address.hostAddress == localAddress.hostAddress
 
     private fun isLocalPlayerUri(value: String): Boolean = try {
         val uri = URI(value)

@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-25.
+Last reviewed: 2026-08-26.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -477,9 +477,24 @@ operating system records.
 15. Finish the mobile adapter's own list. The renderer path now has automatic discovery from
     every start surface, an AVTransport facade, WAV/LPCM/MP3/FLAC proxying, a Quick Settings
     tile, compact and expanded widgets, native TuneIn controls with artwork, and saved direct
-    radio stations. Remaining rough edges are narrower: the renderer still serves its stream to
-    any host on the Wi-Fi that guesses the per-session path, and the richer TuneIn
-    catalogue/search UI from item 12 is still unfinished.
+    radio stations.
+
+    ~~The renderer serves its stream to any host on the Wi-Fi that guesses the per-session
+    path.~~ **False, and it had been false for six days when this file repeated it on
+    2026-08-25.** `ef2d273` ("Harden Android mobile adapter", 2026-08-19) put two rules on the
+    HTTP port: the stream path answers the speaker's address and nothing else, and every other
+    path answers this phone and nothing else. Re-read against the code on 2026-08-26. The claim
+    survived because it was carried forward by hand instead of re-checked.
+
+    What was genuinely missing is that nothing tested those two rules. They lived inside
+    `handleClient`, tangled with sockets, so no unit test could reach them.
+    `RendererRouting.route` is now a pure function of (method, path, peer) and
+    `RendererRoutingTest` pins the order that carries the property: the stream to the speaker
+    only - not even to the phone, which is the source and never a consumer - everything else to
+    the phone only, and a stranger refused before the path is looked at, so an unknown path
+    cannot be used to map the surface.
+
+    Left open here: the richer TuneIn catalogue/search UI from item 12.
 
     The LAN-scan half is done. It never went quiet, which is what this item used to claim: past
     `MAX_SCAN_HOSTS` (1024 usable, so anything wider than a /22) `subnetPlan` narrows to the /24
