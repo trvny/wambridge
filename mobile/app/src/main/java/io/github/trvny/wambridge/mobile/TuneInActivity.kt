@@ -519,17 +519,17 @@ class TuneInActivity : Activity() {
     }
 
     private fun releaseRenderer() {
-        if (!RendererService.running) return
+        if (!RendererService.busy) return
         startService(
             Intent(this, RendererService::class.java).apply {
                 action = RendererService.ACTION_STOP
             },
         )
         val deadline = SystemClock.elapsedRealtime() + OWNER_STOP_TIMEOUT_MS
-        while (RendererService.running && SystemClock.elapsedRealtime() < deadline) {
+        while (RendererService.busy && SystemClock.elapsedRealtime() < deadline) {
             Thread.sleep(50)
         }
-        check(!RendererService.running) { "Renderer did not release the WAM control channel" }
+        check(!RendererService.busy) { "Renderer did not release the WAM control channel" }
     }
 
     private fun releaseRadio() {

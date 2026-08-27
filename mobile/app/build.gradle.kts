@@ -24,6 +24,13 @@ val releaseSigningReady = listOf(
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 
+val sharedStationPack = rootProject.file("../src/wambridge/station_packs.json")
+val generatedStationAssets = layout.buildDirectory.dir("generated/station-packs").get().asFile
+val syncStationPacks = tasks.register<Copy>("syncStationPacks") {
+    from(sharedStationPack)
+    into(generatedStationAssets)
+}
+
 android {
     namespace = "io.github.trvny.wambridge.mobile"
     compileSdk = 37
@@ -64,6 +71,17 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.sources.assets?.addStaticSourceDirectory(generatedStationAssets.absolutePath)
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(syncStationPacks)
 }
 
 dependencies {

@@ -77,7 +77,7 @@ class MainActivity : Activity() {
                         action = RendererService.ACTION_STOP
                     },
                 )
-                window.decorView.postDelayed({ refreshStatus() }, 250)
+                refreshUntilSettled()
             }
         })
 
@@ -142,12 +142,12 @@ class MainActivity : Activity() {
             speakerIp.error = "Enter an IPv4 address"
             return null
         }
-        preferences.edit().putString(RendererService.KEY_SPEAKER_IP, value).apply()
+        SpeakerTarget.rememberManualIp(applicationContext, value)
         return value
     }
 
     private fun discoverSpeaker(allowScan: Boolean) {
-        if (RendererService.running) {
+        if (RendererService.busy) {
             Toast.makeText(this, "Stop the renderer before discovery.", Toast.LENGTH_SHORT).show()
             return
         }
@@ -218,13 +218,13 @@ class MainActivity : Activity() {
 
     private fun useDiscoveredSpeaker(speaker: WamDiscovery.Speaker) {
         speakerIp.setText(speaker.ip)
-        preferences.edit().putString(RendererService.KEY_SPEAKER_IP, speaker.ip).apply()
+        SpeakerTarget.rememberManualIp(applicationContext, speaker.ip)
         statusView.text = "Found WAM speaker at ${speaker.ip} via ${speaker.source}."
     }
 
     private fun testSpeaker() {
         val value = saveSpeakerIp() ?: return
-        if (RendererService.running) {
+        if (RendererService.busy) {
             Toast.makeText(
                 this,
                 "Stop the renderer before probing. Active playback keeps one WAM control connection only.",
@@ -253,22 +253,33 @@ class MainActivity : Activity() {
                 speakerIp.error = "Enter an IPv4 address or leave it empty for auto-discovery"
                 return
             }
-            preferences.edit().putString(RendererService.KEY_SPEAKER_IP, manualTarget).apply()
+            SpeakerTarget.rememberManualIp(applicationContext, manualTarget)
         }
         val intent = Intent(this, RendererService::class.java).apply {
             action = RendererService.ACTION_START
         }
         startForegroundService(intent)
         statusView.text = "Finding M5 and starting renderer…"
-        window.decorView.postDelayed({ refreshStatus() }, 750)
+        refreshUntilSettled()
+    }
+
+    private fun refreshUntilSettled(minimumPolls: Int = 2) {
+        refreshStatus()
+        if (minimumPolls > 0 || RendererService.transitioning) {
+            window.decorView.postDelayed(
+                { refreshUntilSettled((minimumPolls - 1).coerceAtLeast(0)) },
+                250,
+            )
+        }
     }
 
     private fun refreshStatus() {
-        statusView.text = if (RendererService.running) {
-            "● ${RendererService.lastStatus}"
-        } else {
-            "○ ${RendererService.lastStatus}"
+        val marker = when (RendererService.phase) {
+            RendererService.Phase.RUNNING -> "●"
+            RendererService.Phase.STARTING, RendererService.Phase.STOPPING -> "◐"
+            RendererService.Phase.STOPPED -> "○"
         }
+        statusView.text = "$marker ${RendererService.lastStatus}"
     }
 
     private fun requestQuickSettingsTile() {

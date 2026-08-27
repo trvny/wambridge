@@ -490,6 +490,18 @@ operating system records.
     tile, compact and expanded widgets, native TuneIn controls with artwork, and saved direct
     radio stations.
 
+    **Extended on 2026-08-27:** Android now consumes the same bundled
+    `src/wambridge/station_packs.json` as the desktop CLI, so the radio screen is useful on a
+    fresh install instead of opening empty. User edits override bundled entries and deletions stay
+    deleted. The mobile list currently exposes 14 relay-compatible favorites with their ordered
+    URL fallbacks and TuneIn ids; the three HLS/Ogg-only entries (`bbc1`, `bbc6`, `falloutfm5`)
+    remain desktop-only until the phone has a transcoding path.
+
+    Renderer startup is also an explicit `STARTING/RUNNING/STOPPING/STOPPED` lifecycle now.
+    Discovery can be cancelled by Stop, saved speakers are re-found by stable `GetDeviceId` after
+    DHCP moves them, and the UPnP facade sends SSDP `alive`/`byebye` announcements instead of
+    relying only on a control point to issue a fresh `M-SEARCH`.
+
     ~~The renderer serves its stream to any host on the Wi-Fi that guesses the per-session
     path.~~ **False, and it had been false for six days when this file repeated it on
     2026-08-25.** `ef2d273` ("Harden Android mobile adapter", 2026-08-19) put two rules on the

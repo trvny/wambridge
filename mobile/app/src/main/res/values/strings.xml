@@ -5,4 +5,5 @@
     <string name="widget_mute">Mute or unmute speaker</string>
     <string name="widget_volume_down">Volume down</string>
     <string name="widget_volume_up">Volume up</string>
+    <string name="widget_stop_radio">Stop radio</string>
 </resources>

@@ -25,6 +25,9 @@ dev = ["pyinstaller", "ruff"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+wambridge = ["station_packs.json"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"

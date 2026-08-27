@@ -21,7 +21,9 @@ internal object WifiLan {
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
         val result = mutableListOf<Target>()
 
-        for (network in connectivity.allNetworks) {
+        val activeNetwork = connectivity.activeNetwork
+        val networks = connectivity.allNetworks.sortedBy { if (it == activeNetwork) 0 else 1 }
+        for (network in networks) {
             val capabilities = connectivity.getNetworkCapabilities(network) ?: continue
             if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
             val properties = connectivity.getLinkProperties(network) ?: continue

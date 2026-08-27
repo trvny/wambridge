@@ -204,15 +204,6 @@ class RadioStationsActivity : Activity() {
     }
 
     private fun playStation(station: MobileRadioStation) {
-        val target = getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
-            .getString(RendererService.KEY_SPEAKER_IP, "")
-            .orEmpty()
-            .trim()
-        if (!RendererService.isReasonableIpv4(target)) {
-            statusView.text = "Configure the M5 address in WAM Bridge first."
-            return
-        }
-
         startForegroundService(
             Intent(this, RadioService::class.java).apply {
                 action = RadioService.ACTION_PLAY

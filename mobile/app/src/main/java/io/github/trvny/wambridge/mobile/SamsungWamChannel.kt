@@ -74,6 +74,14 @@ internal class SamsungWamChannel(
         )
     }
 
+    fun resume() {
+        send(
+            method = "SetPlaybackControl",
+            arguments = listOf(Argument("playbackcontrol", "resume", Kind.STR)),
+            powerOn = true,
+        )
+    }
+
     fun selectFunction(function: String) {
         send(
             method = "SetFunc",
@@ -318,6 +326,7 @@ internal class SamsungWamChannel(
         private val FUNCTION_REGEX = Regex("<function>([^<]*)</function>", RegexOption.IGNORE_CASE)
         private val SUBMODE_REGEX = Regex("<submode>([^<]*)</submode>", RegexOption.IGNORE_CASE)
         private val VOLUME_REGEX = Regex("<volume>([0-9]{1,3})</volume>", RegexOption.IGNORE_CASE)
+        private val DEVICE_ID_REGEX = Regex("<device_id>([^<]+)</device_id>", RegexOption.IGNORE_CASE)
 
         fun newClientUuid(): String = UUID.randomUUID().toString()
 
@@ -355,6 +364,42 @@ internal class SamsungWamChannel(
             throw lastError ?: IOException("No active Wi-Fi network")
         }
 
+        /** Read the stable hardware identity used by desktop WAM Bridge profiles. */
+        fun readDeviceId(
+            context: Context,
+            speakerIp: String,
+            timeoutMs: Int = CONNECT_TIMEOUT_MS,
+        ): String {
+            val command = Uri.encode("<name>GetDeviceId</name>")
+            val url = URL("http://$speakerIp:$PORT/CPM?cmd=$command")
+            var lastError: Exception? = null
+            for (connection in WifiLan.openHttpConnections(context.applicationContext, url)) {
+                connection.apply {
+                    connectTimeout = timeoutMs
+                    readTimeout = timeoutMs
+                    useCaches = false
+                    requestMethod = "GET"
+                }
+                try {
+                    if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                        throw IOException("WAM HTTP ${connection.responseCode}")
+                    }
+                    val body = connection.inputStream.use { it.bufferedReader().readText() }
+                    val value = DEVICE_ID_REGEX.find(body)?.groupValues?.getOrNull(1)?.trim()
+                        ?: throw IOException("GetDeviceId returned no device_id")
+                    return normalizeDeviceId(value)
+                } catch (error: Exception) {
+                    lastError = error
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            throw lastError ?: IOException("No active Wi-Fi network")
+        }
+
+        fun normalizeDeviceId(value: String): String =
+            value.uppercase().filter(Char::isLetterOrDigit)
+
         /** Read the speaker's current raw volume step, on the same 0..30 scale it takes. */
         fun readVolumeRaw(context: Context, speakerIp: String): Int {
             val command = Uri.encode("<name>GetVolume</name>")
@@ -384,13 +429,17 @@ internal class SamsungWamChannel(
             throw lastError ?: IOException("No active Wi-Fi network")
         }
 
-        fun probe(context: Context, speakerIp: String): Boolean {
+        fun probe(
+            context: Context,
+            speakerIp: String,
+            timeoutMs: Int = CONNECT_TIMEOUT_MS,
+        ): Boolean {
             val command = Uri.encode("<name>GetSpkName</name>")
             val url = URL("http://$speakerIp:$PORT/UIC?cmd=$command")
             for (connection in WifiLan.openHttpConnections(context.applicationContext, url)) {
                 connection.apply {
-                    connectTimeout = CONNECT_TIMEOUT_MS
-                    readTimeout = CONNECT_TIMEOUT_MS
+                    connectTimeout = timeoutMs
+                    readTimeout = timeoutMs
                     useCaches = false
                     requestMethod = "GET"
                 }

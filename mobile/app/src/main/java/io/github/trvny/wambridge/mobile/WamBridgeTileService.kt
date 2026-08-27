@@ -18,21 +18,21 @@ class WamBridgeTileService : TileService() {
     override fun onClick() {
         super.onClick()
 
-        if (RendererService.running) {
+        if (RendererService.active) {
             startService(
                 Intent(this, RendererService::class.java).apply { action = RendererService.ACTION_STOP },
             )
-            showTile(Tile.STATE_INACTIVE, "Stopping…")
-            refreshAfterTransition(expectedActive = false)
+            showTile(Tile.STATE_UNAVAILABLE, "Stopping…")
+            refreshAfterTransition()
             return
         }
 
-        showTile(Tile.STATE_ACTIVE, "Finding M5…")
+        showTile(Tile.STATE_UNAVAILABLE, "Finding M5…")
         try {
             startForegroundService(
                 Intent(this, RendererService::class.java).apply { action = RendererService.ACTION_START },
             )
-            refreshAfterTransition(expectedActive = true)
+            refreshAfterTransition()
         } catch (_: IllegalStateException) {
             showTile(Tile.STATE_INACTIVE, "Start blocked")
         } catch (_: SecurityException) {
@@ -40,12 +40,12 @@ class WamBridgeTileService : TileService() {
         }
     }
 
-    private fun refreshAfterTransition(expectedActive: Boolean) {
+    private fun refreshAfterTransition() {
         val appContext = applicationContext
         Thread({
             val deadline = SystemClock.elapsedRealtime() + TRANSITION_TIMEOUT_MS
             while (
-                RendererService.running != expectedActive &&
+                RendererService.transitioning &&
                 SystemClock.elapsedRealtime() < deadline
             ) {
                 Thread.sleep(100)
@@ -69,9 +69,23 @@ class WamBridgeTileService : TileService() {
 
     private fun refreshTile() {
         val tile = qsTile ?: return
-        tile.state = if (RendererService.running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = if (RendererService.running) "Renderer on" else "Renderer off"
+        when (RendererService.phase) {
+            RendererService.Phase.RUNNING -> {
+                tile.state = Tile.STATE_ACTIVE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = "Renderer on"
+            }
+            RendererService.Phase.STARTING -> {
+                tile.state = Tile.STATE_UNAVAILABLE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = "Starting…"
+            }
+            RendererService.Phase.STOPPING -> {
+                tile.state = Tile.STATE_UNAVAILABLE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = "Stopping…"
+            }
+            RendererService.Phase.STOPPED -> {
+                tile.state = Tile.STATE_INACTIVE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = "Renderer off"
+            }
         }
         tile.updateTile()
     }

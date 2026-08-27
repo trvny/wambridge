@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 internal object WamDiscovery {
     data class Speaker(val ip: String, val source: String)
@@ -64,9 +65,10 @@ internal object WamDiscovery {
         context: Context,
         allowScan: Boolean,
         ssdpTimeoutMs: Long = 2_500,
+        shouldContinue: () -> Boolean = { true },
     ): Result {
         val targets = WifiLan.targets(context)
-        if (targets.isEmpty()) return Result(emptyList(), Scan.NotRun)
+        if (targets.isEmpty() || !shouldContinue()) return Result(emptyList(), Scan.NotRun)
 
         val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
         val multicastLock = wifiManager?.createMulticastLock("wambridge-discovery")?.apply {
@@ -75,18 +77,27 @@ internal object WamDiscovery {
         runCatching { multicastLock?.acquire() }
 
         return try {
-            val ssdp = discoverSsdp(targets, ssdpTimeoutMs)
-            if (ssdp.isNotEmpty() || !allowScan) Result(ssdp, Scan.NotRun) else scanLocalLan(targets)
+            val ssdp = discoverSsdp(targets, ssdpTimeoutMs, shouldContinue)
+            if (ssdp.isNotEmpty() || !allowScan || !shouldContinue()) {
+                Result(ssdp, Scan.NotRun)
+            } else {
+                scanLocalLan(targets, shouldContinue)
+            }
         } finally {
             if (multicastLock?.isHeld == true) multicastLock.release()
         }
     }
 
-    private fun discoverSsdp(targets: List<WifiLan.Target>, timeoutMs: Long): List<Speaker> {
+    private fun discoverSsdp(
+        targets: List<WifiLan.Target>,
+        timeoutMs: Long,
+        shouldContinue: () -> Boolean,
+    ): List<Speaker> {
         val found = linkedMapOf<String, Speaker>()
         val payloads = SEARCH_TARGETS.map(::searchMessage)
 
         for (target in targets) {
+            if (!shouldContinue()) break
             DatagramSocket().use { socket ->
                 try {
                     target.network.bindSocket(socket)
@@ -98,7 +109,7 @@ internal object WamDiscovery {
                     }
 
                     val deadline = System.currentTimeMillis() + timeoutMs
-                    while (System.currentTimeMillis() < deadline) {
+                    while (shouldContinue() && System.currentTimeMillis() < deadline) {
                         val buffer = ByteArray(65_535)
                         val packet = DatagramPacket(buffer, buffer.size)
                         try {
@@ -122,7 +133,10 @@ internal object WamDiscovery {
         return found.values.sortedBy { it.ip }
     }
 
-    private fun scanLocalLan(targets: List<WifiLan.Target>): Result {
+    private fun scanLocalLan(
+        targets: List<WifiLan.Target>,
+        shouldContinue: () -> Boolean,
+    ): Result {
         val ownAddresses = targets.map { it.address.hostAddress }.toSet()
         val candidates = linkedMapOf<String, Network>()
         // Several Wi-Fi addresses can be active at once. If any of them had to be
@@ -135,6 +149,7 @@ internal object WamDiscovery {
         var shared = 0
 
         for (target in targets) {
+            if (!shouldContinue()) return Result(emptyList(), Scan.NotRun)
             val plan = subnetPlan(target)
             val previous = widest
             if (plan.narrowed && (previous == null || plan.subnetHosts > previous.subnetHosts)) {
@@ -167,8 +182,11 @@ internal object WamDiscovery {
             }
 
             val found = linkedMapOf<String, Speaker>()
-            repeat(candidates.size) {
-                val speaker = runCatching { completion.take().get() }.getOrNull()
+            var remaining = candidates.size
+            while (remaining > 0 && shouldContinue()) {
+                val future = completion.poll(100, TimeUnit.MILLISECONDS) ?: continue
+                remaining--
+                val speaker = runCatching { future.get() }.getOrNull()
                 if (speaker != null) found[speaker.ip] = speaker
             }
             Result(found.values.sortedBy { it.ip }, scan)

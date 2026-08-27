@@ -46,6 +46,26 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
                 return START_NOT_STICKY
             }
 
+            ACTION_TOGGLE_PAUSE -> {
+                execute { togglePause() }
+                return START_NOT_STICKY
+            }
+
+            ACTION_MUTE -> {
+                execute { toggleMute() }
+                return START_NOT_STICKY
+            }
+
+            ACTION_VOLUME_DOWN -> {
+                execute { changeVolume(-1) }
+                return START_NOT_STICKY
+            }
+
+            ACTION_VOLUME_UP -> {
+                execute { changeVolume(1) }
+                return START_NOT_STICKY
+            }
+
             ACTION_PLAY -> {
                 val alias = intent.getStringExtra(EXTRA_ALIAS).orEmpty().trim()
                 promoteToForeground("Starting radio…")
@@ -90,9 +110,8 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         releaseRenderer()
 
         val preferences = getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
-        speakerIp = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
-        if (!RendererService.isReasonableIpv4(speakerIp)) {
-            fail("Configure the M5 address first.")
+        speakerIp = SpeakerTarget.resolve(applicationContext) ?: run {
+            fail("No WAM speaker found on Wi-Fi.")
             return
         }
 
@@ -147,17 +166,17 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     }
 
     private fun releaseRenderer() {
-        if (!RendererService.running) return
+        if (!RendererService.busy) return
         startService(
             Intent(this, RendererService::class.java).apply {
                 action = RendererService.ACTION_STOP
             },
         )
         val deadline = SystemClock.elapsedRealtime() + RENDERER_STOP_TIMEOUT_MS
-        while (RendererService.running && SystemClock.elapsedRealtime() < deadline) {
+        while (RendererService.busy && SystemClock.elapsedRealtime() < deadline) {
             Thread.sleep(50)
         }
-        check(!RendererService.running) { "Renderer did not release the WAM control channel" }
+        check(!RendererService.busy) { "Renderer did not release the WAM control channel" }
     }
 
     override fun onStreamOpened(sourceUrl: String) = execute {
@@ -168,6 +187,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             activeChannel.setMute(false)
             safeVolumeApplied = true
         }
+        paused = false
         val alias = station?.alias ?: "radio"
         lastStatus = "Playing $alias"
         publish(lastStatus)
@@ -190,6 +210,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
     override fun onPlaybackStarted() = execute {
         if (destroyed || !running) return@execute
+        paused = false
         val alias = station?.alias ?: "radio"
         lastStatus = "Playing $alias · confirmed"
         publish(lastStatus)
@@ -202,11 +223,42 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         publish(lastStatus)
     }
 
+    private fun togglePause() {
+        if (!running) return
+        val activeChannel = channel ?: return
+        val alias = station?.alias ?: "Radio"
+        if (paused) {
+            activeChannel.resume()
+            paused = false
+            lastStatus = "Resuming $alias…"
+        } else {
+            activeChannel.pause()
+            paused = true
+            lastStatus = "Paused $alias"
+        }
+        publish(lastStatus)
+    }
+
+    private fun toggleMute() {
+        if (!running || !RendererService.isReasonableIpv4(speakerIp)) return
+        val muted = SpeakerRemote.toggleMute(applicationContext, speakerIp)
+        lastStatus = "${station?.alias ?: "Radio"} · ${if (muted) "muted" else "unmuted"}"
+        publish(lastStatus)
+    }
+
+    private fun changeVolume(delta: Int) {
+        if (!running || !RendererService.isReasonableIpv4(speakerIp)) return
+        val value = SpeakerRemote.changeVolume(applicationContext, speakerIp, delta)
+        lastStatus = "${station?.alias ?: "Radio"} · volume $value/30"
+        publish(lastStatus)
+    }
+
     private fun stopRadio(removeForeground: Boolean = true) {
         if (channel != null) {
             runCatching { channel?.pause() }
         }
         safeVolumeApplied = false
+        paused = false
         runCatching { channel?.close() }
         channel = null
         runCatching { proxy?.close() }
@@ -214,6 +266,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         station = null
         speakerIp = ""
         running = false
+        WamBridgeWidget.updateAll(applicationContext)
         if (removeForeground) stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
@@ -242,6 +295,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
     private fun publish(message: String) {
         startForeground(NOTIFICATION_ID, buildNotification(message))
+        WamBridgeWidget.updateAll(applicationContext)
     }
 
     private fun createNotificationChannel() {
@@ -262,10 +316,10 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             Intent(this, RadioStationsActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val stopIntent = PendingIntent.getService(
+        fun action(requestCode: Int, action: String): PendingIntent = PendingIntent.getService(
             this,
-            32,
-            Intent(this, RadioService::class.java).apply { action = ACTION_STOP },
+            requestCode,
+            Intent(this, RadioService::class.java).apply { this.action = action },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -279,14 +333,31 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             .setContentTitle("WAM Bridge · Radio")
             .setContentText(message)
             .setContentIntent(openIntent)
+            .setCategory(Notification.CATEGORY_TRANSPORT)
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Stop", stopIntent).build())
+            .addAction(
+                Notification.Action.Builder(
+                    null,
+                    if (paused) "Resume" else "Pause",
+                    action(32, ACTION_TOGGLE_PAUSE),
+                ).build(),
+            )
+            .addAction(Notification.Action.Builder(null, "−", action(33, ACTION_VOLUME_DOWN)).build())
+            .addAction(Notification.Action.Builder(null, "+", action(34, ACTION_VOLUME_UP)).build())
+            .addAction(Notification.Action.Builder(null, "Mute", action(35, ACTION_MUTE)).build())
+            .addAction(Notification.Action.Builder(null, "Stop", action(36, ACTION_STOP)).build())
+            .setStyle(Notification.MediaStyle().setShowActionsInCompactView(0, 3, 4))
             .build()
     }
 
     companion object {
         const val ACTION_PLAY = "trvny.wambridge.mobile.RADIO_PLAY"
         const val ACTION_STOP = "trvny.wambridge.mobile.RADIO_STOP"
+        const val ACTION_TOGGLE_PAUSE = "trvny.wambridge.mobile.RADIO_TOGGLE_PAUSE"
+        const val ACTION_MUTE = "trvny.wambridge.mobile.RADIO_MUTE"
+        const val ACTION_VOLUME_DOWN = "trvny.wambridge.mobile.RADIO_VOLUME_DOWN"
+        const val ACTION_VOLUME_UP = "trvny.wambridge.mobile.RADIO_VOLUME_UP"
         const val EXTRA_ALIAS = "station_alias"
 
         private const val KEY_CLIENT_UUID = "radio_client_uuid"
@@ -298,6 +369,8 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         private const val WORKER_THREAD_NAME = "wam-mobile-radio"
 
         @Volatile var running = false
+            private set
+        @Volatile var paused = false
             private set
         @Volatile var lastStatus = "Stopped"
             private set
