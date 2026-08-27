@@ -481,6 +481,18 @@ class PlaybackWatcher:
             power_on=True,
         )
 
+    def set_paused(self, paused: bool) -> None:
+        """Pause or resume this URL session over its existing control socket."""
+        self._send_command(
+            method=_STOP_COMMAND,
+            arguments=[(
+                "playbackcontrol",
+                "pause" if paused else "resume",
+                "str",
+            )],
+            track_response=False,
+        )
+
     def wait_for_start(self, *, timeout: float) -> None:
         for budget in _wait_slices(timeout):
             if self._started.wait(timeout=budget):
@@ -514,14 +526,16 @@ class PlaybackWatcher:
         method: str,
         arguments: list[tuple[str, str | int, str]] | None = None,
         power_on: bool = False,
+        track_response: bool = True,
     ) -> None:
         with self._connection_lock:
             connection = self._connection
         if connection is None:
             raise StreamError("WAM control connection is not ready")
-        with self._response_lock:
-            self._results.pop(method, None)
-            self._pending.append(method)
+        if track_response:
+            with self._response_lock:
+                self._results.pop(method, None)
+                self._pending.append(method)
         try:
             connection.send(
                 method=method,
@@ -815,6 +829,7 @@ def run(
             # PLAYING depends on.
             with ControlChannel(
                 watcher.set_volume,
+                set_paused=watcher.set_paused,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

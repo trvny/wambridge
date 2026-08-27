@@ -374,6 +374,15 @@ class FoobarSourceTests(TestCase):
             source,
         )
 
+    def test_pause_routes_over_the_helper_and_keeps_silence_as_fallback(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("wam::send_playback_over_helper(true)", source)
+        self.assertIn("wam::send_playback_over_helper(false)", source)
+        self.assertIn("m_pauseRouted.store(routed);", source)
+        self.assertIn("m_paused.load() && !m_pauseRouted.load()", source)
+        self.assertIn("if (wasRouted && !routed) m_restart = true;", source)
+
     def test_force_play_is_a_transient_drain_request(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 

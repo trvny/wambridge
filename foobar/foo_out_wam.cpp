@@ -288,6 +288,22 @@ void close_control_socket_locked() {
     g_controlSocket = INVALID_SOCKET;
 }
 
+bool send_control_over_helper(const std::string& command) {
+    std::lock_guard lock(g_controlMutex);
+    if (g_controlSocket == INVALID_SOCKET) return false;
+    const int sent = send(
+        g_controlSocket,
+        command.c_str(),
+        static_cast<int>(command.size()),
+        0
+    );
+    if (sent != static_cast<int>(command.size())) {
+        close_control_socket_locked();
+        return false;
+    }
+    return true;
+}
+
 // Connect to a loopback listener the helper announced, hand over its token and
 // keep the socket. Returns quietly on failure: a slider that cannot reach the
 // helper falls back to the control process, which is what it did before.
@@ -516,21 +532,34 @@ public:
     }
 
     void pause(bool state) override {
+        bool wasPaused = false;
+        bool wasRouted = false;
         {
             std::lock_guard lock(m_mutex);
-            const bool wasPaused = m_paused.load();
+            wasPaused = m_paused.load();
             if (state == wasPaused) return;
+            wasRouted = m_pauseRouted.load();
+        }
 
+        const bool routed = state
+            ? wam::send_playback_over_helper(true)
+            : (wasRouted && wam::send_playback_over_helper(false));
+
+        {
+            std::lock_guard lock(m_mutex);
             const auto now = std::chrono::steady_clock::now();
             refresh_playback_clock_locked(now);
             if (state) {
                 m_pauseStarted = now;
+                m_pauseRouted.store(routed);
             } else {
                 if (m_clockStarted &&
                     m_pauseStarted != std::chrono::steady_clock::time_point{}) {
                     m_clockAnchor += now - m_pauseStarted;
                 }
                 m_pauseStarted = {};
+                m_pauseRouted.store(false);
+                if (wasRouted && !routed) m_restart = true;
             }
             m_paused.store(state);
         }
@@ -1394,8 +1423,11 @@ private:
                         (m_failure.empty() && (
                             m_restart || m_flushing ||
                             (m_sampleRate != 0 && m_channels != 0 && (
-                                !m_queue.empty() || m_childExited ||
-                                (m_paused.load() && m_helperReady.load())
+                                m_childExited ||
+                                (!m_pauseRouted.load() && (
+                                    !m_queue.empty() ||
+                                    (m_paused.load() && m_helperReady.load())
+                                ))
                             ))
                         ));
                 });
@@ -1462,8 +1494,9 @@ private:
                                 channels
                             ) ||
                             (m_helperReady.load() && (
-                                m_flushing || m_paused.load() ||
-                                !m_queue.empty()
+                                m_flushing || (!m_pauseRouted.load() && (
+                                    m_paused.load() || !m_queue.empty()
+                                ))
                             ));
                     }
                 );
@@ -1478,7 +1511,8 @@ private:
                     retire_stream_locked();
                     stopAfterFlush = true;
                 } else {
-                    sendSilence = m_flushing || m_paused.load();
+                    sendSilence = m_flushing ||
+                        (m_paused.load() && !m_pauseRouted.load());
                 }
                 if (stopAfterFlush) {
                     batchFrames = 0;
@@ -1689,6 +1723,7 @@ private:
     std::chrono::steady_clock::time_point m_flushDeadline{};
     std::string m_failure;
     std::atomic<bool> m_paused{false};
+    std::atomic<bool> m_pauseRouted{false};
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_helperReady{false};
     std::atomic<bool> m_childStopping{false};
@@ -1734,23 +1769,13 @@ output_factory_t<WamOutput> g_outputFactory;
 namespace wam {
 
 bool send_volume_over_helper(int step) {
-    const std::string command = "volume " + std::to_string(step) + "\n";
-    std::lock_guard lock(g_controlMutex);
-    if (g_controlSocket == INVALID_SOCKET) return false;
-    const int sent = send(
-        g_controlSocket,
-        command.c_str(),
-        static_cast<int>(command.size()),
-        0
+    return send_control_over_helper(
+        "volume " + std::to_string(step) + "\n"
     );
-    if (sent != static_cast<int>(command.size())) {
-        // A half-written command would arrive as a malformed line and be
-        // ignored by the helper, so the socket is retired rather than trusted.
-        // The caller falls back to spawning the control process.
-        close_control_socket_locked();
-        return false;
-    }
-    return true;
+}
+
+bool send_playback_over_helper(bool paused) {
+    return send_control_over_helper(paused ? "pause\n" : "resume\n");
 }
 
 void note_speaker_step(int step) {

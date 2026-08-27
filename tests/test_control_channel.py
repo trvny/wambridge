@@ -1,7 +1,7 @@
 """The helper's missing input direction.
 
 Every one of these exists because the alternative is spawning a process per
-volume change, which opens a second connection to the speaker's control port
+control change, which opens a second connection to the speaker's control port
 beside the one the helper already holds.
 """
 
@@ -23,13 +23,18 @@ def _connect(channel: ControlChannel, *, token: str | None = None) -> socket.soc
 class ControlChannelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.levels: list[int] = []
+        self.paused: list[bool] = []
         self.applied = threading.Event()
 
         def record(level: int) -> None:
             self.levels.append(level)
             self.applied.set()
 
-        self.channel = ControlChannel(record)
+        def record_paused(paused: bool) -> None:
+            self.paused.append(paused)
+            self.applied.set()
+
+        self.channel = ControlChannel(record, set_paused=record_paused)
         self.channel.start()
         self.addCleanup(self.channel.close)
 
@@ -58,6 +63,14 @@ class ControlChannelTests(unittest.TestCase):
                 self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [3, 5, 9])
 
+    def test_applies_pause_and_resume_on_the_same_connection(self) -> None:
+        with _connect(self.channel) as client:
+            self._send(client, "pause")
+            self.assertTrue(self.applied.wait(timeout=2))
+            self._send(client, "resume")
+            self.assertTrue(self.applied.wait(timeout=2))
+        self.assertEqual(self.paused, [True, False])
+
     def test_rejects_a_wrong_token(self) -> None:
         with _connect(self.channel, token="not-the-token") as client:
             self._send(client, "volume 7")
@@ -74,7 +87,7 @@ class ControlChannelTests(unittest.TestCase):
 
     def test_ignores_a_malformed_command(self) -> None:
         with _connect(self.channel) as client:
-            for line in ("volume", "volume x", "mute 1", ""):
+            for line in ("volume", "volume x", "pause now", "mute 1", ""):
                 self._send(client, line)
             self._send(client, "volume 2")
             self.assertTrue(self.applied.wait(timeout=2))
