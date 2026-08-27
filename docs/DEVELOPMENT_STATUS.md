@@ -316,7 +316,8 @@ operating system records.
    M5 passed 1500, 1000, 500 and 0 ms without a transport sign of starvation. At 0, a
    three-minute run held the 2.0 s capacity 1.832-1.999 s full across 153 `CLOCK` samples,
    then a ~24-minute Andor session stayed stable and sounded clean to the owner. The full
-   checklist also passed: pause/resume froze and resumed the same clock, seek and manual
+   checklist also passed, driven through the local authenticated Beefweb API and checked in
+   foobar's console-*.txt: pause/resume froze and resumed the same clock, seek and manual
    next restarted cleanly with one helper/FFmpeg pair, a complete 3:23 track transitioned
    naturally into the next track without restarting the transport, and Stop left no helper
    or FFmpeg behind. `buffer_extra` now defaults to 0; the remaining 2.0 s
