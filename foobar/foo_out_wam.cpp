@@ -530,17 +530,20 @@ public:
 
     void pause(bool state) override {
         bool wasPaused = false;
-        bool wasMuted = false;
+        bool hadPauseMuteRequest = false;
         {
             std::lock_guard lock(m_mutex);
             wasPaused = m_paused.load();
             if (state == wasPaused) return;
-            wasMuted = m_pauseMuted.load();
+            hadPauseMuteRequest = m_pauseMuteRequested.load();
         }
 
-        const bool muted = state
-            ? wam::send_pause_over_helper(true)
-            : (wasMuted && wam::send_pause_over_helper(false));
+        bool controlSent = true;
+        if (state) {
+            controlSent = wam::send_pause_over_helper(true);
+        } else if (hadPauseMuteRequest) {
+            controlSent = wam::send_pause_over_helper(false);
+        }
 
         {
             std::lock_guard lock(m_mutex);
@@ -548,15 +551,15 @@ public:
             refresh_playback_clock_locked(now);
             if (state) {
                 m_pauseStarted = now;
-                m_pauseMuted.store(muted);
+                m_pauseMuteRequested.store(controlSent);
             } else {
                 if (m_clockStarted &&
                     m_pauseStarted != std::chrono::steady_clock::time_point{}) {
                     m_clockAnchor += now - m_pauseStarted;
                 }
                 m_pauseStarted = {};
-                m_pauseMuted.store(false);
-                if (wasMuted && !muted) m_restart = true;
+                m_pauseMuteRequested.store(false);
+                if (hadPauseMuteRequest && !controlSent) m_restart = true;
             }
             m_paused.store(state);
         }
@@ -1715,7 +1718,7 @@ private:
     std::chrono::steady_clock::time_point m_flushDeadline{};
     std::string m_failure;
     std::atomic<bool> m_paused{false};
-    std::atomic<bool> m_pauseMuted{false};
+    std::atomic<bool> m_pauseMuteRequested{false};
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_helperReady{false};
     std::atomic<bool> m_childStopping{false};

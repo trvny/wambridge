@@ -379,9 +379,9 @@ class FoobarSourceTests(TestCase):
 
         self.assertIn("wam::send_pause_over_helper(true)", source)
         self.assertIn("wam::send_pause_over_helper(false)", source)
-        self.assertIn("m_pauseMuted.store(muted);", source)
+        self.assertIn("m_pauseMuteRequested.store(controlSent);", source)
         self.assertIn("sendSilence = m_flushing || m_paused.load();", source)
-        self.assertIn("if (wasMuted && !muted) m_restart = true;", source)
+        self.assertIn("if (hadPauseMuteRequest && !controlSent) m_restart = true;", source)
         self.assertNotIn("SO_RCVTIMEO", source)
         self.assertIn('send_control_over_helper(paused ? "pause\\n" : "resume\\n")', source)
 

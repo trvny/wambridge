@@ -715,6 +715,17 @@ class PcmCliTests(TestCase):
             ],
         )
 
+    def test_resume_rejection_marks_the_helper_failed(self) -> None:
+        watcher, connection = self._connected_watcher()
+        watcher.set_pause_mute(True)
+        connection._rejection = "Speaker rejected SetMute (error 3)"
+        connection._rejection_method = "SetMute"
+
+        with self.assertRaisesRegex(WamApiError, "rejected SetMute"):
+            watcher.set_pause_mute(False)
+
+        self.assertIn("Could not restore speaker mute after pause", watcher._error)
+
     def test_mute_status_matches_the_pending_set_mute(self) -> None:
         watcher, _connection = self._connected_watcher()
         watcher._pending.append("SetMute")

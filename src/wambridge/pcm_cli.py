@@ -504,7 +504,17 @@ class PlaybackWatcher:
             self._set_mute_state(True)
             return
 
-        self._restore_pause_mute()
+        try:
+            self._restore_pause_mute()
+        except (StreamError, WamApiError) as error:
+            # The component intentionally does not wait for a loopback ACK: it
+            # must never block foobar's pause callback on a firmware timeout. A
+            # failed resume is different from a failed pause, though. Paced
+            # silence is a safe pause fallback; a failed unmute would leave live
+            # playback inaudible. Make the helper fail so the component restarts
+            # the URL session instead of staying silently wedged.
+            self._error = f"Could not restore speaker mute after pause: {error}"
+            raise
 
     def _read_mute_state(self) -> bool:
         self._send_command(method=_GET_MUTE_COMMAND)
@@ -637,18 +647,17 @@ class PlaybackWatcher:
         return None
 
     def _record_response(self, command: str, event: WamEvent) -> None:
+        if (event.result or "").casefold() == "ok":
+            message = ""
+        else:
+            code = event.reported_error_code
+            suffix = f" (error {code})" if code else ""
+            message = f"Speaker rejected {command}{suffix}"
         with self._response_lock:
             self._response_events[command] = event
-        if (event.result or "").casefold() == "ok":
-            with self._response_lock:
-                self._results[command] = ""
-            return
-
-        code = event.reported_error_code
-        suffix = f" (error {code})" if code else ""
-        message = f"Speaker rejected {command}{suffix}"
-        with self._response_lock:
             self._results[command] = message
+        if not message:
+            return
         if command == _PLAYBACK_COMMAND:
             self._error = message
             return

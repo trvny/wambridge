@@ -400,6 +400,12 @@ Measured 2026-08-27 on the same M5: `SetMute` replies as `MuteStatus`, not `SetM
 valid firmware outcome, so callers must not require the reply to arrive inside another component's
 identical timeout budget.
 
+The same 2026-08-27 run also started a URL stream from `mute=on`: `SetUrlPlayback` moved the M5
+to `mute=off` without any `SetMute` being sent. That makes the next URL track forgiving if a
+previous session was torn down badly, but it is **not** a teardown contract: another source or
+client can take the speaker without sending `SetUrlPlayback`, so pause still restores the mute
+state it found.
+
 
 Two properties that matter when measuring this:
 
