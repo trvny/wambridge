@@ -712,6 +712,15 @@ class PlaybackWatcher:
             self._results[command] = message
         if not message:
             return
+        if command == _VOLUME_COMMAND:
+            # Routed slider writes are cached optimistically because this firmware
+            # may answer successful SetVolume with silence. A matched rejection is
+            # the one case where that optimistic level is definitely false. Do not
+            # guess the previous level amid possibly overlapping slider writes; mark
+            # it unknown until a later routed write or observed VolumeLevel refreshes
+            # the cache, so pause cannot restore a level the speaker rejected.
+            with self._volume_lock:
+                self._current_volume = None
         if command == _PLAYBACK_COMMAND:
             self._error = message
             return
