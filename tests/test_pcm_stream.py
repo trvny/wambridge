@@ -66,6 +66,20 @@ class PcmAudioStreamServerTests(TestCase):
                 sample_format="u8",
             )
 
+    @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
+    def test_paused_request_disconnect_waits_for_resume_request(self, _which_mock) -> None:
+        server = PcmAudioStreamServer(BytesIO(), sample_rate=48000, channels=2)
+        try:
+            server.set_paused(True)
+            server._finish_request()
+            self.assertFalse(server.request_finished.is_set())
+
+            server.set_paused(False)
+            server._finish_request()
+            self.assertTrue(server.request_finished.is_set())
+        finally:
+            server.close()
+
     @patch("wambridge.pcm_stream.subprocess.Popen")
     @patch("wambridge.stream.shutil.which", return_value="ffmpeg")
     def test_applies_realtime_clock_before_pcm_input(

@@ -134,21 +134,24 @@ class ControlChannel:
                     LOGGER.warning("Control client failed authentication")
                     return
                 for line in lines:
-                    self._dispatch(line)
+                    reply = self._dispatch(line)
+                    if reply is not None:
+                        client.sendall((reply + "\n").encode("ascii"))
         except OSError:
             LOGGER.debug("Control client disconnected", exc_info=True)
 
-    def _dispatch(self, line: str) -> None:
+    def _dispatch(self, line: str) -> str | None:
         command, _, argument = line.partition(" ")
         if command in {"pause", "resume"}:
             if argument or self._set_paused is None:
                 LOGGER.warning("Ignoring malformed playback command %r", line)
-                return
+                return "error"
             try:
                 self._set_paused(command == "pause")
             except Exception:  # helper boundary: a failed command is not fatal
                 LOGGER.warning("Control %s failed", command, exc_info=True)
-            return
+                return "error"
+            return "ok"
         if command != "volume":
             LOGGER.warning("Ignoring unknown control command %r", command)
             return

@@ -67,8 +67,10 @@ class ControlChannelTests(unittest.TestCase):
         with _connect(self.channel) as client:
             self._send(client, "pause")
             self.assertTrue(self.applied.wait(timeout=2))
+            self.assertEqual(client.recv(16), b"ok\n")
             self._send(client, "resume")
             self.assertTrue(self.applied.wait(timeout=2))
+            self.assertEqual(client.recv(16), b"ok\n")
         self.assertEqual(self.paused, [True, False])
 
     def test_rejects_a_wrong_token(self) -> None:
@@ -92,6 +94,17 @@ class ControlChannelTests(unittest.TestCase):
             self._send(client, "volume 2")
             self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [2])
+
+    def test_failing_pause_is_reported_to_the_component(self) -> None:
+        def explode(_paused: bool) -> None:
+            raise RuntimeError("speaker said no")
+
+        channel = ControlChannel(lambda _level: None, set_paused=explode)
+        channel.start()
+        self.addCleanup(channel.close)
+        with _connect(channel) as client:
+            client.sendall(b"pause\n")
+            self.assertEqual(client.recv(16), b"error\n")
 
     def test_a_failing_command_does_not_end_the_session(self) -> None:
         # A rejected SetVolume must not take playback down with it.

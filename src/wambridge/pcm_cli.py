@@ -277,6 +277,7 @@ class PlaybackWatcher:
         self._stream_active = threading.Event()
         self._started = threading.Event()
         self._startup_complete = threading.Event()
+        self._paused = threading.Event()
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._error = ""
@@ -483,15 +484,24 @@ class PlaybackWatcher:
 
     def set_paused(self, paused: bool) -> None:
         """Pause or resume this URL session over its existing control socket."""
-        self._send_command(
-            method=_STOP_COMMAND,
-            arguments=[(
-                "playbackcontrol",
-                "pause" if paused else "resume",
-                "str",
-            )],
-            track_response=False,
-        )
+        if paused:
+            self._paused.set()
+        try:
+            self._send_command(
+                method=_STOP_COMMAND,
+                arguments=[(
+                    "playbackcontrol",
+                    "pause" if paused else "resume",
+                    "str",
+                )],
+                track_response=False,
+            )
+        except Exception:
+            if paused:
+                self._paused.clear()
+            raise
+        if not paused:
+            self._paused.clear()
 
     def wait_for_start(self, *, timeout: float) -> None:
         for budget in _wait_slices(timeout):
@@ -617,6 +627,7 @@ class PlaybackWatcher:
                         if (
                             self._stream_active.is_set()
                             and not self._started.is_set()
+                            and not self._paused.is_set()
                             and code == "NETWORK_TIMEOUT_ERROR"
                         ):
                             self._error = (
@@ -827,9 +838,21 @@ def run(
             # Only now: before this point the startup sequence owns the volume,
             # and a level arriving mid-handshake would fight the unmute that
             # PLAYING depends on.
+            def set_paused(paused: bool) -> None:
+                if paused:
+                    server.set_paused(True)
+                try:
+                    watcher.set_paused(paused)
+                except Exception:
+                    if paused:
+                        server.set_paused(False)
+                    raise
+                if not paused:
+                    server.set_paused(False)
+
             with ControlChannel(
                 watcher.set_volume,
-                set_paused=watcher.set_paused,
+                set_paused=set_paused,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

@@ -66,6 +66,7 @@ class PcmAudioStreamServer(AudioStreamServer):
         self.sample_format = sample_format
         self.startup_silence_ms = startup_silence_ms
         self.encoder_started = threading.Event()
+        self.paused = threading.Event()
         super().__init__(
             "raw PCM input",
             profile=profile,
@@ -73,6 +74,19 @@ class PcmAudioStreamServer(AudioStreamServer):
             port=port,
             ffmpeg=ffmpeg,
         )
+
+    def set_paused(self, paused: bool) -> None:
+        """Tell the HTTP side whether a disconnect is an expected pause."""
+        if paused:
+            self.paused.set()
+        else:
+            self.paused.clear()
+
+    def _finish_request(self) -> None:
+        if self.paused.is_set() and not self._closing.is_set():
+            LOGGER.info("Speaker closed the PCM request while paused; waiting for resume")
+            return
+        super()._finish_request()
 
     @property
     def input_args(self) -> tuple[str, ...]:

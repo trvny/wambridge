@@ -364,6 +364,10 @@ class AudioStreamServer:
         """Allow a connected speaker to receive audio after safety checks."""
         self.audio_released.set()
 
+    def _finish_request(self) -> None:
+        """Record that the active HTTP stream request ended."""
+        self.request_finished.set()
+
     def close(self) -> None:
         """Stop HTTP serving and any active FFmpeg process."""
         self._closing.set()
@@ -409,7 +413,7 @@ class AudioStreamServer:
                     owner.error = str(error)
                     LOGGER.exception("Audio stream failed")
                 finally:
-                    owner.request_finished.set()
+                    owner._finish_request()
 
             def log_message(self, format_string: str, *args: object) -> None:
                 LOGGER.debug("HTTP: " + format_string, *args)

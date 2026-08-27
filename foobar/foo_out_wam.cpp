@@ -288,7 +288,10 @@ void close_control_socket_locked() {
     g_controlSocket = INVALID_SOCKET;
 }
 
-bool send_control_over_helper(const std::string& command) {
+bool send_control_over_helper(
+    const std::string& command,
+    bool expectReply = false
+) {
     std::lock_guard lock(g_controlMutex);
     if (g_controlSocket == INVALID_SOCKET) return false;
     const int sent = send(
@@ -298,6 +301,14 @@ bool send_control_over_helper(const std::string& command) {
         0
     );
     if (sent != static_cast<int>(command.size())) {
+        close_control_socket_locked();
+        return false;
+    }
+    if (!expectReply) return true;
+
+    char reply[16]{};
+    const int received = recv(g_controlSocket, reply, sizeof(reply) - 1, 0);
+    if (received <= 0 || std::string(reply, received) != "ok\n") {
         close_control_socket_locked();
         return false;
     }
@@ -332,6 +343,13 @@ bool open_control_socket(unsigned short port, const std::string& token) {
         handle,
         SOL_SOCKET,
         SO_SNDTIMEO,
+        reinterpret_cast<const char*>(&timeout),
+        sizeof(timeout)
+    );
+    setsockopt(
+        handle,
+        SOL_SOCKET,
+        SO_RCVTIMEO,
         reinterpret_cast<const char*>(&timeout),
         sizeof(timeout)
     );
@@ -1775,7 +1793,10 @@ bool send_volume_over_helper(int step) {
 }
 
 bool send_playback_over_helper(bool paused) {
-    return send_control_over_helper(paused ? "pause\n" : "resume\n");
+    return send_control_over_helper(
+        paused ? "pause\n" : "resume\n",
+        true
+    );
 }
 
 void note_speaker_step(int step) {

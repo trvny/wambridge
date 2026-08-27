@@ -650,7 +650,9 @@ class PcmCliTests(TestCase):
         watcher, connection = self._connected_watcher()
 
         watcher.set_paused(True)
+        self.assertTrue(watcher._paused.is_set())
         watcher.set_paused(False)
+        self.assertFalse(watcher._paused.is_set())
 
         self.assertEqual(
             connection.sent,
