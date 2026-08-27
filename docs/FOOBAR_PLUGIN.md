@@ -71,11 +71,10 @@ Optional keys and overrides:
   `0..10000`, default `0`. Values outside that fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,
 - `buffer_extra` or `WAMBRIDGE_BUFFER_EXTRA`, milliseconds of queue kept on top of foobar's
-  own buffer length, `0..10000`, default `2000`. Capacity is delay on this path almost one
-  for one - the queue measured 3.79-3.99 s full of a 4.0 s capacity - so this is the largest
-  single share of the roughly six seconds that reach the ear, and it was chosen rather than
-  measured. Lower it to find where the pipe starves; starving shows up as `free` climbing in
-  the `CLOCK` line and as audible dropouts,
+  own buffer length, `0..10000`, default `0`. A 2026-08-27 hardware sweep at
+  1500/1000/500/0 found no starvation. At 0, the 2.0 s capacity stayed 1.83-2.00 s full
+  for three minutes and `free` stayed in 0-167 ms; higher values add almost the same
+  amount of delay as queue. The remaining 2.0 s floor has not been tested lower,
 - `start_volume_max` or `WAMBRIDGE_START_VOLUME_MAX`, the highest raw step the **first**
   helper of a playback session may start at, `0..30`, default `3`, `0` disables. Not a
   volume limit — the slider governs everything after the start. See the section below for

@@ -243,7 +243,7 @@ class FoobarSourceTests(TestCase):
         settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
         header = SETTINGS_HEADER.read_text(encoding="utf-8")
 
-        self.assertIn("kDefaultBufferExtraMs = 2000", header)
+        self.assertIn("kDefaultBufferExtraMs = 0", header)
         self.assertIn('L"WAMBRIDGE_BUFFER_EXTRA"', settings)
         self.assertIn('L"buffer_extra"', settings)
         self.assertIn("kMaximumBufferExtraMs", settings)
