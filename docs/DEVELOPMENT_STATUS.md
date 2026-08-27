@@ -332,7 +332,10 @@ operating system records.
    hand the speaker back muted. The accepted route uses raw speaker volume on the helper's existing
    `55001` connection: pause stores the active level, writes 0, keeps paced PCM silence flowing, and
    resume/teardown restores the saved or externally updated level. `VolumeLevel` broadcasts refresh
-   that target, while the helper ignores its own pause-generated zero for restore purposes.
+   that target; a nonzero external change during pause is immediately countered with raw 0 while
+   remaining the resume target, and the helper ignores its own pause-generated zero for restore
+   purposes. A matched teardown restore rejection is retried once and then reported as
+   `restore=rejected` rather than being hidden behind an otherwise clean Stop.
 
    The final artifact `75daa1a` passed the physical M5 checklist through authenticated Beefweb:
    an external raw-volume change to 3 survived a **40 s pause** at 0 and resumed to exactly 3 with

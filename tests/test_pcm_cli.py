@@ -732,7 +732,7 @@ class PcmCliTests(TestCase):
             ],
         )
 
-    def test_external_volume_event_while_paused_updates_resume_target(self) -> None:
+    def test_external_volume_event_while_paused_updates_target_and_reapplies_zero(self) -> None:
         watcher, connection = self._connected_watcher(volume_state=7)
         watcher.set_pause_volume(True)
         event = WamEvent(
@@ -750,9 +750,11 @@ class PcmCliTests(TestCase):
             connection.sent,
             [
                 ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 0, "dec")], True),
                 ("SetVolume", [("volume", 4, "dec")], True),
             ],
         )
+        self.assertEqual(watcher._current_volume, 4)
 
     def test_pause_volume_preserves_an_already_zero_speaker(self) -> None:
         watcher, connection = self._connected_watcher(volume_state=0)
@@ -792,6 +794,20 @@ class PcmCliTests(TestCase):
                 ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
             ],
         )
+
+    def test_release_retries_and_reports_a_rejected_pause_restore(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=7)
+        watcher.arm()
+        watcher.set_pause_volume(True)
+        connection._rejection = "Speaker rejected SetVolume (error 3)"
+        connection._rejection_method = "SetVolume"
+
+        watcher.release()
+
+        restore = ("SetVolume", [("volume", 7, "dec")], True)
+        self.assertEqual(connection.sent.count(restore), 2)
+        self.assertEqual(watcher.release_summary, "stop=sent restore=rejected sleep=off")
+        self.assertEqual(watcher._pause_restore_volume, 7)
 
     def test_release_preserves_a_speaker_that_was_already_at_zero(self) -> None:
         watcher, connection = self._connected_watcher(volume_state=0)

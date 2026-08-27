@@ -343,12 +343,13 @@ class PlaybackWatcher:
         # A stop, track change or foobar shutdown does not have to deliver a
         # matching resume callback. Restore the raw volume we replaced with 0 for pause
         # while the persistent 55001 connection is still alive.
-        self._restore_pause_volume_quietly()
+        restore_status = self._restore_pause_volume_quietly()
+        restore_suffix = f" restore={restore_status}" if restore_status else ""
         if not self._armed.is_set():
             # No URL was ever offered, so there is no playback session of ours
             # to end. Sending a stop anyway would reach past this helper into
             # whatever else the speaker is doing.
-            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}{restore_suffix}"
             return
         with self._response_lock:
             refused = self._results.get(_PLAYBACK_COMMAND)
@@ -360,7 +361,7 @@ class PlaybackWatcher:
             # that instead. Arming happens before the offer, so it cannot carry
             # this distinction on its own.
             LOGGER.debug("Not releasing a playback the speaker refused")
-            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}{restore_suffix}"
             return
         if not self._stream_active.is_set():
             # Offered and never taken up. The rejection above only catches a
@@ -372,7 +373,7 @@ class PlaybackWatcher:
             # guess does the same harm the rejection case avoids: it reaches
             # past this helper into whatever the speaker is really doing.
             LOGGER.debug("Not releasing a stream the speaker never requested")
-            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}{restore_suffix}"
             return
 
         # `pause` rather than `stop`: measured on this firmware, the URL and DLNA
@@ -385,14 +386,14 @@ class PlaybackWatcher:
                 arguments=[("playbackcontrol", "pause", "str")],
             )
         except (StreamError, WamApiError) as error:
-            self.release_summary = f"stop=unreachable {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=unreachable {self._unarmed_sleep_field()}{restore_suffix}"
             LOGGER.warning("Could not stop speaker playback: %s", error)
             return
         rejection = self.wait_for_response(
             _STOP_COMMAND,
             timeout=_STOP_ACK_TIMEOUT,
         )
-        self.release_summary = "stop=rejected" if rejection else "stop=sent"
+        self.release_summary = ("stop=rejected" if rejection else "stop=sent") + restore_suffix
         if rejection:
             LOGGER.warning("%s while releasing the speaker", rejection)
 
@@ -573,6 +574,7 @@ class PlaybackWatcher:
             break
         if level is None:
             return
+        reapply_zero = False
         with self._volume_lock:
             self._current_volume = level
             # Non-zero speaker changes while paused become the target for resume.
@@ -581,12 +583,38 @@ class PlaybackWatcher:
             # saved target merely because the firmware changed event shape.
             if self._pause_restore_volume is not None and level != 0:
                 self._pause_restore_volume = level
+                reapply_zero = external
+        if reapply_zero:
+            # A physical button/second client temporarily made the speaker audible
+            # while foobar is still paused. Preserve that level for resume, but
+            # immediately put the live URL/PCM session back at raw 0. This runs on
+            # the listener thread, so it must be fire-and-forget rather than wait
+            # for the SetVolume response that this same thread has to receive.
+            try:
+                self._send_volume_state(0)
+            except (StreamError, WamApiError) as error:
+                self._error = f"Could not reapply pause volume: {error}"
+                LOGGER.warning("%s", self._error)
+                return
+            with self._volume_lock:
+                self._current_volume = 0
 
-    def _restore_pause_volume_quietly(self) -> None:
-        try:
-            self._restore_pause_volume()
-        except (StreamError, WamApiError) as error:
-            LOGGER.warning("Could not restore speaker volume after pause: %s", error)
+    def _restore_pause_volume_quietly(self) -> str | None:
+        for attempt in range(2):
+            try:
+                self._restore_pause_volume()
+                return None
+            except StreamError as error:
+                LOGGER.warning("Could not restore speaker volume after pause: %s", error)
+                return "unreachable"
+            except WamApiError as error:
+                rejected = "rejected" in str(error).casefold()
+                if rejected and attempt == 0:
+                    LOGGER.warning("Speaker rejected pause-volume restore; retrying once: %s", error)
+                    continue
+                LOGGER.warning("Could not restore speaker volume after pause: %s", error)
+                return "rejected" if rejected else "unreachable"
+        return "rejected"
 
     def wait_for_start(self, *, timeout: float) -> None:
         for budget in _wait_slices(timeout):
