@@ -382,6 +382,8 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_pauseMuted.store(muted);", source)
         self.assertIn("sendSilence = m_flushing || m_paused.load();", source)
         self.assertIn("if (wasMuted && !muted) m_restart = true;", source)
+        self.assertIn("SO_RCVTIMEO", source)
+        self.assertIn("std::memchr(reply, '\\n'", source)
 
     def test_force_play_is_a_transient_drain_request(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")

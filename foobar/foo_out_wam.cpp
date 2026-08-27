@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
@@ -304,8 +305,22 @@ bool send_control_over_helper(
     if (!expectReply) return true;
 
     char reply[16]{};
-    const int received = recv(g_controlSocket, reply, sizeof(reply) - 1, 0);
-    if (received <= 0 || std::string(reply, received) != "ok\n") {
+    int total = 0;
+    while (total < static_cast<int>(sizeof(reply) - 1)) {
+        const int received = recv(
+            g_controlSocket,
+            reply + total,
+            static_cast<int>(sizeof(reply) - 1) - total,
+            0
+        );
+        if (received <= 0) {
+            close_control_socket_locked();
+            return false;
+        }
+        total += received;
+        if (std::memchr(reply, '\n', static_cast<size_t>(total)) != nullptr) break;
+    }
+    if (std::string(reply, total) != "ok\n") {
         close_control_socket_locked();
         return false;
     }
@@ -340,6 +355,13 @@ bool open_control_socket(unsigned short port, const std::string& token) {
         handle,
         SOL_SOCKET,
         SO_SNDTIMEO,
+        reinterpret_cast<const char*>(&timeout),
+        sizeof(timeout)
+    );
+    setsockopt(
+        handle,
+        SOL_SOCKET,
+        SO_RCVTIMEO,
         reinterpret_cast<const char*>(&timeout),
         sizeof(timeout)
     );
