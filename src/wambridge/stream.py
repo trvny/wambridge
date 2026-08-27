@@ -17,7 +17,7 @@ from typing import BinaryIO
 LOGGER = logging.getLogger(__name__)
 CHUNK_SIZE = 64 * 1024
 STARTUP_CHUNK_SIZE = 4096
-STARTUP_SILENCE_MS = 1500
+STARTUP_SILENCE_MS = 0
 MAX_STARTUP_PAYLOAD_SIZE = 64 * 1024
 _CONTINUOUS_SOURCES: ContextVar[frozenset[str]] = ContextVar(
     "wambridge_continuous_sources",

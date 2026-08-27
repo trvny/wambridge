@@ -319,11 +319,10 @@ operating system records.
    watch for the pipe starving, which shows up as `free` climbing in the `CLOCK` line and
    audible dropouts, not as a lower number. Below `buffer_extra=0` the remaining 2.0 s is
    the clamp floor and needs its own change.
-3. **Decide whether `startup_silence` should default to 0.** It has now run at 0 for a whole
-   session on hardware, repeatedly reaching `WAMBRIDGE PLAYING`, and it is 1.5 s of pure
-   delay on a path of six. The default is still 1500, so every stock installation pays it and
-   the measured figures above do not describe one. Nobody ever recorded what the silence was
-   for, which is the only reason it is still there.
+3. ~~**Decide whether `startup_silence` should default to 0.**~~ **Done 2026-08-27.** The
+   default is now 0 in both the helper and foobar settings. Hardware had already passed a full
+   session at 0; a fresh short check on the physical M5 also held the seekbar at 1.00x and
+   stopped with no helper or FFmpeg left behind.
 4. **Route pause onto `55001`** (`SetPlaybackControl pause`/`resume`), then stop, seek and
    skip. Same shape as the volume fix. Baseline measured 2026-08-08: about 5 s to fall
    silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and

@@ -422,7 +422,7 @@ class FoobarSourceTests(TestCase):
         settings = SETTINGS_SOURCE.read_text(encoding="utf-8")
         header = SETTINGS_HEADER.read_text(encoding="utf-8")
 
-        self.assertIn("kDefaultStartupSilenceMs = 1500", header)
+        self.assertIn("kDefaultStartupSilenceMs = 0", header)
         self.assertIn("int startupSilenceMs = kDefaultStartupSilenceMs;", header)
         self.assertIn('L"WAMBRIDGE_STARTUP_SILENCE"', settings)
         self.assertIn('L"startup_silence"', settings)
