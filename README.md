@@ -45,7 +45,7 @@ rather than a claim about current stock behavior.
 
 Playback itself is unaffected — the stream runs at wall-clock speed and the
 seekbar is honest. **Pause, stop and skip still carry pipeline latency** because they act
-through the PCM path; the volume slider is already routed to the speaker itself. Lowering
+through the PCM path; with `hardware_volume=1`, the volume slider is routed to the speaker instead. Lowering
 the bitrate makes the speaker prebuffer worse rather than better, and raising it helped by
 about a second in the older measurements. The remaining latency-sensitive controls belong
 on the speaker's own `55001` command path, which answers in about a second, rather
