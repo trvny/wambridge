@@ -313,10 +313,14 @@ operating system records.
 1. ~~**Physical checklist for PR #30**~~ (routed volume slider). PR #30 is closed; the routed
    slider is in `Stable on main` above. Struck 2026-08-19 during a claim-by-claim audit.
 2. ~~**Find how small the extra host buffer can get.**~~ **Done 2026-08-27.** The physical
-   M5 passed 1500, 1000, 500 and 0 ms without a transport sign of starvation. At 0, the
-   three-minute run held a 2.0 s capacity 1.832-1.999 s full across 153 `CLOCK` samples;
-   `free` stayed 0-167 ms and the helper stopped cleanly. `buffer_extra` now defaults to
-   0. The remaining 2.0 s `clamp(bufferLength, 2.0, 30.0)` floor is a separate experiment.
+   M5 passed 1500, 1000, 500 and 0 ms without a transport sign of starvation. At 0, a
+   three-minute run held the 2.0 s capacity 1.832-1.999 s full across 153 `CLOCK` samples,
+   then a ~24-minute Andor session stayed stable and sounded clean to the owner. The full
+   checklist also passed: pause/resume froze and resumed the same clock, seek and manual
+   next restarted cleanly with one helper/FFmpeg pair, a complete 3:23 track transitioned
+   naturally into the next track without restarting the transport, and Stop left no helper
+   or FFmpeg behind. `buffer_extra` now defaults to 0; the remaining 2.0 s
+   `clamp(bufferLength, 2.0, 30.0)` floor is a separate experiment.
 3. ~~**Decide whether `startup_silence` should default to 0.**~~ **Done 2026-08-27.** The
    default is now 0 in both the helper and foobar settings. Hardware had already passed a full
    session at 0; a fresh short check on the physical M5 also held the seekbar at 1.00x and
