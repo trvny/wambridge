@@ -774,9 +774,24 @@ returns, besides the title and artwork, a ready-to-play URL:
 <stationurl>http://opml.radiotime.com/Tune.ashx?id=s87779&amp;partnerId=...&amp;serial=...</stationurl>
 ```
 
-That is a plain HTTP stream URL carrying the speaker's own TuneIn partner id and serial. It
-means browsing does not have to end in a preset write: browse, read the station URL, hand it to
-`SetUrlPlayback`, which this project already implements. The whole of rung 3 can stay untouched.
+**That URL is not ready to play, and an earlier revision of this section said it was.** It
+claimed browsing could end in "read the station URL, hand it to `SetUrlPlayback`", which was
+written from the shape of the URL rather than from a test. Measured 2026-08-28: `Tune.ashx`
+answers `Content-Type: audio/x-mpegurl` with a one-line playlist - for `s15984` it is
+`http://stream3.polskieradio.pl:8954/` - and `SetUrlPlayback` on the URL exactly as
+`GetStationData` returns it is refused with `ErrorEvent` `ng`.
+
+Resolving that playlist on the client is the first half of the answer. The second half is not
+established. Handed the resolved stream URL instead, the speaker answered **nothing at all** -
+no `StartPlaybackEvent`, no `ErrorEvent` over 25 s on the persistent connection, and no HTTP
+response to the one-shot form of the same command, which had answered the rejection above
+readily enough. The speaker was in `submode=cp` throughout, but that is normal for URL playback
+and not a fault in itself, so it explains nothing here. What silences the command is open.
+
+Until it is answered, the way to play a browsed station is the one this project already uses for
+every other radio: resolve the id and relay the stream from the client, rather than pointing the
+speaker at the internet.
+
 The `partnerId` and `serial` are the speaker's credentials with TuneIn and are redacted here.
 
 **Browsing costs nothing, and an earlier revision of this section said otherwise.** That
