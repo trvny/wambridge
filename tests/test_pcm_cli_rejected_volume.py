@@ -1,4 +1,5 @@
 from unittest import TestCase
+from unittest.mock import patch
 
 from wambridge.pcm_cli import PlaybackWatcher
 from wambridge.samsung import WamApiError
@@ -14,10 +15,14 @@ class SilentControlConnection:
 
 
 class RejectedVolumeCacheTests(TestCase):
-    def test_rejected_routed_volume_invalidates_optimistic_cache(self) -> None:
+    def _watcher(self, volume: int = 3) -> PlaybackWatcher:
         watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
         watcher._connection = SilentControlConnection()
-        watcher._current_volume = 3
+        watcher._current_volume = volume
+        return watcher
+
+    def test_rejected_routed_volume_invalidates_optimistic_cache(self) -> None:
+        watcher = self._watcher()
 
         watcher.set_volume(12)
         self.assertEqual(watcher._current_volume, 12)
@@ -36,3 +41,33 @@ class RejectedVolumeCacheTests(TestCase):
         self.assertIsNone(watcher._current_volume)
         with self.assertRaisesRegex(WamApiError, "volume is unknown"):
             watcher.set_pause_volume(True)
+
+    def test_new_volume_setter_supersedes_older_pending_setters(self) -> None:
+        watcher = self._watcher()
+
+        watcher.set_volume(12)
+        watcher.set_volume(3)
+
+        self.assertEqual(watcher._pending, ["SetVolume"])
+
+    def test_silent_pause_setter_expires_before_external_volume_event(self) -> None:
+        watcher = self._watcher()
+
+        with patch("wambridge.pcm_cli._PAUSE_ACK_TIMEOUT", 0.01):
+            watcher.set_pause_volume(True)
+
+        self.assertEqual(watcher._pending, [])
+        event = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "4"},
+        )
+        command = watcher._match_pending(event)
+        self.assertIsNone(command)
+
+        watcher._observe_volume_event(event, external=command is None)
+
+        self.assertEqual(watcher._pause_restore_volume, 4)
+        self.assertEqual(watcher._current_volume, 0)

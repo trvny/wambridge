@@ -640,6 +640,7 @@ class PlaybackWatcher:
                 if event is not None:
                     return event
             if monotonic() >= deadline or self._stop.wait(timeout=0.05):
+                self._retire_pending(method)
                 return None
 
     def wait_for_response(self, method: str, *, timeout: float) -> str | None:
@@ -655,7 +656,13 @@ class PlaybackWatcher:
                 if method in self._results:
                     return self._results[method] or None
             if monotonic() >= deadline or self._stop.wait(timeout=0.05):
+                self._retire_pending(method)
                 return None
+
+    def _retire_pending(self, method: str) -> None:
+        """Stop treating an unanswered command as a future response target."""
+        with self._response_lock:
+            self._pending[:] = [pending for pending in self._pending if pending != method]
 
     def _send_command(
         self,
@@ -671,6 +678,13 @@ class PlaybackWatcher:
         with self._response_lock:
             self._results.pop(method, None)
             self._response_events.pop(method, None)
+            if method == _VOLUME_COMMAND:
+                # SetVolume has no request ID and may answer with silence. A newer
+                # setter supersedes every older one, otherwise an old pending entry
+                # can steal a later unsolicited VolumeLevel broadcast.
+                self._pending[:] = [
+                    pending for pending in self._pending if pending != method
+                ]
             self._pending.append(method)
         try:
             connection.send(
@@ -679,6 +693,7 @@ class PlaybackWatcher:
                 power_on=power_on,
             )
         except (OSError, WamEventError) as error:
+            self._retire_pending(method)
             raise WamApiError(
                 f"Cannot reach Samsung WAM at "
                 f"{self._speaker_ip}:{self._port}: {error}"
