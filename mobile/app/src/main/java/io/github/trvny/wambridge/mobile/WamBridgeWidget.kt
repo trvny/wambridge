@@ -36,30 +36,31 @@ class WamBridgeWidget : AppWidgetProvider() {
             ACTION_VOLUME_DOWN,
             ACTION_VOLUME_UP,
             -> runRemoteAction(context, intent.action.orEmpty())
+            ACTION_STOP_RADIO -> stopRadio(context)
         }
     }
 
     private fun toggleBridge(context: Context) {
-        if (RendererService.running) {
+        if (RendererService.active) {
             context.startService(
                 Intent(context, RendererService::class.java).apply {
                     action = RendererService.ACTION_STOP
                 },
             )
             updateAll(context, active = false)
-            refreshAfterTransition(context, expectedActive = false)
+            refreshAfterTransition(context)
             return
         }
 
         val appContext = context.applicationContext
-        updateAll(appContext, active = true)
+        updateAll(appContext, active = false)
         try {
             appContext.startForegroundService(
                 Intent(appContext, RendererService::class.java).apply {
                     action = RendererService.ACTION_START
                 },
             )
-            refreshAfterTransition(appContext, expectedActive = true)
+            refreshAfterTransition(appContext)
         } catch (error: Exception) {
             updateAll(appContext, active = false)
             showToast(appContext, error.message ?: error.javaClass.simpleName)
@@ -71,10 +72,25 @@ class WamBridgeWidget : AppWidgetProvider() {
         val appContext = context.applicationContext
         Thread({
             try {
-                check(!RendererService.running && !RadioService.running) {
+                if (RadioService.running) {
+                    val radioAction = when (action) {
+                        ACTION_PLAY_PAUSE -> RadioService.ACTION_TOGGLE_PAUSE
+                        ACTION_MUTE -> RadioService.ACTION_MUTE
+                        ACTION_VOLUME_DOWN -> RadioService.ACTION_VOLUME_DOWN
+                        ACTION_VOLUME_UP -> RadioService.ACTION_VOLUME_UP
+                        else -> null
+                    }
+                    if (radioAction != null) {
+                        appContext.startService(
+                            Intent(appContext, RadioService::class.java).apply { this.action = radioAction },
+                        )
+                        return@Thread
+                    }
+                }
+                check(!RendererService.busy) {
                     "The local adapter currently owns speaker control"
                 }
-                val target = SpeakerTarget.resolve(appContext, verifySaved = false)
+                val target = SpeakerTarget.resolve(appContext)
                 if (target == null) {
                     showToast(appContext, "No WAM speaker found")
                     openSettings(appContext)
@@ -108,12 +124,19 @@ class WamBridgeWidget : AppWidgetProvider() {
         }, "wam-widget-control").start()
     }
 
-    private fun refreshAfterTransition(context: Context, expectedActive: Boolean) {
+    private fun stopRadio(context: Context) {
+        if (!RadioService.running) return
+        context.startService(
+            Intent(context, RadioService::class.java).apply { action = RadioService.ACTION_STOP },
+        )
+    }
+
+    private fun refreshAfterTransition(context: Context) {
         val pending = goAsync()
         val appContext = context.applicationContext
         Thread({
             try {
-                awaitRendererState(expectedActive)
+                awaitRendererTransition()
                 updateAll(appContext)
             } finally {
                 pending.finish()
@@ -121,10 +144,10 @@ class WamBridgeWidget : AppWidgetProvider() {
         }, "wam-widget-refresh").start()
     }
 
-    private fun awaitRendererState(expectedActive: Boolean) {
+    private fun awaitRendererTransition() {
         val deadline = SystemClock.elapsedRealtime() + TRANSITION_TIMEOUT_MS
         while (
-            RendererService.running != expectedActive &&
+            RendererService.transitioning &&
             SystemClock.elapsedRealtime() < deadline
         ) {
             Thread.sleep(100)
@@ -149,6 +172,7 @@ class WamBridgeWidget : AppWidgetProvider() {
         private const val ACTION_MUTE = "trvny.wambridge.mobile.WIDGET_MUTE"
         private const val ACTION_VOLUME_DOWN = "trvny.wambridge.mobile.WIDGET_VOLUME_DOWN"
         private const val ACTION_VOLUME_UP = "trvny.wambridge.mobile.WIDGET_VOLUME_UP"
+        private const val ACTION_STOP_RADIO = "trvny.wambridge.mobile.WIDGET_STOP_RADIO"
         private const val TRANSITION_TIMEOUT_MS = 20_000L
         private const val EXPANDED_MIN_DP = 100
 
@@ -202,6 +226,14 @@ class WamBridgeWidget : AppWidgetProvider() {
             appWidgetId: Int,
         ) {
             val views = RemoteViews(context.packageName, R.layout.widget_wam_bridge_controls)
+            views.setTextViewText(
+                R.id.widget_status,
+                if (RadioService.running) RadioService.lastStatus else "TuneIn / speaker",
+            )
+            views.setTextViewText(
+                R.id.widget_play_pause,
+                if (RadioService.running && RadioService.paused) "▶" else "⏯",
+            )
             views.setOnClickPendingIntent(
                 R.id.widget_play_pause,
                 broadcast(context, appWidgetId, ACTION_PLAY_PAUSE, 1),
@@ -217,6 +249,10 @@ class WamBridgeWidget : AppWidgetProvider() {
             views.setOnClickPendingIntent(
                 R.id.widget_volume_up,
                 broadcast(context, appWidgetId, ACTION_VOLUME_UP, 4),
+            )
+            views.setOnClickPendingIntent(
+                R.id.widget_stop,
+                broadcast(context, appWidgetId, ACTION_STOP_RADIO, 5),
             )
             manager.updateAppWidget(appWidgetId, views)
         }

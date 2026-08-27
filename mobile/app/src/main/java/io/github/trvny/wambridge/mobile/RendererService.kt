@@ -17,9 +17,12 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener {
+    enum class Phase { STOPPED, STARTING, RUNNING, STOPPING }
+
     private var renderer: UpnpRenderer? = null
     private var wamChannel: SamsungWamChannel? = null
     private var rendererState: RendererState? = null
@@ -31,6 +34,9 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
     private val idleLock = Any()
     private var idleRelease: ScheduledFuture<*>? = null
     private val startPending = AtomicBoolean(false)
+    private val desiredRunning = AtomicBoolean(false)
+    private val commandGeneration = AtomicInteger(0)
+    @Volatile private var latestStartId = 0
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, WORKER_THREAD_NAME).apply { isDaemon = true }
     }
@@ -49,26 +55,31 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action ?: ACTION_START) {
             ACTION_STOP -> {
-                startPending.set(false)
+                latestStartId = startId
+                if (desiredRunning.getAndSet(false)) commandGeneration.incrementAndGet()
+                if (phase != Phase.STOPPED) {
+                    lastStatus = "Stopping renderer…"
+                    setPhase(Phase.STOPPING)
+                    publish(lastStatus)
+                }
                 worker.execute {
-                    stopRenderer()
-                    stopSelf()
+                    if (!desiredRunning.get()) {
+                        stopRenderer()
+                        if (!desiredRunning.get()) stopSelfResult(startId)
+                    }
                 }
                 return START_NOT_STICKY
             }
 
             ACTION_START -> {
+                latestStartId = startId
+                if (!desiredRunning.getAndSet(true)) commandGeneration.incrementAndGet()
                 promoteToForeground("Starting...")
                 if (running) {
                     publish(lastStatus)
-                } else if (startPending.compareAndSet(false, true)) {
-                    worker.execute {
-                        try {
-                            startRenderer()
-                        } finally {
-                            startPending.set(false)
-                        }
-                    }
+                } else {
+                    setPhase(Phase.STARTING)
+                    enqueueStart()
                 }
             }
         }
@@ -77,7 +88,10 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
 
     override fun onDestroy() {
         destroyed = true
+        desiredRunning.set(false)
+        commandGeneration.incrementAndGet()
         startPending.set(false)
+        setPhase(Phase.STOPPING)
         cancelIdleRelease()
 
         try {
@@ -93,28 +107,50 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startRenderer() {
-        if (destroyed) return
+    private fun enqueueStart() {
+        if (destroyed || !desiredRunning.get() || running) return
+        if (!startPending.compareAndSet(false, true)) return
+        val generation = commandGeneration.get()
+        val startId = latestStartId
+        worker.execute {
+            try {
+                if (shouldKeepStarting(generation)) startRenderer(generation, startId)
+            } finally {
+                startPending.set(false)
+                if (desiredRunning.get() && !running && !destroyed) {
+                    enqueueStart()
+                } else if (!desiredRunning.get() && !running) {
+                    stopSelfResult(startId)
+                }
+            }
+        }
+    }
+
+    private fun startRenderer(generation: Int, startId: Int) {
+        if (!shouldKeepStarting(generation)) return
 
         releaseRadio()
+        if (!shouldKeepStarting(generation)) return
 
         val preferences = getSharedPreferences(PREFS, MODE_PRIVATE)
         lastStatus = "Finding WAM speaker on Wi-Fi…"
         publish(lastStatus)
-        val target = SpeakerTarget.resolve(applicationContext)
+        val target = SpeakerTarget.resolve(applicationContext) { shouldKeepStarting(generation) }
+        if (!shouldKeepStarting(generation)) return
         if (target == null) {
             lastStatus = "No WAM speaker found on Wi-Fi."
             publish(lastStatus)
-            stopRenderer()
-            stopSelf()
+            failCurrentStart(generation, startId)
             return
         }
 
         if (renderer != null && speakerIp == target) {
+            lastStatus = "Ready · ${renderer!!.localAddress.hostAddress}:${renderer!!.port} → $speakerIp · speaker released"
+            setPhase(Phase.RUNNING)
             publish(lastStatus)
             return
         }
-        stopRenderer(removeForeground = false)
+        stopRenderer(removeForeground = false, updatePhase = false)
 
         speakerIp = target
         clientUuid = preferences.getString(KEY_CLIENT_UUID, null)
@@ -131,7 +167,7 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
             val state = RendererState(rendererUdn)
             activeRenderer = UpnpRenderer(this, state, this, target)
             activeRenderer.start()
-            if (destroyed || Thread.currentThread().isInterrupted) return
+            if (!shouldKeepStarting(generation)) return
 
             rendererState = state
             renderer = activeRenderer
@@ -139,14 +175,14 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
 
             ownsPlayback = false
             safeVolumeApplied = false
-            running = true
-            notifyRunningStateChanged()
             lastStatus = "Ready · ${renderer!!.localAddress.hostAddress}:${renderer!!.port} → $speakerIp · speaker released"
+            setPhase(Phase.RUNNING)
             publish(lastStatus)
         } catch (error: Exception) {
-            lastStatus = "Could not start adapter: ${error.message ?: error.javaClass.simpleName}"
-            stopRenderer()
-            stopSelf()
+            if (shouldKeepStarting(generation)) {
+                lastStatus = "Could not start adapter: ${error.message ?: error.javaClass.simpleName}"
+                failCurrentStart(generation, startId)
+            }
         } finally {
             try {
                 activeRenderer?.close()
@@ -154,6 +190,16 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
                 // Best effort while abandoning a partially started renderer.
             }
         }
+    }
+
+    private fun shouldKeepStarting(generation: Int): Boolean =
+        !destroyed && desiredRunning.get() && commandGeneration.get() == generation &&
+            !Thread.currentThread().isInterrupted
+
+    private fun failCurrentStart(generation: Int, startId: Int) {
+        if (commandGeneration.get() == generation) desiredRunning.set(false)
+        stopRenderer()
+        stopSelfResult(startId)
     }
 
     private fun releaseRadio() {
@@ -226,7 +272,11 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         }
     }
 
-    private fun stopRenderer(removeForeground: Boolean = true) {
+    private fun stopRenderer(
+        removeForeground: Boolean = true,
+        updatePhase: Boolean = true,
+    ) {
+        if (updatePhase && phase != Phase.STOPPED) setPhase(Phase.STOPPING)
         cancelIdleRelease()
         rendererState?.transportState = "STOPPED"
         if (ownsPlayback) {
@@ -246,8 +296,10 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         }
         renderer = null
         rendererState = null
-        running = false
-        notifyRunningStateChanged()
+        if (updatePhase) {
+            lastStatus = "Stopped"
+            setPhase(Phase.STOPPED)
+        }
         speakerIp = ""
         clientUuid = ""
         if (removeForeground) stopForeground(STOP_FOREGROUND_REMOVE)
@@ -399,7 +451,13 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
      * Both read the flag themselves, so they only need waking up; neither call
      * needs the main thread, and neither may take playback down if it fails.
      */
-    private fun notifyRunningStateChanged() {
+    private fun setPhase(value: Phase) {
+        if (phase == value) return
+        phase = value
+        notifyRendererStateChanged()
+    }
+
+    private fun notifyRendererStateChanged() {
         val context = applicationContext
         try {
             WamBridgeWidget.updateAll(context)
@@ -479,8 +537,16 @@ class RendererService : Service(), RendererCallbacks, SamsungWamChannel.Listener
         private const val WORKER_THREAD_NAME = "wam-mobile-service"
         private const val TAG = "WamBridgeRenderer"
 
-        @Volatile var running: Boolean = false
+        @Volatile var phase: Phase = Phase.STOPPED
             private set
+        val running: Boolean
+            get() = phase == Phase.RUNNING
+        val active: Boolean
+            get() = phase == Phase.STARTING || phase == Phase.RUNNING
+        val transitioning: Boolean
+            get() = phase == Phase.STARTING || phase == Phase.STOPPING
+        val busy: Boolean
+            get() = phase != Phase.STOPPED
         @Volatile var lastStatus: String = "Stopped"
             private set
 

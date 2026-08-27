@@ -1,121 +1,50 @@
-"""Bundled station packs for quick local setup."""
+"""Bundled station packs shared by desktop and the Android app."""
 
 from __future__ import annotations
 
+import json
+from importlib.resources import files
+
 from .stations import RadioStation, StationError
 
-TOP3 = (
-    RadioStation(
-        # No tunein_id here on purpose. BBC Radio 1 resolves to HLS only
-        # (measured 2026-08-19, ids s24939 and s347238), so an id would cost a
-        # request per play and always come back empty. These HLS URLs are
-        # correct for the bridge, which is the only way this station reaches
-        # the speaker at all.
-        alias="bbc1",
-        url=(
-            "https://as-hls-ww-live.akamaized.net/pool_01505109/live/ww/"
-            "bbc_radio_one/bbc_radio_one.isml/"
-            "bbc_radio_one-audio=320000.norewind.m3u8"
-        ),
-        fallback_urls=(
-            "https://a.files.bbci.co.uk/ms6/live/"
-            "3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/hls/"
-            "nonuk/audio_syndication_low_sbr_v1/aks/bbc_radio_one.m3u8",
-        ),
-    ),
-    RadioStation(
-        alias="trojka",
-        url="http://41.dktr.pl:8000/trojka.ogg",
-        fallback_urls=("http://41.dktr.pl:8000/trojka2.ogg",),
-        # Both saved URLs are Ogg, which plays fine through the local FFmpeg
-        # bridge and is silent when handed straight to the speaker. The id
-        # resolves to a plain MP3 endpoint, so it is tried first and the direct
-        # path gets something it can take.
-        tunein_id="s15984",
-    ),
-    RadioStation(
-        alias="czworka",
-        url="http://stream3.polskieradio.pl:8906/;stream",
-        fallback_urls=("http://mp3.polskieradio.pl:8956/;",),
-        tunein_id="s118200",
-    ),
-)
+_DATA_FILE = "station_packs.json"
 
-FAVORITES = TOP3 + (
-    RadioStation(
-        alias="radioparadise",
-        url="http://stream.radioparadise.com/ogg-192m",
-        fallback_urls=("http://stream.radioparadise.com/flacm",),
-    ),
-    RadioStation(
-        alias="electroswing",
-        url="https://streamer.radio.co/s2c3cc784b/listen",
-        fallback_urls=("https://streamer.radio.co:80/s2c3cc784b/listen",),
-    ),
-    RadioStation(
-        alias="bbc6",
-        url=(
-            "https://as-hls-ww-live.akamaized.net/pool_81827798/live/ww/"
-            "bbc_6music/bbc_6music.isml/"
-            "bbc_6music-audio=320000.norewind.m3u8"
-        ),
-    ),
-    RadioStation(
-        alias="radioplus",
-        url="https://pl05.cdn.eurozet.pl/plu-gdn.mp3",
-        fallback_urls=("https://ic2.smcdn.pl/4070-1.mp3",),
-    ),
-    RadioStation(
-        alias="minimalmix",
-        url="http://orion.shoutca.st:8750/",
-    ),
-    RadioStation(
-        alias="radiozet",
-        url="http://zet-net-01.cdn.eurozet.pl:8400/",
-        fallback_urls=(
-            "https://r.dcs.redcdn.pl/sc/o2/Eurozet/live/audio.livx",
-        ),
-    ),
-    RadioStation(
-        alias="rmfmaxxx",
-        url="https://rs201-krk.rmfstream.pl/rmf_maxxx",
-        fallback_urls=("http://195.150.20.7/rmf_maxxx",),
-    ),
-    RadioStation(
-        alias="kaszebe",
-        url="http://x.radiokaszebe.pl:9000/;",
-        fallback_urls=("https://stream4.nadaje.com:10125/kaszebe128",),
-    ),
-    RadioStation(
-        alias="cinemix",
-        url="https://kathy.torontocast.com:1190/stream",
-    ),
-    RadioStation(
-        alias="soundtrack",
-        url="https://quincy.torontocast.com:2410/stream",
-    ),
-    RadioStation(
-        alias="thedotradio",
-        url="http://c16.radioboss.fm:8026/autodj",
-    ),
-    RadioStation(
-        alias="promodj",
-        url="http://radio.promodj.com/top100-192",
-    ),
-    RadioStation(
-        alias="falloutfm5",
-        url="http://fallout.fm:8000/falloutfm5.ogg",
-    ),
-    RadioStation(
-        alias="streamingsoundtracks",
-        url="http://lo4.streamingsoundtracks.com/;",
-    ),
-)
 
-STATION_PACKS: dict[str, tuple[RadioStation, ...]] = {
-    "favorites": FAVORITES,
-    "top3": TOP3,
-}
+def _load_station_packs() -> dict[str, tuple[RadioStation, ...]]:
+    """Load the maintained station catalogue from the package JSON."""
+    try:
+        payload = json.loads(
+            files(__package__).joinpath(_DATA_FILE).read_text(encoding="utf-8")
+        )
+        raw_stations = payload["stations"]
+        raw_packs = payload["packs"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise StationError(f"Invalid bundled station data: {error}") from error
+
+    stations: dict[str, RadioStation] = {}
+    for raw_station in raw_stations:
+        station = RadioStation.from_dict(raw_station)
+        if station.alias in stations:
+            raise StationError(f"Duplicate bundled station alias: {station.alias}")
+        stations[station.alias] = station
+    packs: dict[str, tuple[RadioStation, ...]] = {}
+    for raw_name, raw_aliases in raw_packs.items():
+        name = str(raw_name).strip().casefold()
+        if not name or not isinstance(raw_aliases, list):
+            raise StationError(f"Invalid bundled station pack: {raw_name!r}")
+        try:
+            pack = tuple(stations[str(alias)] for alias in raw_aliases)
+        except KeyError as error:
+            raise StationError(
+                f"Station pack {name!r} references unknown alias {error.args[0]!r}"
+            ) from error
+        if not pack:
+            raise StationError(f"Bundled station pack {name!r} cannot be empty")
+        packs[name] = pack
+    return packs
+
+
+STATION_PACKS = _load_station_packs()
 
 
 def station_pack_names() -> tuple[str, ...]:

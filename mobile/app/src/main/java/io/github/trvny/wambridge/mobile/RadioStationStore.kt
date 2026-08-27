@@ -5,9 +5,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 
-// TuneIn station ids look like `s15984`. The catalogue also uses `p` for
-// podcasts and `t` for individual episodes; neither is a live stream, so
-// neither belongs in a station entry.
 private val TUNEIN_ID_PATTERN = Regex("^s[0-9]{1,12}$")
 
 /** Return a validated TuneIn station id such as `s15984`. */
@@ -21,37 +18,73 @@ internal fun validateTuneInId(value: String): String {
 internal data class MobileRadioStation(
     val alias: String,
     val urls: List<String>,
-    // A TuneIn station id resolves to whatever stream the broadcaster serves
-    // today, so it survives an endpoint move that would leave a hardcoded URL
-    // dead. It is resolved at play time and never stored as a URL, because the
-    // answer changes; `urls` stays as the static safety net for when TuneIn is
-    // unreachable or offers only formats the relay refuses.
+    // TuneIn is resolved at play time; saved URLs remain the ordered fallback.
     val tuneInId: String? = null,
 )
 
+internal fun mergeRadioStations(
+    saved: List<MobileRadioStation>,
+    bundled: List<MobileRadioStation>,
+    hiddenBundledAliases: Set<String> = emptySet(),
+): List<MobileRadioStation> {
+    val savedByAlias = saved.associateBy { it.alias.lowercase() }
+    val hidden = hiddenBundledAliases.mapTo(mutableSetOf()) { it.lowercase() }
+    val merged = bundled.mapNotNull { station ->
+        val key = station.alias.lowercase()
+        savedByAlias[key] ?: station.takeUnless { key in hidden }
+    }.toMutableList()
+    val bundledAliases = bundled.mapTo(mutableSetOf()) { it.alias.lowercase() }
+    merged += saved.filterNot { it.alias.lowercase() in bundledAliases }
+    return merged
+}
+
 internal class RadioStationStore(context: Context) {
-    private val preferences = context.applicationContext.getSharedPreferences(
+    private val appContext = context.applicationContext
+    private val preferences = appContext.getSharedPreferences(
         RendererService.PREFS,
         Context.MODE_PRIVATE,
     )
+    private val bundledStations: List<MobileRadioStation> by lazy(::loadBundledFavorites)
 
-    fun all(): List<MobileRadioStation> = load().sortedBy { it.alias.lowercase() }
+    fun all(): List<MobileRadioStation> = mergeRadioStations(
+        loadSaved(),
+        bundledStations,
+        hiddenBundledAliases(),
+    ).sortedBy { it.alias.lowercase() }
 
     fun upsert(alias: String, urls: List<String>, tuneInId: String? = null): MobileRadioStation {
         val cleanedAlias = alias.trim()
         require(cleanedAlias.isNotEmpty()) { "Station name cannot be empty" }
-        val cleanedUrls = validateUrls(urls)
-        val station = MobileRadioStation(cleanedAlias, cleanedUrls, cleanTuneInId(tuneInId))
-        val stations = load().filterNot { it.alias.equals(cleanedAlias, ignoreCase = true) } + station
-        save(stations)
+        val station = MobileRadioStation(cleanedAlias, validateUrls(urls), cleanTuneInId(tuneInId))
+        val stations = loadSaved().filterNot {
+            it.alias.equals(cleanedAlias, ignoreCase = true)
+        } + station
+        saveSaved(stations)
+        unhideBundled(cleanedAlias)
         return station
     }
 
     fun remove(alias: String) {
-        save(load().filterNot { it.alias.equals(alias.trim(), ignoreCase = true) })
+        val cleanedAlias = alias.trim()
+        saveSaved(loadSaved().filterNot { it.alias.equals(cleanedAlias, ignoreCase = true) })
+        if (bundledStations.any { it.alias.equals(cleanedAlias, ignoreCase = true) }) {
+            val hidden = hiddenBundledAliases().toMutableSet()
+            hidden += cleanedAlias.lowercase()
+            preferences.edit().putStringSet(KEY_HIDDEN_BUNDLED, hidden).apply()
+        }
     }
 
-    private fun load(): List<MobileRadioStation> {
+    private fun unhideBundled(alias: String) {
+        val hidden = hiddenBundledAliases().toMutableSet()
+        if (hidden.remove(alias.lowercase())) {
+            preferences.edit().putStringSet(KEY_HIDDEN_BUNDLED, hidden).apply()
+        }
+    }
+
+    private fun hiddenBundledAliases(): Set<String> =
+        preferences.getStringSet(KEY_HIDDEN_BUNDLED, emptySet()).orEmpty().toSet()
+
+    private fun loadSaved(): List<MobileRadioStation> {
         val raw = preferences.getString(KEY_STATIONS, null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
@@ -59,14 +92,7 @@ internal class RadioStationStore(context: Context) {
                 for (index in 0 until array.length()) {
                     val item = array.getJSONObject(index)
                     val alias = item.getString("alias").trim()
-                    val urlsJson = item.getJSONArray("urls")
-                    val urls = buildList {
-                        for (urlIndex in 0 until urlsJson.length()) {
-                            add(urlsJson.getString(urlIndex))
-                        }
-                    }
-                    // Stations written before TuneIn ids existed simply have no
-                    // such key, and keep loading unchanged.
+                    val urls = jsonStrings(item.getJSONArray("urls"))
                     val tuneInId = cleanTuneInId(item.optString(KEY_TUNEIN_ID))
                     if (alias.isNotEmpty()) {
                         add(MobileRadioStation(alias, validateUrls(urls), tuneInId))
@@ -76,13 +102,46 @@ internal class RadioStationStore(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    private fun save(stations: List<MobileRadioStation>) {
+    private fun loadBundledFavorites(): List<MobileRadioStation> = runCatching {
+        val text = appContext.assets.open(BUNDLED_ASSET)
+            .bufferedReader(Charsets.UTF_8)
+            .use { it.readText() }
+        val root = JSONObject(text)
+        val byAlias = buildMap {
+            val stations = root.getJSONArray("stations")
+            for (index in 0 until stations.length()) {
+                bundledStation(stations.getJSONObject(index))?.let { station ->
+                    put(station.alias, station)
+                }
+            }
+        }
+        jsonStrings(root.getJSONObject("packs").getJSONArray(DEFAULT_PACK)).mapNotNull(byAlias::get)
+    }.getOrDefault(emptyList())
+
+    private fun bundledStation(item: JSONObject): MobileRadioStation? {
+        if (!item.optBoolean("mobile_supported", true)) return null
+        val alias = item.getString("alias").trim()
+        val urls = buildList {
+            add(item.getString("url"))
+            item.optJSONArray("fallback_urls")?.let { addAll(jsonStrings(it)) }
+        }
+        return MobileRadioStation(
+            alias = alias,
+            urls = validateUrls(urls),
+            tuneInId = cleanTuneInId(item.optString(KEY_TUNEIN_ID)),
+        )
+    }
+
+    private fun jsonStrings(array: JSONArray): List<String> = buildList {
+        for (index in 0 until array.length()) add(array.getString(index))
+    }
+
+    private fun saveSaved(stations: List<MobileRadioStation>) {
         val array = JSONArray()
         stations.forEach { station ->
             array.put(JSONObject().apply {
                 put("alias", station.alias)
                 put("urls", JSONArray(station.urls))
-                // A station without an id serialises exactly as it did before.
                 station.tuneInId?.let { put(KEY_TUNEIN_ID, it) }
             })
         }
@@ -96,9 +155,10 @@ internal class RadioStationStore(context: Context) {
         val result = LinkedHashSet<String>()
         values.map(String::trim).filter(String::isNotEmpty).forEach { value ->
             val uri = URI(value)
-            require(uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)) {
-                "Radio URL must use HTTP or HTTPS"
-            }
+            require(
+                uri.scheme.equals("http", ignoreCase = true) ||
+                    uri.scheme.equals("https", ignoreCase = true),
+            ) { "Radio URL must use HTTP or HTTPS" }
             require(!uri.host.isNullOrBlank()) { "Radio URL needs a host" }
             result += value
         }
@@ -109,5 +169,8 @@ internal class RadioStationStore(context: Context) {
     companion object {
         private const val KEY_STATIONS = "radio_stations"
         private const val KEY_TUNEIN_ID = "tunein_id"
+        private const val KEY_HIDDEN_BUNDLED = "radio_hidden_bundled"
+        private const val BUNDLED_ASSET = "station_packs.json"
+        private const val DEFAULT_PACK = "favorites"
     }
 }

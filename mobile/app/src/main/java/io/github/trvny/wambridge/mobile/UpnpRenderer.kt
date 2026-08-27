@@ -135,6 +135,10 @@ internal class UpnpRenderer(
             isDaemon = true
             start()
         }
+        // Do not wait for a control point to happen to issue a fresh M-SEARCH.
+        // Announce the renderer as soon as it comes up; old players are much
+        // happier when the UPnP lifecycle actually has a beginning.
+        repeat(2) { sendAlive(socket) }
     }
 
     private fun ssdpLoop(socket: MulticastSocket) {
@@ -149,7 +153,7 @@ internal class UpnpRenderer(
                 if (!headers["man"].orEmpty().contains("ssdp:discover", ignoreCase = true)) continue
                 val requested = headers["st"].orEmpty().trim()
                 val targets = when {
-                    requested.equals("ssdp:all", ignoreCase = true) -> SSDP_TARGETS
+                    requested.equals("ssdp:all", ignoreCase = true) -> advertisedTargets()
                     requested.equals("uuid:${state.udn}", ignoreCase = true) -> listOf("uuid:${state.udn}")
                     SSDP_TARGETS.any { it.equals(requested, ignoreCase = true) } -> listOf(requested)
                     else -> emptyList()
@@ -169,17 +173,32 @@ internal class UpnpRenderer(
             append("CACHE-CONTROL: max-age=1800\r\n")
             append("EXT:\r\n")
             append("LOCATION: http://${localAddress.hostAddress}:$port/description.xml\r\n")
-            append("SERVER: Android/1.0 UPnP/1.1 WAMBridge/0.1\r\n")
+            append("SERVER: $SERVER_HEADER\r\n")
             append("ST: $target\r\n")
-            append("USN: ${usn(target)}\r\n\r\n")
+            append("USN: ${SsdpLifecycle.usn(state.udn, target)}\r\n\r\n")
         }.toByteArray(StandardCharsets.UTF_8)
         socket.send(DatagramPacket(bytes, bytes.size, request.address, request.port))
     }
 
-    private fun usn(target: String): String = if (target.startsWith("uuid:")) {
-        "uuid:${state.udn}"
-    } else {
-        "uuid:${state.udn}::$target"
+    private fun advertisedTargets(): List<String> =
+        SsdpLifecycle.advertisedTargets(state.udn, SSDP_TARGETS)
+
+    private fun sendAlive(socket: MulticastSocket) {
+        val location = "http://${localAddress.hostAddress}:$port/description.xml"
+        for (target in advertisedTargets()) {
+            val bytes = SsdpLifecycle.alive(SSDP_HOST, location, SERVER_HEADER, state.udn, target)
+            socket.send(DatagramPacket(bytes, bytes.size, SSDP_ADDRESS, SSDP_PORT))
+        }
+    }
+
+    private fun sendByebye() {
+        val socket = ssdpSocket ?: return
+        for (target in advertisedTargets()) {
+            runCatching {
+                val bytes = SsdpLifecycle.byebye(SSDP_HOST, state.udn, target)
+                socket.send(DatagramPacket(bytes, bytes.size, SSDP_ADDRESS, SSDP_PORT))
+            }
+        }
     }
 
     private fun handleClient(client: Socket) {
@@ -787,6 +806,9 @@ internal class UpnpRenderer(
 
     override fun close() {
         if (!running.getAndSet(false)) return
+        // Withdraw the renderer before tearing down port 1900. Without this,
+        // control points can keep a dead instance cached for up to 30 minutes.
+        sendByebye()
         closeResources()
     }
 
@@ -818,6 +840,9 @@ internal class UpnpRenderer(
     companion object {
         private const val SSDP_GROUP = "239.255.255.250"
         private const val SSDP_PORT = 1900
+        private const val SSDP_HOST = "$SSDP_GROUP:$SSDP_PORT"
+        private const val SERVER_HEADER = "Android/1.0 UPnP/1.1 WAMBridge/0.1"
+        private val SSDP_ADDRESS: InetAddress = InetAddress.getByName(SSDP_GROUP)
         private const val MAX_HEADER = 64 * 1024
         private const val MAX_BODY = 1024 * 1024
         private const val CLIENT_TIMEOUT_MS = 15_000
