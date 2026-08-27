@@ -295,10 +295,7 @@ bool send_control_over_helper(
     std::lock_guard lock(g_controlMutex);
     if (g_controlSocket == INVALID_SOCKET) return false;
     const int sent = send(
-        g_controlSocket,
-        command.c_str(),
-        static_cast<int>(command.size()),
-        0
+        g_controlSocket, command.c_str(), static_cast<int>(command.size()), 0
     );
     if (sent != static_cast<int>(command.size())) {
         close_control_socket_locked();
@@ -551,17 +548,17 @@ public:
 
     void pause(bool state) override {
         bool wasPaused = false;
-        bool wasRouted = false;
+        bool wasMuted = false;
         {
             std::lock_guard lock(m_mutex);
             wasPaused = m_paused.load();
             if (state == wasPaused) return;
-            wasRouted = m_pauseRouted.load();
+            wasMuted = m_pauseMuted.load();
         }
 
-        const bool routed = state
-            ? wam::send_playback_over_helper(true)
-            : (wasRouted && wam::send_playback_over_helper(false));
+        const bool muted = state
+            ? wam::send_pause_over_helper(true)
+            : (wasMuted && wam::send_pause_over_helper(false));
 
         {
             std::lock_guard lock(m_mutex);
@@ -569,15 +566,15 @@ public:
             refresh_playback_clock_locked(now);
             if (state) {
                 m_pauseStarted = now;
-                m_pauseRouted.store(routed);
+                m_pauseMuted.store(muted);
             } else {
                 if (m_clockStarted &&
                     m_pauseStarted != std::chrono::steady_clock::time_point{}) {
                     m_clockAnchor += now - m_pauseStarted;
                 }
                 m_pauseStarted = {};
-                m_pauseRouted.store(false);
-                if (wasRouted && !routed) m_restart = true;
+                m_pauseMuted.store(false);
+                if (wasMuted && !muted) m_restart = true;
             }
             m_paused.store(state);
         }
@@ -1441,11 +1438,8 @@ private:
                         (m_failure.empty() && (
                             m_restart || m_flushing ||
                             (m_sampleRate != 0 && m_channels != 0 && (
-                                m_childExited ||
-                                (!m_pauseRouted.load() && (
-                                    !m_queue.empty() ||
-                                    (m_paused.load() && m_helperReady.load())
-                                ))
+                                !m_queue.empty() || m_childExited ||
+                                (m_paused.load() && m_helperReady.load())
                             ))
                         ));
                 });
@@ -1512,9 +1506,8 @@ private:
                                 channels
                             ) ||
                             (m_helperReady.load() && (
-                                m_flushing || (!m_pauseRouted.load() && (
-                                    m_paused.load() || !m_queue.empty()
-                                ))
+                                m_flushing || m_paused.load() ||
+                                !m_queue.empty()
                             ));
                     }
                 );
@@ -1529,8 +1522,7 @@ private:
                     retire_stream_locked();
                     stopAfterFlush = true;
                 } else {
-                    sendSilence = m_flushing ||
-                        (m_paused.load() && !m_pauseRouted.load());
+                    sendSilence = m_flushing || m_paused.load();
                 }
                 if (stopAfterFlush) {
                     batchFrames = 0;
@@ -1741,7 +1733,7 @@ private:
     std::chrono::steady_clock::time_point m_flushDeadline{};
     std::string m_failure;
     std::atomic<bool> m_paused{false};
-    std::atomic<bool> m_pauseRouted{false};
+    std::atomic<bool> m_pauseMuted{false};
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_helperReady{false};
     std::atomic<bool> m_childStopping{false};
@@ -1792,7 +1784,7 @@ bool send_volume_over_helper(int step) {
     );
 }
 
-bool send_playback_over_helper(bool paused) {
+bool send_pause_over_helper(bool paused) {
     return send_control_over_helper(
         paused ? "pause\n" : "resume\n",
         true

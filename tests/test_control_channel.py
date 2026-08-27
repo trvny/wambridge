@@ -1,7 +1,7 @@
 """The helper's missing input direction.
 
 Every one of these exists because the alternative is spawning a process per
-control change, which opens a second connection to the speaker's control port
+volume change, which opens a second connection to the speaker's control port
 beside the one the helper already holds.
 """
 
@@ -63,7 +63,7 @@ class ControlChannelTests(unittest.TestCase):
                 self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [3, 5, 9])
 
-    def test_applies_pause_and_resume_on_the_same_connection(self) -> None:
+    def test_pause_and_resume_are_acknowledged_on_the_same_connection(self) -> None:
         with _connect(self.channel) as client:
             self._send(client, "pause")
             self.assertTrue(self.applied.wait(timeout=2))
@@ -72,6 +72,17 @@ class ControlChannelTests(unittest.TestCase):
             self.assertTrue(self.applied.wait(timeout=2))
             self.assertEqual(client.recv(16), b"ok\n")
         self.assertEqual(self.paused, [True, False])
+
+    def test_failing_pause_returns_error_without_ending_the_channel(self) -> None:
+        def explode(_paused: bool) -> None:
+            raise RuntimeError("speaker said no")
+
+        channel = ControlChannel(lambda _level: None, set_paused=explode)
+        channel.start()
+        self.addCleanup(channel.close)
+        with _connect(channel) as client:
+            client.sendall(b"pause\n")
+            self.assertEqual(client.recv(16), b"error\n")
 
     def test_rejects_a_wrong_token(self) -> None:
         with _connect(self.channel, token="not-the-token") as client:
@@ -94,17 +105,6 @@ class ControlChannelTests(unittest.TestCase):
             self._send(client, "volume 2")
             self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [2])
-
-    def test_failing_pause_is_reported_to_the_component(self) -> None:
-        def explode(_paused: bool) -> None:
-            raise RuntimeError("speaker said no")
-
-        channel = ControlChannel(lambda _level: None, set_paused=explode)
-        channel.start()
-        self.addCleanup(channel.close)
-        with _connect(channel) as client:
-            client.sendall(b"pause\n")
-            self.assertEqual(client.recv(16), b"error\n")
 
     def test_a_failing_command_does_not_end_the_session(self) -> None:
         # A rejected SetVolume must not take playback down with it.

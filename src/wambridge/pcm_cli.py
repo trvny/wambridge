@@ -45,7 +45,9 @@ _FAILURE_EVENT = "ErrorEvent"
 _PUBLIC_IDENTIFIER = "public"
 _PLAYBACK_COMMAND = "SetUrlPlayback"
 _VOLUME_COMMAND = "SetVolume"
+_MUTE_COMMAND = "SetMute"
 _VOLUME_ACK_TIMEOUT = 1.0
+_PAUSE_ACK_TIMEOUT = 1.0
 _STOP_COMMAND = "SetPlaybackControl"
 _SLEEP_COMMAND = "SetSleepTimer"
 _STOP_ACK_TIMEOUT = 1.0
@@ -277,7 +279,6 @@ class PlaybackWatcher:
         self._stream_active = threading.Event()
         self._started = threading.Event()
         self._startup_complete = threading.Event()
-        self._paused = threading.Event()
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._error = ""
@@ -482,26 +483,19 @@ class PlaybackWatcher:
             power_on=True,
         )
 
-    def set_paused(self, paused: bool) -> None:
-        """Pause or resume this URL session over its existing control socket."""
-        if paused:
-            self._paused.set()
-        try:
-            self._send_command(
-                method=_STOP_COMMAND,
-                arguments=[(
-                    "playbackcontrol",
-                    "pause" if paused else "resume",
-                    "str",
-                )],
-                track_response=False,
-            )
-        except Exception:
-            if paused:
-                self._paused.clear()
-            raise
-        if not paused:
-            self._paused.clear()
+    def set_pause_mute(self, paused: bool) -> None:
+        """Mute for foobar pause while the PCM path keeps feeding paced silence."""
+        self._send_command(
+            method=_MUTE_COMMAND,
+            arguments=[("mute", "on" if paused else "off", "str")],
+            power_on=True,
+        )
+        rejection = self.wait_for_response(
+            _MUTE_COMMAND,
+            timeout=_PAUSE_ACK_TIMEOUT,
+        )
+        if rejection is not None:
+            raise WamApiError(rejection)
 
     def wait_for_start(self, *, timeout: float) -> None:
         for budget in _wait_slices(timeout):
@@ -536,16 +530,14 @@ class PlaybackWatcher:
         method: str,
         arguments: list[tuple[str, str | int, str]] | None = None,
         power_on: bool = False,
-        track_response: bool = True,
     ) -> None:
         with self._connection_lock:
             connection = self._connection
         if connection is None:
             raise StreamError("WAM control connection is not ready")
-        if track_response:
-            with self._response_lock:
-                self._results.pop(method, None)
-                self._pending.append(method)
+        with self._response_lock:
+            self._results.pop(method, None)
+            self._pending.append(method)
         try:
             connection.send(
                 method=method,
@@ -627,7 +619,6 @@ class PlaybackWatcher:
                         if (
                             self._stream_active.is_set()
                             and not self._started.is_set()
-                            and not self._paused.is_set()
                             and code == "NETWORK_TIMEOUT_ERROR"
                         ):
                             self._error = (
@@ -838,21 +829,9 @@ def run(
             # Only now: before this point the startup sequence owns the volume,
             # and a level arriving mid-handshake would fight the unmute that
             # PLAYING depends on.
-            def set_paused(paused: bool) -> None:
-                if paused:
-                    server.set_paused(True)
-                try:
-                    watcher.set_paused(paused)
-                except Exception:
-                    if paused:
-                        server.set_paused(False)
-                    raise
-                if not paused:
-                    server.set_paused(False)
-
             with ControlChannel(
                 watcher.set_volume,
-                set_paused=set_paused,
+                set_paused=watcher.set_pause_mute,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

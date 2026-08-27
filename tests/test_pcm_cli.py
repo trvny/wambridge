@@ -52,7 +52,7 @@ class FakePlaybackWatcher:
         self.failure_checks = 0
         self.offered: list[str] = []
         self.volumes: list[int] = []
-        self.paused: list[bool] = []
+        self.pause_mutes: list[bool] = []
         self.released = False
         self.sleep_timer_cancellations = 0
         self.sleep_after_stop = kwargs.get("sleep_after_stop", 0)
@@ -86,8 +86,8 @@ class FakePlaybackWatcher:
     def set_volume(self, level: int) -> None:
         self.volumes.append(level)
 
-    def set_paused(self, paused: bool) -> None:
-        self.paused.append(paused)
+    def set_pause_mute(self, paused: bool) -> None:
+        self.pause_mutes.append(paused)
 
     def wait_for_start(self, *, timeout: float) -> None:
         self.waited = True
@@ -646,22 +646,28 @@ class PcmCliTests(TestCase):
             watcher.mark_stream_active()
         return watcher, connection
 
-    def test_live_pause_and_resume_use_the_existing_connection(self) -> None:
-        watcher, connection = self._connected_watcher()
+    def test_pause_mute_uses_the_existing_connection(self) -> None:
+        watcher, connection = self._connected_watcher(rejection_method="SetMute")
 
-        watcher.set_paused(True)
-        self.assertTrue(watcher._paused.is_set())
-        watcher.set_paused(False)
-        self.assertFalse(watcher._paused.is_set())
+        watcher.set_pause_mute(True)
+        watcher.set_pause_mute(False)
 
         self.assertEqual(
             connection.sent,
             [
-                ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
-                ("SetPlaybackControl", [("playbackcontrol", "resume", "str")], False),
+                ("SetMute", [("mute", "on", "str")], True),
+                ("SetMute", [("mute", "off", "str")], True),
             ],
         )
-        self.assertEqual(watcher._pending, [])
+
+    def test_pause_mute_surfaces_an_explicit_rejection(self) -> None:
+        watcher, _connection = self._connected_watcher(
+            rejection="Speaker rejected SetMute (error 3)",
+            rejection_method="SetMute",
+        )
+
+        with self.assertRaisesRegex(WamApiError, "rejected SetMute"):
+            watcher.set_pause_mute(True)
 
     def test_release_stops_playback_over_the_connection_already_open(self) -> None:
         watcher, connection = self._connected_watcher()
