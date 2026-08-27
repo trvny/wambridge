@@ -610,7 +610,10 @@ class PlaybackWatcher:
             except WamApiError as error:
                 rejected = "rejected" in str(error).casefold()
                 if rejected and attempt == 0:
-                    LOGGER.warning("Speaker rejected pause-volume restore; retrying once: %s", error)
+                    LOGGER.warning(
+                        "Speaker rejected pause-volume restore; retrying once: %s",
+                        error,
+                    )
                     continue
                 LOGGER.warning("Could not restore speaker volume after pause: %s", error)
                 return "rejected" if rejected else "unreachable"
