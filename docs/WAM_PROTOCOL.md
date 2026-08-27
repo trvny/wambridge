@@ -339,6 +339,16 @@ The PR #112 helper keeps that active level from startup and every routed volume 
 pause does not spend another `GetVolume` round trip before writing 0. Its loopback control shutdown
 waits for any in-flight pause/volume callback before playback teardown can release the 55001 owner.
 
+Final PR #112 hardware validation used artifact `75daa1a` through authenticated Beefweb. Starting
+from an externally-set raw level 3, a 40-second pause held the speaker at raw 0 while the same
+`wambridge-pcm` and FFmpeg PIDs stayed alive; resume restored exactly 3 without a respawn or timeout.
+Stop during pause restored 3 and ended `muted=off`, `holding=0`, with no helper/FFmpeg process left.
+Next during pause cleanly retired Starburster and started Andor in one new helper/FFmpeg pair at raw
+3. The final Stop repeated the clean teardown, after which foobar was closed and the speaker was left
+idle at volume 3 / `muted=off` for its normal automatic standby. The acoustic response time of the
+routed pause was not separately timed; the old ~5 s / ~6 s figures describe the superseded PCM-only
+pause/resume path.
+
 ## The speaker's own radio, and reading it
 
 `GetApInfo` returns `ssid`, `mac`, `rssi`, `ch` and `connectiontype`, answers in 0.13 s and
