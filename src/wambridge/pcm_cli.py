@@ -288,9 +288,12 @@ class PlaybackWatcher:
         self._results: dict[str, str] = {}
         self._response_events: dict[str, WamEvent] = {}
         self._response_lock = threading.Lock()
-        # Actual raw level last sent through this helper. Startup seeds it
-        # before the loopback control channel is announced, so pause does not
-        # need a GetVolume round trip in the normal path.
+        self._volume_lock = threading.Lock()
+        # Actual raw level last sent through this helper, or later observed from
+        # the speaker. Startup seeds it before the loopback control channel is
+        # announced, and VolumeLevel broadcasts keep it honest when another
+        # client or the physical buttons move the M5. Pause can therefore avoid
+        # a GetVolume round trip without restoring stale state.
         self._current_volume: int | None = None
         self._pause_restore_volume: int | None = None
 
@@ -486,32 +489,36 @@ class PlaybackWatcher:
 
     def set_volume(self, level: int) -> None:
         """Set speaker volume without opening a competing control socket."""
-        if self._pause_restore_volume is not None:
-            # A slider move while paused changes what resume should restore, not
-            # the speaker's current zero. PCM keeps flowing as paced silence.
-            self._pause_restore_volume = level
-            return
+        with self._volume_lock:
+            if self._pause_restore_volume is not None:
+                # A slider move while paused changes what resume should restore,
+                # not the speaker's current zero. PCM keeps flowing as silence.
+                self._pause_restore_volume = level
+                return
         self._send_volume_state(level)
-        self._current_volume = level
+        with self._volume_lock:
+            self._current_volume = level
 
     def set_pause_volume(self, paused: bool) -> None:
         """Silence pause with raw volume 0 while preserving the live HTTP stream."""
         if paused:
-            if self._pause_restore_volume is not None:
-                return
-            previous = self._current_volume
-            if previous is None:
-                # The control channel is announced only after startup has sent
-                # its volume, so this is defensive rather than a normal path.
-                raise WamApiError("Speaker volume is unknown at pause")
-            self._pause_restore_volume = previous
+            with self._volume_lock:
+                if self._pause_restore_volume is not None:
+                    return
+                previous = self._current_volume
+                if previous is None:
+                    # The control channel is announced only after startup has
+                    # sent its volume, so this is defensive rather than normal.
+                    raise WamApiError("Speaker volume is unknown at pause")
+                self._pause_restore_volume = previous
             if previous == 0:
                 return
             # Physical M5, 2026-08-28: 3 -> 0 -> 3 kept the exact same HTTP
             # request, helper PID, FFmpeg PID and advancing CLOCK. SetMute did
             # the opposite and closed the speaker's HTTP pull.
             self._set_volume_and_wait(0)
-            self._current_volume = 0
+            with self._volume_lock:
+                self._current_volume = 0
             return
 
         try:
@@ -539,13 +546,40 @@ class PlaybackWatcher:
             raise WamApiError(rejection)
 
     def _restore_pause_volume(self) -> None:
-        previous = self._pause_restore_volume
+        with self._volume_lock:
+            previous = self._pause_restore_volume
         if previous is None:
             return
         if previous != 0:
             self._set_volume_and_wait(previous)
-        self._current_volume = previous
-        self._pause_restore_volume = None
+        with self._volume_lock:
+            self._current_volume = previous
+            self._pause_restore_volume = None
+
+    def _observe_volume_event(self, event: WamEvent, *, external: bool) -> None:
+        """Refresh cached raw volume from a VolumeLevel speaker event."""
+        if not event.method or not methods_agree(_VOLUME_COMMAND, event.method):
+            return
+        level: int | None = None
+        for key, value in event.values.items():
+            if key.casefold() not in {"volume", "volumelevel", "volume_level"}:
+                continue
+            try:
+                candidate = int(value)
+            except (TypeError, ValueError):
+                return
+            if RAW_MIN_VOLUME <= candidate <= RAW_MAX_VOLUME:
+                level = candidate
+            break
+        if level is None:
+            return
+        with self._volume_lock:
+            self._current_volume = level
+            # An unmatched broadcast is somebody else moving the speaker. While
+            # paused, that becomes the target for resume. A matched SetVolume 0
+            # is our own pause primitive and must not erase the saved target.
+            if self._pause_restore_volume is not None and (external or level != 0):
+                self._pause_restore_volume = level
 
     def _restore_pause_volume_quietly(self) -> None:
         try:
@@ -680,6 +714,7 @@ class PlaybackWatcher:
                         )
                         continue
                     command = self._match_pending(event)
+                    self._observe_volume_event(event, external=command is None)
                     if command is not None:
                         self._record_response(command, event)
                         continue
