@@ -710,6 +710,28 @@ class PcmCliTests(TestCase):
         )
         self.assertEqual(watcher._current_volume, 3)
 
+    def test_unmatched_zero_event_during_pause_keeps_restore_target(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=3)
+        watcher.set_pause_volume(True)
+        event = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "0"},
+        )
+
+        watcher._observe_volume_event(event, external=True)
+        watcher.set_pause_volume(False)
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 3, "dec")], True),
+            ],
+        )
+
     def test_external_volume_event_while_paused_updates_resume_target(self) -> None:
         watcher, connection = self._connected_watcher(volume_state=7)
         watcher.set_pause_volume(True)

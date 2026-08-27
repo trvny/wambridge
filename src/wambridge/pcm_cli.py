@@ -575,10 +575,11 @@ class PlaybackWatcher:
             return
         with self._volume_lock:
             self._current_volume = level
-            # An unmatched broadcast is somebody else moving the speaker. While
-            # paused, that becomes the target for resume. A matched SetVolume 0
-            # is our own pause primitive and must not erase the saved target.
-            if self._pause_restore_volume is not None and (external or level != 0):
+            # Non-zero speaker changes while paused become the target for resume.
+            # Raw 0 is our pause primitive and may arrive as either a matched
+            # response or an unmatched broadcast, so it must never erase the
+            # saved target merely because the firmware changed event shape.
+            if self._pause_restore_volume is not None and level != 0:
                 self._pause_restore_volume = level
 
     def _restore_pause_volume_quietly(self) -> None:
