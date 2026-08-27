@@ -160,7 +160,7 @@ same 19-minute 44.1 kHz source.
 Two other methods agree in the same session: after a pause the sound stopped about 5 s
 later, and after resuming from 51.98 s it returned at 58 s, so 6.0 s.
 
-Attribution, with `startup_silence=0`:
+The 2026-08-08 attribution, with `startup_silence=0` and the then-default `buffer_extra=2000`:
 
 | term | share |
 | --- | --- |
@@ -171,11 +171,16 @@ Attribution, with `startup_silence=0`:
 
 Consequences for anything built on this path:
 
-- **The host buffer is the largest single term now.** Its 4.0 s floor was dismissed as
-  "2-3 s of thirteen"; against six it is most of the budget and worth revisiting.
-- Anything applied host-side to PCM already on its way - a software volume gain, silence
-  written for pause - is heard about six seconds later. Controls that must feel immediate
-  still belong on the `55001` path, which answers in about a second.
+The 2026-08-27 hardware sweep then took `buffer_extra` through 1500, 1000, 500 and 0.
+At 0, a three-minute run held the 2.0 s capacity 1.832-1.999 s full across 153 `CLOCK`
+samples, with `free` at 0-167 ms and no helper error or restart. The stock host queue is
+therefore about 1.9 s now; the audible end-to-end total has not yet been re-measured.
+
+- The old four-second host term is no longer current. The remaining 2.0 s floor is now the
+  buffer value worth testing below.
+- Anything applied host-side to PCM already on its way is still delayed by the audio already
+  in the pipeline. Controls that must feel immediate still belong on the `55001` path, which
+  answers in about a second.
 
 **The older figure of 13.4 s is superseded, not merely refined.** It came from two data
 points taken 2026-08-02 on a much older build with `startup_silence=1500`, over unrecorded
@@ -504,8 +509,9 @@ without evidence from different firmware.
 - A reliable URL/PCM speaker event that always corresponds to audible start.
 - What bounds the speaker's prebuffer. It is not a duration, and it is not a plain byte
   count either; a lower bitrate lengthened the delay by less than the bitrate ratio.
-- How small the host buffer can get. Its 4.0 s floor is the largest single term of the six
-  seconds and was chosen, not measured; nothing has tested where the pipe starts to starve.
+- How small the remaining 2.0 s host-buffer floor can get. The extra pad was tested down to
+  `buffer_extra=0` on 2026-08-27 without a transport sign of starvation; going lower needs a
+  separate build because the floor is in `clamp(bufferLength, 2.0, 30.0)`.
 - Whether the M5 returns to standby by itself after a clean stop, and if so whether it arms
   a sleep timer to do it. One sample taken hours after a hard-killed session read
   `sleepoption=off` with the LED still on, which argues against self-arming but does not

@@ -158,20 +158,22 @@ One honest gap: nobody was listening during these runs. The transport is proven;
 of audible artefacts is not. `flac` therefore stays the default and `wav` stays opt-in until
 somebody has listened to a full track on it.
 
-`get_latency()` reports about 4 s. With `startup_silence=0` the host's own share is roughly
-that, so most of the remaining two to three seconds sits past anything the host counts:
+The 2026-08-27 `buffer_extra` sweep removed the unmeasured 2 s pad. At the new default
+of 0, a three-minute M5 run logged 153 `CLOCK` samples with a 2.0 s capacity:
+`buffered` 1.832-1.999 s (1.918 s average) and `free` 0-167 ms (81 ms average),
+with no helper error or restart. The audible end-to-end total has not yet been re-measured.
 
 | term | share | ours to change |
 |---|---|---|
-| host `buffered` | ~3.9 s | floored at 4.0 s by `clamp(bufferLength, 2.0, 30.0)` plus 2.0 |
+| host `buffered` | ~1.9 s | floored at 2.0 s by `clamp(bufferLength, 2.0, 30.0)` |
 | `adelay` startup silence | 0 s by default; configurable up to 10 s | yes |
 | FFmpeg and the HTTP socket | under a second | barely |
 | the speaker itself | ~2 s on FLAC, less on WAV | partly, through bitrate |
 
 Consequences, none of them optional to know:
 
-- The host buffer is now the **largest single term**, not a rounding error next to the
-  speaker. Its 4.0 s floor is worth revisiting, which was not true when the total was 13 s.
+- The host queue is no longer a four-second term; at about 1.9 s it is now in the same
+  order as the speaker prebuffer. The remaining 2.0 s floor is the next buffer question.
 - The volume slider applies a gain where PCM leaves the queue, and `queued` is 0-61 ms.
   Everything else is already past that point, so the slider cannot be responsive by
   construction. Route it to the speaker's own volume, which answers in about 1.3 s.
@@ -310,15 +312,11 @@ operating system records.
 
 1. ~~**Physical checklist for PR #30**~~ (routed volume slider). PR #30 is closed; the routed
    slider is in `Stable on main` above. Struck 2026-08-19 during a claim-by-claim audit.
-2. **Find how small the host buffer can get.** It was dismissed as "2-3 s of thirteen" and is
-   now the largest single term of six. `clamp(bufferLength, 2.0, 30.0)` plus a pad is a
-   choice, not a measurement, and nothing has tested where the pipe starts to starve.
-   The pad is now `buffer_extra` in the INI, milliseconds, default `2000` so nothing moves
-   until it is measured. Capacity is delay here almost one for one: the queue was measured
-   running 3.79-3.99 s full of its 4.0 s capacity. Walk it down - 1500, 1000, 500, 0 - and
-   watch for the pipe starving, which shows up as `free` climbing in the `CLOCK` line and
-   audible dropouts, not as a lower number. Below `buffer_extra=0` the remaining 2.0 s is
-   the clamp floor and needs its own change.
+2. ~~**Find how small the extra host buffer can get.**~~ **Done 2026-08-27.** The physical
+   M5 passed 1500, 1000, 500 and 0 ms without a transport sign of starvation. At 0, the
+   three-minute run held a 2.0 s capacity 1.832-1.999 s full across 153 `CLOCK` samples;
+   `free` stayed 0-167 ms and the helper stopped cleanly. `buffer_extra` now defaults to
+   0. The remaining 2.0 s `clamp(bufferLength, 2.0, 30.0)` floor is a separate experiment.
 3. ~~**Decide whether `startup_silence` should default to 0.**~~ **Done 2026-08-27.** The
    default is now 0 in both the helper and foobar settings. Hardware had already passed a full
    session at 0; a fresh short check on the physical M5 also held the seekbar at 1.00x and

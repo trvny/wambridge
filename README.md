@@ -37,19 +37,18 @@ What works:
 
 ### The one limitation worth knowing before you install
 
-**Audio reaches the speaker about 6 seconds after foobar plays it.** This is
-measured, not estimated: 6.7 s on the default FLAC profile and 5.7 s on the
-optional `wav` one. `startup_silence` now defaults to `0`, so stock installs no
-longer add another fixed 1.5 s before the real audio. The largest single share is
-this project's own 4 s output buffer, not the speaker. An earlier figure of 13 s,
-most of it blamed on the speaker's prebuffer, did not survive being measured again.
+**The last end-to-end FLAC measurement was 6.7 seconds, before the host buffer was
+cut by another two seconds.** On 2026-08-27 the physical M5 stayed stable with
+`buffer_extra=0`: the host queue held about 1.9 s instead of 3.9 s. A fresh
+ear-to-clock total has not been measured yet, so the old 6.7 s figure is historical
+rather than a claim about current stock behavior.
 
 Playback itself is unaffected — the stream runs at wall-clock speed and the
-seekbar is honest. What suffers is **control latency**: pause, stop, skip and
-the volume slider all act on audio the speaker will not play for another few
-seconds. Lowering the bitrate makes it worse rather than better, and raising it
-helps by about a second, both measured. The fix is to route each control onto
-the speaker's own `55001` command path, which answers in about a second, rather
+seekbar is honest. **Pause, stop and skip still carry pipeline latency** because they act
+through the PCM path; the volume slider is already routed to the speaker itself. Lowering
+the bitrate makes the speaker prebuffer worse rather than better, and raising it helped by
+about a second in the older measurements. The remaining latency-sensitive controls belong
+on the speaker's own `55001` command path, which answers in about a second, rather
 than to keep shortening the audio path; that work is in progress.
 
 Everything else is documented honestly, including the approaches that failed:
