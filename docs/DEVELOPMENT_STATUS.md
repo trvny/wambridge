@@ -164,7 +164,7 @@ that, so most of the remaining two to three seconds sits past anything the host 
 | term | share | ours to change |
 |---|---|---|
 | host `buffered` | ~3.9 s | floored at 4.0 s by `clamp(bufferLength, 2.0, 30.0)` plus 2.0 |
-| `adelay` startup silence | 0 s as configured, 1.5 s by default | yes |
+| `adelay` startup silence | 0 s by default; configurable up to 10 s | yes |
 | FFmpeg and the HTTP socket | under a second | barely |
 | the speaker itself | ~2 s on FLAC, less on WAV | partly, through bitrate |
 

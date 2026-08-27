@@ -68,7 +68,7 @@ Optional keys and overrides:
   twice, while a `flac` run over the same station reached twenty-seven without trouble. One
   day is not a verdict, but nothing so far argues for spending the bandwidth,
 - `startup_silence` or `WAMBRIDGE_STARTUP_SILENCE`, milliseconds of leading silence,
-  `0..10000`, default `1500`. Values outside that fall back to the default rather than
+  `0..10000`, default `0`. Values outside that fall back to the default rather than
   reaching the helper, which would reject them and take the stream down with it,
 - `buffer_extra` or `WAMBRIDGE_BUFFER_EXTRA`, milliseconds of queue kept on top of foobar's
   own buffer length, `0..10000`, default `2000`. Capacity is delay on this path almost one

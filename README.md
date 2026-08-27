@@ -39,11 +39,10 @@ What works:
 
 **Audio reaches the speaker about 6 seconds after foobar plays it.** This is
 measured, not estimated: 6.7 s on the default FLAC profile and 5.7 s on the
-optional `wav` one, both **with `startup_silence=0` in the INI**. The shipped
-default prepends 1.5 s of silence on top of that, so a stock installation is
-nearer 8 s until you turn it off. The largest single share is this project's own
-4 s output buffer, not the speaker. An earlier figure of 13 s, most of it blamed
-on the speaker's prebuffer, did not survive being measured again.
+optional `wav` one. `startup_silence` now defaults to `0`, so stock installs no
+longer add another fixed 1.5 s before the real audio. The largest single share is
+this project's own 4 s output buffer, not the speaker. An earlier figure of 13 s,
+most of it blamed on the speaker's prebuffer, did not survive being measured again.
 
 Playback itself is unaffected — the stream runs at wall-clock speed and the
 seekbar is honest. What suffers is **control latency**: pause, stop, skip and
