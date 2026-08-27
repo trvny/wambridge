@@ -865,6 +865,38 @@ CPM?cmd=<name>SearchQuery</name>
 It works, and it is paginated: `Trojka` returned `totallistcount=66`. Adding `type=fast` changed
 nothing measurable on that query, so nothing here depends on it.
 
+**A search moves the cursor into a second tree, and only `BrowseMain` moves it back. Measured
+2026-08-26/27.** After one `SearchQuery` the answers carry `<root>Search</root>` instead of
+`<root>Browse</root>`, and that tree has its own root which *also* reports
+`<category isroot="1">`. So the usual normalisation - walk up with `GetUpperRadioList` until
+`isroot="1"` - stops on the wrong root, and a caller that trusts `isroot` alone hands back
+search results labelled as the catalogue. **Read `<root>`, not `isroot`, to tell the two apart.**
+
+Getting back out took a while to find. These were each tried against the physical M5 and each
+left the cursor in `Search`:
+
+| Attempt | Result |
+|---|---|
+| `SetSelectRadio` | ok, cursor unchanged |
+| `GetUpperRadioList`, repeated | ok, already at a root, cursor unchanged |
+| descend into a result then ascend | returns to the `Search` root |
+| `SetCpService` with `Unknown`, then `TuneIn` | accepted, cursor unchanged |
+| `GetCpSubmenu` | refused by this firmware, errcode 73 |
+| **`BrowseMain`** | **`ok`, and the next `GetCurrentRadioList` answers `<root>Browse</root>`** |
+
+`BrowseMain` was in the recovered command set below all along and takes the same
+`startindex`/`listcount` pair as the other list commands. `src/wambridge/catalogue.py` sends it
+automatically when `open_catalogue` finds a non-`Browse` root.
+
+Two smaller traps found in the same session, both already visible in the command shapes above
+but easy to get wrong:
+
+- **`GetCpList` takes `liststartindex`, not `startindex`.** Passing `startindex` returns
+  errcode 53. Its answer likewise uses `listtotalcount`/`liststartindex`, unlike the radio list
+  commands, which use `totallistcount`/`startindex`.
+- **`contentid` is an index within the current page and restarts at 0 on every level.** The
+  stable identifier is `mediaid`, the TuneIn station id.
+
 `GetGenreStations` takes no arguments and **refuses cleanly**: `GenreStations` with
 `"API not implemented for current service."` That is a real answer rather than the silence an
 unknown command produces, so the command exists and TuneIn simply does not serve it.

@@ -257,6 +257,28 @@ wambridge --device M5 --tunein-play "Radio Paradise" --volume 3
 Changing the speaker's TuneIn account or preset list still belongs to Samsung's
 plugin because no reliable write API is known.
 
+## Browsing and searching TuneIn
+
+The whole TuneIn catalogue is reachable without saving anything as a preset.
+`--tunein-browse` walks the tree; a path is the row numbers of the pages above,
+separated by slashes. `--tunein-search` finds a station by name. Both are
+paginated, so `--tunein-start` moves the window.
+
+```powershell
+wambridge --device M5 --tunein-browse
+wambridge --device M5 --tunein-browse 1/0
+wambridge --device M5 --tunein-search "Radio Paradise"
+wambridge --device M5 --tunein-search "jazz" --tunein-start 30
+```
+
+Rows print as `index<TAB>kind<TAB>mediaid<TAB>title`. The `mediaid` is the stable
+TuneIn station id, so it is what goes into `--radio-add --tunein-id`; the leading
+index only means "this row on this page" and changes as you move.
+
+The speaker keeps the browse cursor itself, so a search leaves it in TuneIn's
+search results rather than the catalogue. `--tunein-browse` notices and steps
+back on its own.
+
 ## Direct playback
 
 ```powershell
