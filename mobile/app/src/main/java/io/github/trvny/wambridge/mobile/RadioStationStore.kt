@@ -38,6 +38,32 @@ internal fun mergeRadioStations(
     return merged
 }
 
+/**
+ * Pick the station a play request names.
+ *
+ * A station browsed out of the speaker's own TuneIn catalogue is never saved, so
+ * it arrives as a title plus a TuneIn id and is played straight from that: the
+ * resolver turns the id into stream URLs at play time, which is the same thing it
+ * does for a saved station. Anything else is a saved alias.
+ */
+internal fun radioStationToPlay(
+    alias: String,
+    tuneInId: String?,
+    saved: List<MobileRadioStation>,
+): MobileRadioStation? {
+    val name = alias.trim()
+    val id = tuneInId?.trim()?.takeUnless { it.isEmpty() }
+    if (id != null) {
+        return MobileRadioStation(
+            alias = name.ifEmpty { id },
+            urls = emptyList(),
+            tuneInId = id,
+        )
+    }
+    if (name.isEmpty()) return null
+    return saved.firstOrNull { it.alias.equals(name, ignoreCase = true) }
+}
+
 internal class RadioStationStore(context: Context) {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(

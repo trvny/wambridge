@@ -1,0 +1,363 @@
+package io.github.trvny.wambridge.mobile
+
+import android.content.Context
+import java.io.IOException
+import java.io.StringReader
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
+import org.w3c.dom.Text
+import org.xml.sax.InputSource
+
+/**
+ * Browsing and searching the speaker's own TuneIn catalogue.
+ *
+ * The phone-side twin of `src/wambridge/catalogue.py`, against the same measured
+ * firmware. Three of its properties shape everything here:
+ *
+ *  * The browse cursor lives in the speaker, not in this process. No request
+ *    carries a path, so every call is relative to wherever the cursor was left -
+ *    including by another client. Call [open] before anything else.
+ *  * `contentid` is the row's index within the current page and restarts at 0 on
+ *    every level, so it only means anything against the page it came from. The
+ *    stable identifier is `mediaid`.
+ *  * The CPM subsystem wedges under a fast series of requests: it answers
+ *    `totallistcount=0` for levels that do have content, then goes quiet for
+ *    twenty to thirty seconds while UIC keeps answering. It recovers on its own,
+ *    so an empty page is retried rather than believed.
+ */
+internal object SamsungCatalogue {
+    /** Folders and stations are told apart by `type` on `menuitem`. */
+    private const val ITEM_FOLDER = "0"
+    private const val ITEM_STATION = "2"
+
+    /**
+     * `root` names which of the two trees the cursor is in. They are separate
+     * roots and both answer `isroot="1"`, so `isroot` alone cannot tell them apart.
+     */
+    const val BROWSE_ROOT = "Browse"
+
+    data class Entry(
+        val contentId: String,
+        val title: String,
+        val itemType: String,
+        val mediaId: String? = null,
+        val description: String? = null,
+        val thumbnail: String? = null,
+    ) {
+        /** Whether descending into this row is meaningful. */
+        val isFolder: Boolean get() = itemType == ITEM_FOLDER
+
+        /** Whether this row can yield a playable URL. */
+        val isStation: Boolean get() = itemType == ITEM_STATION && !mediaId.isNullOrBlank()
+
+        /** [contentId] as the number the commands expect. */
+        val index: Int
+            get() = contentId.toIntOrNull()
+                ?: throw IOException("Invalid catalogue content ID: $contentId")
+    }
+
+    data class Page(
+        val category: String? = null,
+        val isRoot: Boolean = false,
+        val root: String? = null,
+        val total: Int? = null,
+        val startIndex: Int = 0,
+        val entries: List<Entry> = emptyList(),
+    ) {
+        /** Whether the level continues past this page. */
+        val hasMore: Boolean
+            get() = total != null && startIndex + entries.size < total
+    }
+
+    data class StationDetail(
+        val title: String? = null,
+        val stationUrl: String? = null,
+        val mediaId: String? = null,
+        val description: String? = null,
+        val thumbnail: String? = null,
+    )
+
+    /**
+     * Select TuneIn and walk the cursor back to the catalogue root.
+     *
+     * Throws when the cursor cannot be normalised: every later call would then be
+     * relative to an unknown level and would report the wrong thing rather than fail.
+     *
+     * A search leaves the cursor in a second tree whose root is `Search`, which
+     * also answers `isroot="1"`. Only `BrowseMain` crosses back - `SetSelectRadio`,
+     * repeated `GetUpperRadioList`, a descend-and-ascend round trip and
+     * `SetCpService` were each measured and each left the cursor where it was.
+     */
+    fun open(context: Context, speakerIp: String): Page {
+        cpm(context, speakerIp, "SetSelectRadio")
+        Thread.sleep(SETTLE_MS)
+
+        var page = Page()
+        for (attempt in 0 until OPEN_ATTEMPTS) {
+            page = parsePage(
+                cpm(context, speakerIp, "GetUpperRadioList", paged(0)),
+            )
+            if (page.isRoot) break
+            if (attempt + 1 < OPEN_ATTEMPTS) Thread.sleep(SETTLE_MS)
+        }
+        if (!page.isRoot) {
+            throw IOException(
+                "Could not return the speaker's browse cursor to a root; " +
+                    "results from any deeper level would be misleading",
+            )
+        }
+        if (page.root != null && page.root != BROWSE_ROOT) {
+            page = leaveForeignRoot(context, speakerIp, page)
+        }
+        return page
+    }
+
+    /** Cross from the search tree back into the catalogue with `BrowseMain`. */
+    private fun leaveForeignRoot(context: Context, speakerIp: String, page: Page): Page {
+        val was = page.root
+        cpm(context, speakerIp, "BrowseMain", paged(0))
+        Thread.sleep(SETTLE_MS)
+        val crossed = parsePage(
+            cpm(context, speakerIp, "GetCurrentRadioList", paged(0)),
+        )
+        if (crossed.root != BROWSE_ROOT) {
+            throw IOException(
+                "The speaker's radio cursor is in the $was tree and BrowseMain did not " +
+                    "return it to $BROWSE_ROOT (it is now ${crossed.root}); " +
+                    "search again, or clear it from the Samsung app.",
+            )
+        }
+        return crossed
+    }
+
+    /** Return the level the cursor is on. */
+    fun currentPage(context: Context, speakerIp: String, startIndex: Int = 0): Page =
+        fetchPage(context, speakerIp, "GetCurrentRadioList", paged(startIndex))
+
+    /**
+     * Move the cursor into one row of the current page.
+     *
+     * Named `Get` by the firmware, which hides that it moves the cursor.
+     */
+    fun descend(context: Context, speakerIp: String, contentId: Int): Page =
+        fetchPage(
+            context,
+            speakerIp,
+            "GetSelectRadioList",
+            listOf(SamsungTuneIn.Argument("contentid", contentId.toString(), SamsungTuneIn.Kind.DEC)) +
+                paged(0),
+        )
+
+    /** Move the cursor back up one level. */
+    fun ascend(context: Context, speakerIp: String): Page =
+        fetchPage(context, speakerIp, "GetUpperRadioList", paged(0))
+
+    /**
+     * Search the catalogue by name.
+     *
+     * Results are mixed: stations carry a `mediaid`, while headings such as
+     * "Artist: Trojka" do not and cannot be descended into.
+     */
+    fun search(context: Context, speakerIp: String, query: String, startIndex: Int = 0): Page {
+        if (query.isBlank()) throw IOException("A catalogue search needs a non-empty query")
+        return parsePage(
+            cpm(
+                context,
+                speakerIp,
+                "SearchQuery",
+                listOf(SamsungTuneIn.Argument("query", query, SamsungTuneIn.Kind.STR)) +
+                    paged(startIndex),
+                timeoutMs = SEARCH_TIMEOUT_MS,
+            ),
+        )
+    }
+
+    /**
+     * Return the detail of one station on the current page.
+     *
+     * [contentId] is the row's index on the page it was read from, so this only
+     * means anything while the cursor is still on that level.
+     *
+     * The `stationurl` carries the speaker's own TuneIn partner id and serial. It
+     * is a credential: log it and it ends up in a bug report.
+     */
+    fun stationDetail(context: Context, speakerIp: String, contentId: Int): StationDetail =
+        parseStationDetail(
+            cpm(
+                context,
+                speakerIp,
+                "GetStationData",
+                listOf(
+                    SamsungTuneIn.Argument("selectitemid", contentId.toString(), SamsungTuneIn.Kind.DEC),
+                ),
+            ),
+        )
+
+    /**
+     * Fetch one page, retrying the empty answer that means CPM is recovering.
+     *
+     * A level that really is empty - Favorites and Recents on a speaker nobody has
+     * used that way - looks identical to a wedged subsystem, so the last answer is
+     * returned as it stands once the attempts run out rather than throwing.
+     */
+    private fun fetchPage(
+        context: Context,
+        speakerIp: String,
+        method: String,
+        arguments: List<SamsungTuneIn.Argument>,
+    ): Page {
+        var page = Page()
+        for (attempt in 0 until PAGE_ATTEMPTS) {
+            page = parsePage(cpm(context, speakerIp, method, arguments))
+            if (page.entries.isNotEmpty() || (page.total ?: 0) > 0) return page
+            if (attempt + 1 < PAGE_ATTEMPTS) Thread.sleep(PAGE_SETTLE_MS)
+        }
+        return page
+    }
+
+    private fun cpm(
+        context: Context,
+        speakerIp: String,
+        method: String,
+        arguments: List<SamsungTuneIn.Argument> = emptyList(),
+        timeoutMs: Int = BROWSE_TIMEOUT_MS,
+    ): String = SamsungTuneIn.request(
+        context,
+        speakerIp,
+        apiType = "CPM",
+        method = method,
+        arguments = arguments,
+        timeoutMs = timeoutMs,
+    )
+
+    private fun paged(startIndex: Int): List<SamsungTuneIn.Argument> = listOf(
+        SamsungTuneIn.Argument("startindex", startIndex.toString(), SamsungTuneIn.Kind.DEC),
+        SamsungTuneIn.Argument("listcount", LIST_COUNT.toString(), SamsungTuneIn.Kind.DEC),
+    )
+
+    /** Parse one `RadioList` answer into rows plus paging state. */
+    fun parsePage(body: String): Page {
+        val root = parseXml(body, "catalogue")
+        val entries = mutableListOf<Entry>()
+        var category: String? = null
+        var isRoot = false
+        var treeRoot: String? = null
+        var total: Int? = null
+        var startIndex = 0
+
+        for (node in root.descendants()) {
+            when (localName(node)) {
+                "category" -> if (category == null) {
+                    category = node.trimmedText()
+                    isRoot = node.getAttribute("isroot") == "1"
+                }
+
+                "root" -> treeRoot = treeRoot ?: node.trimmedText()
+                "totallistcount" -> total = total ?: node.trimmedText()?.toIntOrNull()
+                "startindex" -> startIndex = node.trimmedText()?.toIntOrNull() ?: startIndex
+                "menuitem" -> {
+                    val values = node.childText()
+                    val title = values["title"]
+                    val contentId = values["contentid"]
+                    // A row without either cannot be shown or acted on. Skipping it
+                    // keeps one malformed entry from losing the whole page.
+                    if (!title.isNullOrBlank() && !contentId.isNullOrBlank()) {
+                        entries += Entry(
+                            contentId = contentId,
+                            title = title,
+                            itemType = node.getAttribute("type").ifBlank { "?" },
+                            mediaId = values["mediaid"],
+                            description = values["description"],
+                            thumbnail = values["thumbnail"],
+                        )
+                    }
+                }
+            }
+        }
+
+        return Page(
+            category = category,
+            isRoot = isRoot,
+            root = treeRoot,
+            total = total,
+            startIndex = startIndex,
+            entries = entries,
+        )
+    }
+
+    /** Parse a `StationData` answer. */
+    fun parseStationDetail(body: String): StationDetail {
+        val values = mutableMapOf<String, String>()
+        for (node in parseXml(body, "station").descendants()) {
+            val text = node.trimmedText() ?: continue
+            values.putIfAbsent(localName(node), text)
+        }
+        return StationDetail(
+            title = values["title"],
+            stationUrl = values["stationurl"],
+            mediaId = values["mediaid"],
+            description = values["description"],
+            thumbnail = values["thumbnail"],
+        )
+    }
+
+    private fun parseXml(body: String, what: String): Element {
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            // Local speaker XML, but it costs one call to make an entity
+            // declaration in it inert rather than a file read.
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            isExpandEntityReferences = false
+            isNamespaceAware = false
+        }
+        return try {
+            factory.newDocumentBuilder()
+                .parse(InputSource(StringReader(body)))
+                .documentElement
+        } catch (error: Exception) {
+            throw IOException("Samsung WAM returned invalid $what XML: ${body.take(200)}", error)
+        }
+    }
+
+    private fun Element.descendants(): Sequence<Element> = sequence {
+        yield(this@descendants)
+        val children = childNodes
+        for (index in 0 until children.length) {
+            val child = children.item(index)
+            if (child is Element) yieldAll(child.descendants())
+        }
+    }
+
+    /** Direct child elements as `name -> text`, first spelling winning. */
+    private fun Element.childText(): Map<String, String> {
+        val values = mutableMapOf<String, String>()
+        val children = childNodes
+        for (index in 0 until children.length) {
+            val child = children.item(index)
+            if (child is Element) {
+                child.trimmedText()?.let { values.putIfAbsent(localName(child), it) }
+            }
+        }
+        return values
+    }
+
+    /** The element's own text, or null when it only holds other elements. */
+    private fun Element.trimmedText(): String? {
+        val text = StringBuilder()
+        val children = childNodes
+        for (index in 0 until children.length) {
+            val child = children.item(index)
+            if (child is Text) text.append(child.data)
+        }
+        return text.toString().trim().takeIf { it.isNotEmpty() }
+    }
+
+    private fun localName(node: Element): String = SamsungTuneIn.localName(node.tagName)
+
+    private const val LIST_COUNT = 30
+    private const val OPEN_ATTEMPTS = 5
+    private const val PAGE_ATTEMPTS = 3
+    private const val SETTLE_MS = 1_000L
+    private const val PAGE_SETTLE_MS = 2_000L
+    private const val BROWSE_TIMEOUT_MS = 8_000
+    private const val SEARCH_TIMEOUT_MS = 12_000
+}
