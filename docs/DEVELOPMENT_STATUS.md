@@ -445,6 +445,14 @@ operating system records.
     believed. Verified against the physical M5 the same day. Still left is the UI, desktop and
     mobile alike.
 
+    **What is left is more than the UI, measured 2026-08-28.** The step from a browsed station to
+    audio does not work the way `WAM_PROTOCOL.md` said it did: the `stationurl` from
+    `GetStationData` is a `Tune.ashx` playlist, not a stream, and `SetUrlPlayback` refuses it with
+    `ErrorEvent` `ng`. Resolving the playlist client-side is half of it; the resolved URL then
+    drew no answer of any kind, which is not explained yet. So a browsed station should reach the
+    speaker the way every other radio here does - resolved, then relayed from the client. The
+    protocol file carries the measurements under `GetStationData`.
+
     The concrete want behind this is the **physical Radio button**, which cycles the three
     presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
     already readable with `--tunein-list`; what is missing is putting a different station
