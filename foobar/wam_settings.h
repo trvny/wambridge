@@ -8,7 +8,7 @@ namespace wam_settings {
 inline constexpr int kMaximumRawVolume = 30;
 inline constexpr int kDefaultVolumeMax = 10;
 inline constexpr int kDefaultStartVolumeMax = 3;
-inline constexpr int kDefaultStartupSilenceMs = 1500;
+inline constexpr int kDefaultStartupSilenceMs = 0;
 inline constexpr int kMaximumStartupSilenceMs = 10000;
 inline constexpr int kDefaultBufferExtraMs = 2000;
 inline constexpr int kMaximumBufferExtraMs = 10000;

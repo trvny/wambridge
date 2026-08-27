@@ -165,7 +165,7 @@ Attribution, with `startup_silence=0`:
 | term | share |
 | --- | --- |
 | host buffer counted by `get_latency()` | ~3.9 s |
-| `adelay` startup silence in the helper | 0 s as configured, 1.5 s by default |
+| `adelay` startup silence in the helper | 0 s by default; configurable up to 10 s |
 | FFmpeg and the local HTTP socket | under a second |
 | the speaker's own prebuffer | ~2 s on FLAC, less on WAV |
 

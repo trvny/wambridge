@@ -276,11 +276,11 @@ class StartupSilenceTests(TestCase):
         finally:
             server.close()
 
-    def test_default_prepends_the_historic_silence(self) -> None:
+    def test_default_omits_startup_silence_filter(self) -> None:
         command = self._command()
 
-        self.assertIn("-af", command)
-        self.assertIn("adelay=1500:all=1", command)
+        self.assertNotIn("-af", command)
+        self.assertFalse([arg for arg in command if arg.startswith("adelay=")])
 
     def test_zero_drops_the_filter_instead_of_passing_zero(self) -> None:
         # adelay=0 would still build a filter graph for nothing.
