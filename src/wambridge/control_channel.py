@@ -147,11 +147,10 @@ class ControlChannel:
                 LOGGER.warning("Ignoring malformed playback command %r", line)
                 return "error"
             # Do the speaker round trip here, but do not make the component wait
-            # for an acknowledgement. SetMute can legitimately consume its full
-            # response budget on this firmware; tying that budget to a loopback
-            # recv made one slow reply retire the fast channel and blocked
-            # foobar's pause/volume callers on the same mutex. Paced silence is
-            # still the transport fallback if this speaker-side mute fails.
+            # for an acknowledgement. Pause snapshots the raw volume and writes
+            # 0 on the helper's existing 55001 connection; resume restores it.
+            # The physical M5 keeps the same HTTP request alive across that path.
+            # Paced silence remains the transport fallback if the control fails.
             try:
                 self._set_paused(command == "pause")
             except Exception:  # helper boundary: a failed command is not fatal

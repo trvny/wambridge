@@ -329,6 +329,11 @@ the ear about six seconds later. Volume that should feel immediate belongs on th
 matched `result="ng"` for `SetVolume` must be surfaced: startup mutes the speaker on purpose,
 so a rejected unmute leaves it silent while every other signal says it is playing.
 
+Measured again 2026-08-28 during PR #112: changing the active URL/PCM session **3 -> 0 -> 3**
+kept the exact same `wambridge-pcm` and FFmpeg PIDs alive and `CLOCK` advanced continuously. The
+M5 stayed `muted=off`; only its raw level changed. Unlike `SetMute`, raw volume 0 therefore gives
+a transport-preserving speaker-side silence primitive, provided the previous level is restored.
+
 ## The speaker's own radio, and reading it
 
 `GetApInfo` returns `ssid`, `mac`, `rssi`, `ch` and `connectiontype`, answers in 0.13 s and
@@ -405,6 +410,11 @@ to `mute=off` without any `SetMute` being sent. That makes the next URL track fo
 previous session was torn down badly, but it is **not** a teardown contract: another source or
 client can take the speaker without sending `SetUrlPlayback`, so pause still restores the mute
 state it found.
+
+A later PR #112 hardware run on 2026-08-28 ruled `SetMute` out as the PCM pause primitive. Beefweb
+pause set `muted=on` promptly, but the M5 then closed its HTTP pull and the helper ended with
+`WAMBRIDGE STOPPED`; a subsequent foobar Stop left the speaker at `muted=on`. `SetMute` is useful
+for standby/startup semantics, but it cannot preserve the live URL/PCM transport during pause.
 
 
 Two properties that matter when measuring this:

@@ -45,8 +45,7 @@ _FAILURE_EVENT = "ErrorEvent"
 _PUBLIC_IDENTIFIER = "public"
 _PLAYBACK_COMMAND = "SetUrlPlayback"
 _VOLUME_COMMAND = "SetVolume"
-_GET_MUTE_COMMAND = "GetMute"
-_MUTE_COMMAND = "SetMute"
+_GET_VOLUME_COMMAND = "GetVolume"
 _VOLUME_ACK_TIMEOUT = 1.0
 _PAUSE_ACK_TIMEOUT = 1.0
 _STOP_COMMAND = "SetPlaybackControl"
@@ -290,7 +289,7 @@ class PlaybackWatcher:
         self._results: dict[str, str] = {}
         self._response_events: dict[str, WamEvent] = {}
         self._response_lock = threading.Lock()
-        self._pause_restore_mute: bool | None = None
+        self._pause_restore_volume: int | None = None
 
     def __enter__(self) -> PlaybackWatcher:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -336,9 +335,9 @@ class PlaybackWatcher:
             return
         self._released = True
         # A stop, track change or foobar shutdown does not have to deliver a
-        # matching resume callback. Restore a mute we applied for pause while
-        # the persistent 55001 connection is still alive.
-        self._restore_pause_mute_quietly()
+        # matching resume callback. Restore the raw volume we replaced with 0 for pause
+        # while the persistent 55001 connection is still alive.
+        self._restore_pause_volume_quietly()
         if not self._armed.is_set():
             # No URL was ever offered, so there is no playback session of ours
             # to end. Sending a stop anyway would reach past this helper into
@@ -483,87 +482,89 @@ class PlaybackWatcher:
         )
 
     def set_volume(self, level: int) -> None:
-        """Set startup volume without opening a competing control socket."""
+        """Set speaker volume without opening a competing control socket."""
+        if self._pause_restore_volume is not None:
+            # A slider move while paused changes what resume should restore, not
+            # the speaker's current zero. PCM keeps flowing as paced silence.
+            self._pause_restore_volume = level
+            return
+        self._send_volume_state(level)
+
+    def set_pause_volume(self, paused: bool) -> None:
+        """Silence pause with raw volume 0 while preserving the live HTTP stream."""
+        if paused:
+            if self._pause_restore_volume is not None:
+                return
+            previous = self._read_volume_state()
+            self._pause_restore_volume = previous
+            if previous == 0:
+                return
+            # The physical M5 keeps the same HTTP request, helper and FFmpeg alive
+            # across SetVolume 3 -> 0 -> 3; SetMute closes the request instead.
+            self._set_volume_and_wait(0)
+            return
+
+        try:
+            self._restore_pause_volume()
+        except (StreamError, WamApiError) as error:
+            # Failed resume must not leave live playback at raw volume 0. Mark
+            # the helper failed so the component can rebuild the URL session.
+            self._error = f"Could not restore speaker volume after pause: {error}"
+            raise
+
+    def _read_volume_state(self) -> int:
+        self._send_command(method=_GET_VOLUME_COMMAND)
+        event = self.wait_for_response_event(
+            _GET_VOLUME_COMMAND,
+            timeout=_PAUSE_ACK_TIMEOUT,
+        )
+        if event is None:
+            raise WamApiError("Speaker did not report volume state")
+        with self._response_lock:
+            rejection = self._results.get(_GET_VOLUME_COMMAND)
+        if rejection:
+            raise WamApiError(rejection)
+        for key, value in event.values.items():
+            if key.casefold() not in {"volume", "volumelevel", "volume_level"}:
+                continue
+            try:
+                level = int(value)
+            except ValueError as error:
+                raise WamApiError("Speaker GetVolume response was not numeric") from error
+            if RAW_MIN_VOLUME <= level <= RAW_MAX_VOLUME:
+                return level
+            raise WamApiError("Speaker GetVolume response was out of range")
+        raise WamApiError("Speaker GetVolume response did not contain volume state")
+
+    def _send_volume_state(self, level: int) -> None:
         self._send_command(
-            method="SetVolume",
+            method=_VOLUME_COMMAND,
             arguments=[("volume", level, "dec")],
             power_on=True,
         )
 
-    def set_pause_mute(self, paused: bool) -> None:
-        """Mute for foobar pause, restoring the speaker's previous mute state."""
-        if paused:
-            if self._pause_restore_mute is not None:
-                return
-            previous = self._read_mute_state()
-            self._pause_restore_mute = previous
-            if previous:
-                return
-            # Keep the saved state even if this write fails: a timed-out write
-            # may still have landed, and teardown must get a chance to undo it.
-            self._set_mute_state(True)
-            return
-
-        try:
-            self._restore_pause_mute()
-        except (StreamError, WamApiError) as error:
-            # The component intentionally does not wait for a loopback ACK: it
-            # must never block foobar's pause callback on a firmware timeout. A
-            # failed resume is different from a failed pause, though. Paced
-            # silence is a safe pause fallback; a failed unmute would leave live
-            # playback inaudible. Make the helper fail so the component restarts
-            # the URL session instead of staying silently wedged.
-            self._error = f"Could not restore speaker mute after pause: {error}"
-            raise
-
-    def _read_mute_state(self) -> bool:
-        self._send_command(method=_GET_MUTE_COMMAND)
-        event = self.wait_for_response_event(
-            _GET_MUTE_COMMAND,
-            timeout=_PAUSE_ACK_TIMEOUT,
-        )
-        if event is None:
-            raise WamApiError("Speaker did not report mute state")
-        with self._response_lock:
-            rejection = self._results.get(_GET_MUTE_COMMAND)
-        if rejection:
-            raise WamApiError(rejection)
-        for key, value in event.values.items():
-            if key.casefold() not in {"mute", "mutestatus"}:
-                continue
-            normalized = value.strip().casefold()
-            if normalized in {"on", "1", "true"}:
-                return True
-            if normalized in {"off", "0", "false"}:
-                return False
-        raise WamApiError("Speaker GetMute response did not contain mute state")
-
-    def _set_mute_state(self, muted: bool) -> None:
-        self._send_command(
-            method=_MUTE_COMMAND,
-            arguments=[("mute", "on" if muted else "off", "str")],
-            power_on=True,
-        )
+    def _set_volume_and_wait(self, level: int) -> None:
+        self._send_volume_state(level)
         rejection = self.wait_for_response(
-            _MUTE_COMMAND,
+            _VOLUME_COMMAND,
             timeout=_PAUSE_ACK_TIMEOUT,
         )
         if rejection is not None:
             raise WamApiError(rejection)
 
-    def _restore_pause_mute(self) -> None:
-        previous = self._pause_restore_mute
+    def _restore_pause_volume(self) -> None:
+        previous = self._pause_restore_volume
         if previous is None:
             return
-        if not previous:
-            self._set_mute_state(False)
-        self._pause_restore_mute = None
+        if previous != 0:
+            self._set_volume_and_wait(previous)
+        self._pause_restore_volume = None
 
-    def _restore_pause_mute_quietly(self) -> None:
+    def _restore_pause_volume_quietly(self) -> None:
         try:
-            self._restore_pause_mute()
+            self._restore_pause_volume()
         except (StreamError, WamApiError) as error:
-            LOGGER.warning("Could not restore speaker mute after pause: %s", error)
+            LOGGER.warning("Could not restore speaker volume after pause: %s", error)
 
     def wait_for_start(self, *, timeout: float) -> None:
         for budget in _wait_slices(timeout):
@@ -912,7 +913,7 @@ def run(
             # PLAYING depends on.
             with ControlChannel(
                 watcher.set_volume,
-                set_paused=watcher.set_pause_mute,
+                set_paused=watcher.set_pause_volume,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

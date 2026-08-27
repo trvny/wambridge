@@ -326,17 +326,17 @@ operating system records.
    default is now 0 in both the helper and foobar settings. Hardware had already passed a full
    session at 0; a fresh short check on the physical M5 also held the seekbar at 1.00x and
    stopped with no helper or FFmpeg left behind.
-4. **Route pause onto `55001`. In progress in PR #112, final hardware pass pending.** The
-   first idea, `SetPlaybackControl pause`, is rejected by measurement: on URL/PCM it answers
-   cleanly but leaves `playstatus=play`. The current route therefore uses `SetMute` for prompt
-   speaker-side silence while the established PCM stream keeps receiving paced zeroes, preserving
-   the proven long-pause transport fallback. Measured 2026-08-27, `SetMute` answers as
-   `MuteStatus` in about **0.04-0.23 s**. The component sends pause/resume to the local helper
-   without waiting for a loopback acknowledgement, so a slow/silent firmware reply cannot block
-   foobar or retire the shared fast control channel. The helper snapshots the pre-pause mute state
-   and restores it on resume or teardown. A failed resume makes the helper fail and restart rather
-   than leaving live playback silently muted. Baseline before this work remains about 5 s to fall
-   silent and 6 s to come back; do not replace those numbers until the final build is heard.
+4. **Route pause onto `55001`. In progress in PR #112, final hardware pass pending.** Two
+   plausible speaker-side controls have now been rejected on the physical M5. UIC
+   `SetPlaybackControl pause` answers cleanly on URL/PCM but leaves `playstatus=play`. `SetMute`
+   does silence promptly, but the final `9278dba` hardware run showed that it also closes the M5's
+   HTTP pull: the helper reached `WAMBRIDGE STOPPED`, and Stop while paused handed the speaker back
+   at `muted=on`. The replacement route uses the already-proven shared-volume path instead. A live
+   experiment on 2026-08-28 changed raw volume **3 -> 0 -> 3** while the same helper and FFmpeg PIDs
+   stayed alive and `CLOCK` continued without interruption. Pause therefore snapshots `GetVolume`,
+   writes raw 0, keeps feeding paced zeroes, and restores the saved (or newly selected) level on
+   resume/teardown. Baseline before this work remains about 5 s to fall silent and 6 s to come back;
+   replace those numbers only after the rebuilt artifact passes the complete hardware checklist.
 5. ~~**Stop the helper respawn storm.**~~ **Merged and measured 2026-08-19**, PR #55. The
    backoff is charged at the spawn and refunded by `PLAYING`; see the section above for the two
    placements that failed first and why. Nothing is left open here.
