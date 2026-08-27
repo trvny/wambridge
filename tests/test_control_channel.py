@@ -63,17 +63,16 @@ class ControlChannelTests(unittest.TestCase):
                 self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [3, 5, 9])
 
-    def test_pause_and_resume_are_acknowledged_on_the_same_connection(self) -> None:
+    def test_pause_and_resume_use_the_same_connection_without_ack_waits(self) -> None:
         with _connect(self.channel) as client:
             self._send(client, "pause")
             self.assertTrue(self.applied.wait(timeout=2))
-            self.assertEqual(client.recv(16), b"ok\n")
+            self.applied.clear()
             self._send(client, "resume")
             self.assertTrue(self.applied.wait(timeout=2))
-            self.assertEqual(client.recv(16), b"ok\n")
         self.assertEqual(self.paused, [True, False])
 
-    def test_failing_pause_returns_error_without_ending_the_channel(self) -> None:
+    def test_failing_pause_does_not_end_the_channel(self) -> None:
         def explode(_paused: bool) -> None:
             raise RuntimeError("speaker said no")
 
@@ -82,7 +81,7 @@ class ControlChannelTests(unittest.TestCase):
         self.addCleanup(channel.close)
         with _connect(channel) as client:
             client.sendall(b"pause\n")
-            self.assertEqual(client.recv(16), b"error\n")
+            client.sendall(b"volume 3\n")
 
     def test_rejects_a_wrong_token(self) -> None:
         with _connect(self.channel, token="not-the-token") as client:

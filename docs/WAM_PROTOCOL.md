@@ -395,6 +395,11 @@ asking someone to look at the speaker.
 `standby` sends `set_mute(True)`, and startup mutes before unmuting - so `mute=on` means dark
 *only when nothing has just muted it*. As an idle-state detector it is sound; as a check run
 immediately after one of this component's own actions it is not.
+Measured 2026-08-27 on the same M5: `SetMute` replies as `MuteStatus`, not `SetMute`, in about
+0.04-0.23 s on the healthy path. Treat that as the command response alias; silence is still a
+valid firmware outcome, so callers must not require the reply to arrive inside another component's
+identical timeout budget.
+
 
 Two properties that matter when measuring this:
 

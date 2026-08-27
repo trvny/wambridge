@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstring>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
@@ -289,38 +288,13 @@ void close_control_socket_locked() {
     g_controlSocket = INVALID_SOCKET;
 }
 
-bool send_control_over_helper(
-    const std::string& command,
-    bool expectReply = false
-) {
+bool send_control_over_helper(const std::string& command) {
     std::lock_guard lock(g_controlMutex);
     if (g_controlSocket == INVALID_SOCKET) return false;
     const int sent = send(
         g_controlSocket, command.c_str(), static_cast<int>(command.size()), 0
     );
     if (sent != static_cast<int>(command.size())) {
-        close_control_socket_locked();
-        return false;
-    }
-    if (!expectReply) return true;
-
-    char reply[16]{};
-    int total = 0;
-    while (total < static_cast<int>(sizeof(reply) - 1)) {
-        const int received = recv(
-            g_controlSocket,
-            reply + total,
-            static_cast<int>(sizeof(reply) - 1) - total,
-            0
-        );
-        if (received <= 0) {
-            close_control_socket_locked();
-            return false;
-        }
-        total += received;
-        if (std::memchr(reply, '\n', static_cast<size_t>(total)) != nullptr) break;
-    }
-    if (std::string(reply, total) != "ok\n") {
         close_control_socket_locked();
         return false;
     }
@@ -355,20 +329,6 @@ bool open_control_socket(unsigned short port, const std::string& token) {
         handle,
         SOL_SOCKET,
         SO_SNDTIMEO,
-        reinterpret_cast<const char*>(&timeout),
-        sizeof(timeout)
-    );
-    setsockopt(
-        handle,
-        SOL_SOCKET,
-        SO_RCVTIMEO,
-        reinterpret_cast<const char*>(&timeout),
-        sizeof(timeout)
-    );
-    setsockopt(
-        handle,
-        SOL_SOCKET,
-        SO_RCVTIMEO,
         reinterpret_cast<const char*>(&timeout),
         sizeof(timeout)
     );
@@ -1807,10 +1767,7 @@ bool send_volume_over_helper(int step) {
 }
 
 bool send_pause_over_helper(bool paused) {
-    return send_control_over_helper(
-        paused ? "pause\n" : "resume\n",
-        true
-    );
+    return send_control_over_helper(paused ? "pause\n" : "resume\n");
 }
 
 void note_speaker_step(int step) {

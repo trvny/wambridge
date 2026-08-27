@@ -146,12 +146,17 @@ class ControlChannel:
             if argument or self._set_paused is None:
                 LOGGER.warning("Ignoring malformed playback command %r", line)
                 return "error"
+            # Do the speaker round trip here, but do not make the component wait
+            # for an acknowledgement. SetMute can legitimately consume its full
+            # response budget on this firmware; tying that budget to a loopback
+            # recv made one slow reply retire the fast channel and blocked
+            # foobar's pause/volume callers on the same mutex. Paced silence is
+            # still the transport fallback if this speaker-side mute fails.
             try:
                 self._set_paused(command == "pause")
             except Exception:  # helper boundary: a failed command is not fatal
                 LOGGER.warning("Control %s failed", command, exc_info=True)
-                return "error"
-            return "ok"
+            return None
         if command != "volume":
             LOGGER.warning("Ignoring unknown control command %r", command)
             return

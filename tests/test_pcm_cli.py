@@ -715,6 +715,19 @@ class PcmCliTests(TestCase):
             ],
         )
 
+    def test_mute_status_matches_the_pending_set_mute(self) -> None:
+        watcher, _connection = self._connected_watcher()
+        watcher._pending.append("SetMute")
+        event = WamEvent(
+            method="MuteStatus",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"mute": "on"},
+        )
+
+        self.assertEqual(watcher._match_pending(event), "SetMute")
+
     def test_pause_mute_surfaces_an_explicit_rejection(self) -> None:
         watcher, _connection = self._connected_watcher(
             rejection="Speaker rejected SetMute (error 3)",
