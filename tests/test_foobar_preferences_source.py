@@ -96,6 +96,13 @@ class FoobarPreferencesSourceTests(TestCase):
         self.assertIn("AddDialogWithControls(m_window)", source)
         self.assertIn("preferences_state::dark_mode_supported", source)
 
+    def test_custom_page_paints_the_dark_dialog_background(self) -> None:
+        source = PREFERENCES.read_text(encoding="utf-8")
+
+        self.assertIn("WM_ERASEBKGND", source)
+        self.assertIn("WM_CTLCOLORDLG", source)
+        self.assertIn("RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN", source)
+
     def test_invalid_ini_values_enable_apply_for_normalization(self) -> None:
         prefs = PREFERENCES.read_text(encoding="utf-8")
         settings = SETTINGS.read_text(encoding="utf-8")

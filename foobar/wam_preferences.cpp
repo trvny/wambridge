@@ -100,6 +100,12 @@ public:
         if (m_window != nullptr) {
             create_controls(instance, parent);
             m_darkHooks.AddDialogWithControls(m_window);
+            RedrawWindow(
+                m_window,
+                nullptr,
+                nullptr,
+                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN
+            );
             populate(m_baseline);
             layout();
         }
@@ -180,6 +186,9 @@ private:
         if (self != nullptr) {
             if (message == WM_COMMAND) self->on_command(wParam, lParam);
             if (message == WM_SIZE) self->layout();
+            if (message == WM_ERASEBKGND) {
+                return self->erase_background(reinterpret_cast<HDC>(wParam));
+            }
             if (message == WM_DESTROY) self->m_window = nullptr;
         }
         return DefWindowProcW(window, message, wParam, lParam);
@@ -310,6 +319,21 @@ private:
         if (control != nullptr && m_font != nullptr) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
         }
+    }
+
+    LRESULT erase_background(HDC dc) const {
+        if (dc == nullptr || m_window == nullptr) return 0;
+        RECT client{};
+        GetClientRect(m_window, &client);
+        HBRUSH brush = reinterpret_cast<HBRUSH>(SendMessageW(
+            m_window,
+            WM_CTLCOLORDLG,
+            reinterpret_cast<WPARAM>(dc),
+            reinterpret_cast<LPARAM>(m_window)
+        ));
+        if (brush == nullptr) brush = GetSysColorBrush(COLOR_BTNFACE);
+        FillRect(dc, &client, brush);
+        return 1;
     }
 
     int dpi_scale(int value) const {
