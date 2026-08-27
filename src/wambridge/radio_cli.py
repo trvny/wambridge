@@ -9,6 +9,14 @@ from pathlib import Path
 from time import monotonic, sleep
 
 from . import cli
+from .catalogue import (
+    RadioPage,
+    current_page,
+    descend,
+    open_catalogue,
+    search,
+    station_detail,
+)
 from .cli_common import configure_logging
 from .profiles import ProfileError, ProfileStore
 from .samsung import (
@@ -89,6 +97,33 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ID_OR_TITLE",
         help="Play a native TuneIn preset by content ID or exact title",
     )
+    radio.add_argument(
+        "--tunein-browse",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help=(
+            "Browse the speaker's TuneIn catalogue. PATH is a slash-separated "
+            "list of row numbers from the pages above it, e.g. 1/0; without one "
+            "the catalogue root is listed. A row that is a station is shown with "
+            "its playable URL"
+        ),
+    )
+    radio.add_argument(
+        "--tunein-search",
+        metavar="QUERY",
+        help="Search the TuneIn catalogue by name",
+    )
+    parser.add_argument(
+        "--tunein-start",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "First row to show for --tunein-browse or --tunein-search; levels "
+            "are paginated and can run to dozens of entries"
+        ),
+    )
     parser.add_argument(
         "--stations-config",
         type=Path,
@@ -107,6 +142,9 @@ def _radio_action(args: argparse.Namespace) -> bool:
             args.radio_play,
             args.tunein_list,
             args.tunein_play,
+            # An empty string is a real value here: it means the catalogue root.
+            args.tunein_browse is not None,
+            args.tunein_search,
         )
     )
 
@@ -139,6 +177,92 @@ def _print_tunein_presets(
         return 0
     for preset in presets:
         print(f"{preset.content_id}\t{preset.kind}\t{preset.title}")
+    return 0
+
+
+def _print_page(page: RadioPage) -> None:
+    shown = len(page.entries)
+    total = page.total if page.total is not None else shown
+    header = page.category or "?"
+    print(f"{header}\t{page.start_index}-{page.start_index + shown} of {total}")
+    for entry in page.entries:
+        if entry.is_station:
+            kind, extra = "station", entry.media_id or ""
+        elif entry.is_folder:
+            kind, extra = "folder", ""
+        else:
+            kind, extra = f"type{entry.item_type}", entry.media_id or ""
+        print(f"{entry.content_id}\t{kind}\t{extra}\t{entry.title}")
+    if page.has_more:
+        print(f"(more: --tunein-start {page.start_index + shown})")
+
+
+def _browse_catalogue(
+    speaker_ip: str,
+    *,
+    port: int,
+    path: str,
+    start_index: int,
+) -> int:
+    """List one level of the catalogue, or one station's detail.
+
+    The speaker holds the cursor and it survives this process, so every run
+    starts by normalising to the root and walks the path from there. That costs
+    one request per level and buys an interface that has no hidden state: the
+    same path always means the same place.
+    """
+    segments = [part for part in path.split("/") if part.strip()]
+    try:
+        rows = [int(part) for part in segments]
+    except ValueError:
+        raise RuntimeError(
+            f"--tunein-browse takes row numbers separated by /, not {path!r}"
+        ) from None
+
+    page = open_catalogue(speaker_ip, port=port)
+    for position, row in enumerate(rows):
+        entry = next(
+            (item for item in page.entries if item.content_id == str(row)),
+            None,
+        )
+        if entry is None:
+            raise RuntimeError(f"No row {row} on {page.category or 'this level'}")
+        if entry.is_station:
+            if position != len(rows) - 1:
+                raise RuntimeError(
+                    f"Row {row} ({entry.title}) is a station, so nothing is below it"
+                )
+            detail = station_detail(speaker_ip, entry.index, port=port)
+            print(f"{detail.title or entry.title}")
+            if entry.media_id:
+                print(f"tunein\t{entry.media_id}")
+            if detail.description:
+                print(f"about\t{detail.description}")
+            if detail.station_url:
+                print(f"url\t{detail.station_url}")
+            return 0
+        page = descend(speaker_ip, entry.index, port=port)
+
+    if start_index:
+        page = current_page(speaker_ip, start_index=start_index, port=port)
+    _print_page(page)
+    return 0
+
+
+def _search_catalogue(
+    speaker_ip: str,
+    *,
+    port: int,
+    query: str,
+    start_index: int,
+) -> int:
+    page = search(speaker_ip, query, start_index=start_index, port=port)
+    if not page.entries:
+        print(f"Nothing found for {query!r}")
+        return 0
+    # Results are mixed. Only the rows carrying a TuneIn id are stations; the
+    # rest are headings the catalogue cannot descend into.
+    _print_page(page)
     return 0
 
 
@@ -377,6 +501,20 @@ def run(args: argparse.Namespace) -> int:
     )
     if args.tunein_list:
         return _print_tunein_presets(speaker_ip, port=speaker_port)
+    if args.tunein_browse is not None:
+        return _browse_catalogue(
+            speaker_ip,
+            port=speaker_port,
+            path=args.tunein_browse,
+            start_index=args.tunein_start,
+        )
+    if args.tunein_search:
+        return _search_catalogue(
+            speaker_ip,
+            port=speaker_port,
+            query=args.tunein_search,
+            start_index=args.tunein_start,
+        )
     return _play_tunein_safely(args, speaker_ip, speaker_port)
 
 

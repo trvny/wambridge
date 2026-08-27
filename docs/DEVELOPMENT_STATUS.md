@@ -1,6 +1,6 @@
 # Development status
 
-Last reviewed: 2026-08-26.
+Last reviewed: 2026-08-27.
 
 Continuity note for playback work. Read this with `WAM_PROTOCOL.md` before reviving an old
 branch or implementing another timing layer.
@@ -425,6 +425,17 @@ operating system records.
     cleanly with "API not implemented for current service"; `GlobalSearch` answers but returns
     nothing on this speaker - it searches signed-in content providers and there are none, so the
     `str_arr` support it would need is not worth adding. What is left is the UI.
+
+    **Browsing and search stopped being probe-only on 2026-08-27.** They now live in
+    `src/wambridge/catalogue.py` with a unit suite over redacted real answers, and the CLI
+    exposes them as `--tunein-browse [PATH]`, `--tunein-search QUERY` and `--tunein-start N`.
+    The module carries the three firmware traps the probes turned up: a search leaves the
+    cursor in a second tree whose root is `Search` and which also reports `isroot="1"` (only
+    `BrowseMain` crosses back, and `open_catalogue` sends it automatically); `contentid` is a
+    page-local index while `mediaid` is the stable id; and a `totallistcount=0` on a level that
+    has content means the CPM subsystem is recovering, so an empty page is retried before it is
+    believed. Verified against the physical M5 the same day. Still left is the UI, desktop and
+    mobile alike.
 
     The concrete want behind this is the **physical Radio button**, which cycles the three
     presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
