@@ -2,7 +2,7 @@
 
 The helper's stdin carries PCM and its stdout carries the protocol, so there is
 no way for the component to say anything to a running helper. That gap is why
-every volume change from the foobar UI has to spawn `wambridge-control.exe`,
+every routed control from the foobar UI has to spawn `wambridge-control.exe`,
 which opens a second TCP connection to port 55001 beside the persistent one
 `pcm_cli` already owns - measured on 2026-08-08 at four connections per single
 menu press, half of them re-verifying the identity of a speaker the helper is
@@ -32,16 +32,18 @@ ACCEPT_TIMEOUT = 0.5
 
 
 class ControlChannel:
-    """Serve volume commands to one local client over the loopback interface."""
+    """Serve speaker controls to one local client over the loopback interface."""
 
     def __init__(
         self,
         set_volume: Callable[[int], None],
         *,
+        set_paused: Callable[[bool], None] | None = None,
         minimum_volume: int = 0,
         maximum_volume: int = 30,
     ) -> None:
         self._set_volume = set_volume
+        self._set_paused = set_paused
         self._minimum_volume = minimum_volume
         self._maximum_volume = maximum_volume
         # Loopback only. This accepts commands that move a speaker in someone's
@@ -132,12 +134,29 @@ class ControlChannel:
                     LOGGER.warning("Control client failed authentication")
                     return
                 for line in lines:
-                    self._dispatch(line)
+                    reply = self._dispatch(line)
+                    if reply is not None:
+                        client.sendall((reply + "\n").encode("ascii"))
         except OSError:
             LOGGER.debug("Control client disconnected", exc_info=True)
 
-    def _dispatch(self, line: str) -> None:
+    def _dispatch(self, line: str) -> str | None:
         command, _, argument = line.partition(" ")
+        if command in {"pause", "resume"}:
+            if argument or self._set_paused is None:
+                LOGGER.warning("Ignoring malformed playback command %r", line)
+                return "error"
+            # Do the speaker round trip here, but do not make the component wait
+            # for an acknowledgement. SetMute can legitimately consume its full
+            # response budget on this firmware; tying that budget to a loopback
+            # recv made one slow reply retire the fast channel and blocked
+            # foobar's pause/volume callers on the same mutex. Paced silence is
+            # still the transport fallback if this speaker-side mute fails.
+            try:
+                self._set_paused(command == "pause")
+            except Exception:  # helper boundary: a failed command is not fatal
+                LOGGER.warning("Control %s failed", command, exc_info=True)
+            return None
         if command != "volume":
             LOGGER.warning("Ignoring unknown control command %r", command)
             return

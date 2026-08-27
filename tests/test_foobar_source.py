@@ -374,6 +374,17 @@ class FoobarSourceTests(TestCase):
             source,
         )
 
+    def test_pause_routes_mute_but_keeps_paced_silence(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("wam::send_pause_over_helper(true)", source)
+        self.assertIn("wam::send_pause_over_helper(false)", source)
+        self.assertIn("m_pauseMuteRequested.store(controlSent);", source)
+        self.assertIn("sendSilence = m_flushing || m_paused.load();", source)
+        self.assertIn("if (hadPauseMuteRequest && !controlSent) m_restart = true;", source)
+        self.assertNotIn("SO_RCVTIMEO", source)
+        self.assertIn('send_control_over_helper(paused ? "pause\\n" : "resume\\n")', source)
+
     def test_force_play_is_a_transient_drain_request(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 

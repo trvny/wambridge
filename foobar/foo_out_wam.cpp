@@ -288,6 +288,19 @@ void close_control_socket_locked() {
     g_controlSocket = INVALID_SOCKET;
 }
 
+bool send_control_over_helper(const std::string& command) {
+    std::lock_guard lock(g_controlMutex);
+    if (g_controlSocket == INVALID_SOCKET) return false;
+    const int sent = send(
+        g_controlSocket, command.c_str(), static_cast<int>(command.size()), 0
+    );
+    if (sent != static_cast<int>(command.size())) {
+        close_control_socket_locked();
+        return false;
+    }
+    return true;
+}
+
 // Connect to a loopback listener the helper announced, hand over its token and
 // keep the socket. Returns quietly on failure: a slider that cannot reach the
 // helper falls back to the control process, which is what it did before.
@@ -516,21 +529,37 @@ public:
     }
 
     void pause(bool state) override {
+        bool wasPaused = false;
+        bool hadPauseMuteRequest = false;
         {
             std::lock_guard lock(m_mutex);
-            const bool wasPaused = m_paused.load();
+            wasPaused = m_paused.load();
             if (state == wasPaused) return;
+            hadPauseMuteRequest = m_pauseMuteRequested.load();
+        }
 
+        bool controlSent = true;
+        if (state) {
+            controlSent = wam::send_pause_over_helper(true);
+        } else if (hadPauseMuteRequest) {
+            controlSent = wam::send_pause_over_helper(false);
+        }
+
+        {
+            std::lock_guard lock(m_mutex);
             const auto now = std::chrono::steady_clock::now();
             refresh_playback_clock_locked(now);
             if (state) {
                 m_pauseStarted = now;
+                m_pauseMuteRequested.store(controlSent);
             } else {
                 if (m_clockStarted &&
                     m_pauseStarted != std::chrono::steady_clock::time_point{}) {
                     m_clockAnchor += now - m_pauseStarted;
                 }
                 m_pauseStarted = {};
+                m_pauseMuteRequested.store(false);
+                if (hadPauseMuteRequest && !controlSent) m_restart = true;
             }
             m_paused.store(state);
         }
@@ -1689,6 +1718,7 @@ private:
     std::chrono::steady_clock::time_point m_flushDeadline{};
     std::string m_failure;
     std::atomic<bool> m_paused{false};
+    std::atomic<bool> m_pauseMuteRequested{false};
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_helperReady{false};
     std::atomic<bool> m_childStopping{false};
@@ -1734,23 +1764,13 @@ output_factory_t<WamOutput> g_outputFactory;
 namespace wam {
 
 bool send_volume_over_helper(int step) {
-    const std::string command = "volume " + std::to_string(step) + "\n";
-    std::lock_guard lock(g_controlMutex);
-    if (g_controlSocket == INVALID_SOCKET) return false;
-    const int sent = send(
-        g_controlSocket,
-        command.c_str(),
-        static_cast<int>(command.size()),
-        0
+    return send_control_over_helper(
+        "volume " + std::to_string(step) + "\n"
     );
-    if (sent != static_cast<int>(command.size())) {
-        // A half-written command would arrive as a malformed line and be
-        // ignored by the helper, so the socket is retired rather than trusted.
-        // The caller falls back to spawning the control process.
-        close_control_socket_locked();
-        return false;
-    }
-    return true;
+}
+
+bool send_pause_over_helper(bool paused) {
+    return send_control_over_helper(paused ? "pause\n" : "resume\n");
 }
 
 void note_speaker_step(int step) {
