@@ -333,6 +333,9 @@ Measured again 2026-08-28 during PR #112: changing the active URL/PCM session **
 kept the exact same `wambridge-pcm` and FFmpeg PIDs alive and `CLOCK` advanced continuously. The
 M5 stayed `muted=off`; only its raw level changed. Unlike `SetMute`, raw volume 0 therefore gives
 a transport-preserving speaker-side silence primitive, provided the previous level is restored.
+The PR #112 helper keeps that active level from startup and every routed volume command, so normal
+pause does not spend another `GetVolume` round trip before writing 0. Its loopback control shutdown
+waits for any in-flight pause/volume callback before playback teardown can release the 55001 owner.
 
 ## The speaker's own radio, and reading it
 

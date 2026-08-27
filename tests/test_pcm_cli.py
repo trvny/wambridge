@@ -664,6 +664,7 @@ class PcmCliTests(TestCase):
             volume_state=volume_state,
         )
         watcher._connection = connection
+        watcher._current_volume = volume_state
         # Default on, because every release test below describes a live session:
         # the speaker fetched the stream and this helper owns the playback.
         # `release()` skips an offer the speaker never took up, so a watcher that
@@ -681,7 +682,6 @@ class PcmCliTests(TestCase):
         self.assertEqual(
             connection.sent,
             [
-                ("GetVolume", None, False),
                 ("SetVolume", [("volume", 0, "dec")], True),
                 ("SetVolume", [("volume", 7, "dec")], True),
             ],
@@ -693,7 +693,7 @@ class PcmCliTests(TestCase):
         watcher.set_pause_volume(True)
         watcher.set_pause_volume(False)
 
-        self.assertEqual(connection.sent, [("GetVolume", None, False)])
+        self.assertEqual(connection.sent, [])
 
     def test_slider_change_while_paused_updates_resume_target_only(self) -> None:
         watcher, connection = self._connected_watcher(volume_state=7)
@@ -705,7 +705,6 @@ class PcmCliTests(TestCase):
         self.assertEqual(
             connection.sent,
             [
-                ("GetVolume", None, False),
                 ("SetVolume", [("volume", 0, "dec")], True),
                 ("SetVolume", [("volume", 4, "dec")], True),
             ],
@@ -721,7 +720,6 @@ class PcmCliTests(TestCase):
         self.assertEqual(
             connection.sent,
             [
-                ("GetVolume", None, False),
                 ("SetVolume", [("volume", 0, "dec")], True),
                 ("SetVolume", [("volume", 7, "dec")], True),
                 ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
@@ -738,7 +736,6 @@ class PcmCliTests(TestCase):
         self.assertEqual(
             connection.sent,
             [
-                ("GetVolume", None, False),
                 ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
             ],
         )

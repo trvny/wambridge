@@ -45,7 +45,6 @@ _FAILURE_EVENT = "ErrorEvent"
 _PUBLIC_IDENTIFIER = "public"
 _PLAYBACK_COMMAND = "SetUrlPlayback"
 _VOLUME_COMMAND = "SetVolume"
-_GET_VOLUME_COMMAND = "GetVolume"
 _VOLUME_ACK_TIMEOUT = 1.0
 _PAUSE_ACK_TIMEOUT = 1.0
 _STOP_COMMAND = "SetPlaybackControl"
@@ -289,6 +288,10 @@ class PlaybackWatcher:
         self._results: dict[str, str] = {}
         self._response_events: dict[str, WamEvent] = {}
         self._response_lock = threading.Lock()
+        # Actual raw level last sent through this helper. Startup seeds it
+        # before the loopback control channel is announced, so pause does not
+        # need a GetVolume round trip in the normal path.
+        self._current_volume: int | None = None
         self._pause_restore_volume: int | None = None
 
     def __enter__(self) -> PlaybackWatcher:
@@ -489,19 +492,26 @@ class PlaybackWatcher:
             self._pause_restore_volume = level
             return
         self._send_volume_state(level)
+        self._current_volume = level
 
     def set_pause_volume(self, paused: bool) -> None:
         """Silence pause with raw volume 0 while preserving the live HTTP stream."""
         if paused:
             if self._pause_restore_volume is not None:
                 return
-            previous = self._read_volume_state()
+            previous = self._current_volume
+            if previous is None:
+                # The control channel is announced only after startup has sent
+                # its volume, so this is defensive rather than a normal path.
+                raise WamApiError("Speaker volume is unknown at pause")
             self._pause_restore_volume = previous
             if previous == 0:
                 return
-            # The physical M5 keeps the same HTTP request, helper and FFmpeg alive
-            # across SetVolume 3 -> 0 -> 3; SetMute closes the request instead.
+            # Physical M5, 2026-08-28: 3 -> 0 -> 3 kept the exact same HTTP
+            # request, helper PID, FFmpeg PID and advancing CLOCK. SetMute did
+            # the opposite and closed the speaker's HTTP pull.
             self._set_volume_and_wait(0)
+            self._current_volume = 0
             return
 
         try:
@@ -511,30 +521,6 @@ class PlaybackWatcher:
             # the helper failed so the component can rebuild the URL session.
             self._error = f"Could not restore speaker volume after pause: {error}"
             raise
-
-    def _read_volume_state(self) -> int:
-        self._send_command(method=_GET_VOLUME_COMMAND)
-        event = self.wait_for_response_event(
-            _GET_VOLUME_COMMAND,
-            timeout=_PAUSE_ACK_TIMEOUT,
-        )
-        if event is None:
-            raise WamApiError("Speaker did not report volume state")
-        with self._response_lock:
-            rejection = self._results.get(_GET_VOLUME_COMMAND)
-        if rejection:
-            raise WamApiError(rejection)
-        for key, value in event.values.items():
-            if key.casefold() not in {"volume", "volumelevel", "volume_level"}:
-                continue
-            try:
-                level = int(value)
-            except ValueError as error:
-                raise WamApiError("Speaker GetVolume response was not numeric") from error
-            if RAW_MIN_VOLUME <= level <= RAW_MAX_VOLUME:
-                return level
-            raise WamApiError("Speaker GetVolume response was out of range")
-        raise WamApiError("Speaker GetVolume response did not contain volume state")
 
     def _send_volume_state(self, level: int) -> None:
         self._send_command(
@@ -558,6 +544,7 @@ class PlaybackWatcher:
             return
         if previous != 0:
             self._set_volume_and_wait(previous)
+        self._current_volume = previous
         self._pause_restore_volume = None
 
     def _restore_pause_volume_quietly(self) -> None:

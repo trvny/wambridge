@@ -56,6 +56,11 @@ class ControlChannel:
         self._thread: threading.Thread | None = None
         self._client: socket.socket | None = None
         self._client_lock = threading.Lock()
+        # Serialize every callback that can move the speaker. close() takes this
+        # lock after setting _stop, which means it cannot return while a pause
+        # or volume command is still in flight, and a queued command sees _stop
+        # before it can touch the speaker.
+        self._dispatch_lock = threading.Lock()
 
     @property
     def port(self) -> int:
@@ -87,6 +92,11 @@ class ControlChannel:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2)
         self._server.close()
+        # PlaybackWatcher.release() runs immediately after this context exits.
+        # Wait out any callback already inside a speaker round trip; anything
+        # arriving later will see _stop in _dispatch and become a no-op.
+        with self._dispatch_lock:
+            pass
 
     def __enter__(self) -> ControlChannel:
         self.start()
@@ -141,14 +151,21 @@ class ControlChannel:
             LOGGER.debug("Control client disconnected", exc_info=True)
 
     def _dispatch(self, line: str) -> str | None:
+        with self._dispatch_lock:
+            if self._stop.is_set():
+                return None
+            return self._dispatch_locked(line)
+
+    def _dispatch_locked(self, line: str) -> str | None:
         command, _, argument = line.partition(" ")
         if command in {"pause", "resume"}:
             if argument or self._set_paused is None:
                 LOGGER.warning("Ignoring malformed playback command %r", line)
                 return "error"
             # Do the speaker round trip here, but do not make the component wait
-            # for an acknowledgement. Pause snapshots the raw volume and writes
-            # 0 on the helper's existing 55001 connection; resume restores it.
+            # for an acknowledgement. Pause uses the raw volume already tracked
+            # by the helper, writes 0 on the existing 55001 connection, and
+            # resume restores the saved level.
             # The physical M5 keeps the same HTTP request alive across that path.
             # Paced silence remains the transport fallback if the control fails.
             try:
