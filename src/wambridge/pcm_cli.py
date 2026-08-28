@@ -45,7 +45,10 @@ _FAILURE_EVENT = "ErrorEvent"
 _PUBLIC_IDENTIFIER = "public"
 _PLAYBACK_COMMAND = "SetUrlPlayback"
 _VOLUME_COMMAND = "SetVolume"
+_GET_MUTE_COMMAND = "GetMute"
+_MUTE_COMMAND = "SetMute"
 _VOLUME_ACK_TIMEOUT = 1.0
+_PAUSE_ACK_TIMEOUT = 1.0
 _STOP_COMMAND = "SetPlaybackControl"
 _SLEEP_COMMAND = "SetSleepTimer"
 _STOP_ACK_TIMEOUT = 1.0
@@ -285,7 +288,9 @@ class PlaybackWatcher:
         self._connection_lock = threading.Lock()
         self._pending: list[str] = []
         self._results: dict[str, str] = {}
+        self._response_events: dict[str, WamEvent] = {}
         self._response_lock = threading.Lock()
+        self._pause_restore_mute: bool | None = None
 
     def __enter__(self) -> PlaybackWatcher:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -330,6 +335,10 @@ class PlaybackWatcher:
         if self._released:
             return
         self._released = True
+        # A stop, track change or foobar shutdown does not have to deliver a
+        # matching resume callback. Restore a mute we applied for pause while
+        # the persistent 55001 connection is still alive.
+        self._restore_pause_mute_quietly()
         if not self._armed.is_set():
             # No URL was ever offered, so there is no playback session of ours
             # to end. Sending a stop anyway would reach past this helper into
@@ -481,6 +490,81 @@ class PlaybackWatcher:
             power_on=True,
         )
 
+    def set_pause_mute(self, paused: bool) -> None:
+        """Mute for foobar pause, restoring the speaker's previous mute state."""
+        if paused:
+            if self._pause_restore_mute is not None:
+                return
+            previous = self._read_mute_state()
+            self._pause_restore_mute = previous
+            if previous:
+                return
+            # Keep the saved state even if this write fails: a timed-out write
+            # may still have landed, and teardown must get a chance to undo it.
+            self._set_mute_state(True)
+            return
+
+        try:
+            self._restore_pause_mute()
+        except (StreamError, WamApiError) as error:
+            # The component intentionally does not wait for a loopback ACK: it
+            # must never block foobar's pause callback on a firmware timeout. A
+            # failed resume is different from a failed pause, though. Paced
+            # silence is a safe pause fallback; a failed unmute would leave live
+            # playback inaudible. Make the helper fail so the component restarts
+            # the URL session instead of staying silently wedged.
+            self._error = f"Could not restore speaker mute after pause: {error}"
+            raise
+
+    def _read_mute_state(self) -> bool:
+        self._send_command(method=_GET_MUTE_COMMAND)
+        event = self.wait_for_response_event(
+            _GET_MUTE_COMMAND,
+            timeout=_PAUSE_ACK_TIMEOUT,
+        )
+        if event is None:
+            raise WamApiError("Speaker did not report mute state")
+        with self._response_lock:
+            rejection = self._results.get(_GET_MUTE_COMMAND)
+        if rejection:
+            raise WamApiError(rejection)
+        for key, value in event.values.items():
+            if key.casefold() not in {"mute", "mutestatus"}:
+                continue
+            normalized = value.strip().casefold()
+            if normalized in {"on", "1", "true"}:
+                return True
+            if normalized in {"off", "0", "false"}:
+                return False
+        raise WamApiError("Speaker GetMute response did not contain mute state")
+
+    def _set_mute_state(self, muted: bool) -> None:
+        self._send_command(
+            method=_MUTE_COMMAND,
+            arguments=[("mute", "on" if muted else "off", "str")],
+            power_on=True,
+        )
+        rejection = self.wait_for_response(
+            _MUTE_COMMAND,
+            timeout=_PAUSE_ACK_TIMEOUT,
+        )
+        if rejection is not None:
+            raise WamApiError(rejection)
+
+    def _restore_pause_mute(self) -> None:
+        previous = self._pause_restore_mute
+        if previous is None:
+            return
+        if not previous:
+            self._set_mute_state(False)
+        self._pause_restore_mute = None
+
+    def _restore_pause_mute_quietly(self) -> None:
+        try:
+            self._restore_pause_mute()
+        except (StreamError, WamApiError) as error:
+            LOGGER.warning("Could not restore speaker mute after pause: %s", error)
+
     def wait_for_start(self, *, timeout: float) -> None:
         for budget in _wait_slices(timeout):
             if self._started.wait(timeout=budget):
@@ -492,6 +576,17 @@ class PlaybackWatcher:
         """Surface an asynchronous control-channel failure."""
         if self._error:
             raise StreamError(self._error)
+
+    def wait_for_response_event(self, method: str, *, timeout: float) -> WamEvent | None:
+        """Return the full matched response event, or ``None`` on silence."""
+        deadline = monotonic() + timeout
+        while True:
+            with self._response_lock:
+                event = self._response_events.get(method)
+                if event is not None:
+                    return event
+            if monotonic() >= deadline or self._stop.wait(timeout=0.05):
+                return None
 
     def wait_for_response(self, method: str, *, timeout: float) -> str | None:
         """Return the rejection message for the last ``method``, if any.
@@ -521,6 +616,7 @@ class PlaybackWatcher:
             raise StreamError("WAM control connection is not ready")
         with self._response_lock:
             self._results.pop(method, None)
+            self._response_events.pop(method, None)
             self._pending.append(method)
         try:
             connection.send(
@@ -552,15 +648,16 @@ class PlaybackWatcher:
 
     def _record_response(self, command: str, event: WamEvent) -> None:
         if (event.result or "").casefold() == "ok":
-            with self._response_lock:
-                self._results[command] = ""
-            return
-
-        code = event.reported_error_code
-        suffix = f" (error {code})" if code else ""
-        message = f"Speaker rejected {command}{suffix}"
+            message = ""
+        else:
+            code = event.reported_error_code
+            suffix = f" (error {code})" if code else ""
+            message = f"Speaker rejected {command}{suffix}"
         with self._response_lock:
+            self._response_events[command] = event
             self._results[command] = message
+        if not message:
+            return
         if command == _PLAYBACK_COMMAND:
             self._error = message
             return
@@ -815,6 +912,7 @@ def run(
             # PLAYING depends on.
             with ControlChannel(
                 watcher.set_volume,
+                set_paused=watcher.set_pause_mute,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

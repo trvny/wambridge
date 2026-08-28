@@ -1,9 +1,15 @@
 """Browsing and searching the speaker's own TuneIn catalogue.
 
 This is the read-only half of the radio surface. It reaches stations the
-speaker has never had saved as a preset, and it ends in a plain HTTP URL that
-``SetUrlPlayback`` already knows how to play - so nothing here needs the preset
-write commands, which remain untried.
+speaker has never had saved as a preset, so nothing here needs the preset write
+commands, which remain untried.
+
+**It does not end in a URL the speaker can play, and this docstring said it did
+until 2026-08-28.** ``station_url`` from ``GetStationData`` is a ``Tune.ashx``
+playlist and ``SetUrlPlayback`` refuses it with ``ErrorEvent`` ``ng``. What a
+caller wants from a listed station is its ``media_id``: that is the TuneIn id,
+which this side resolves to a stream and then relays, the way every other radio
+in this project reaches the speaker.
 
 Three properties of the firmware shape the whole module and are easy to get
 wrong:
@@ -73,7 +79,14 @@ class RadioEntry:
 
     @property
     def is_station(self) -> bool:
-        """Return whether this entry can yield a playable URL."""
+        """Return whether this entry names a station whose id can be resolved.
+
+        It cannot yield a playable URL by itself; see the module docstring. Note
+        also that ``item_type`` alone does not identify a station - podcast
+        episodes are ``type="2"`` too, with ``t…`` ids this project cannot use.
+        The mobile twin already filters on the ``s…`` shape and this one does
+        not yet; keeping the two in step is tracked in ``DEVELOPMENT_STATUS.md``.
+        """
         return self.item_type == ITEM_STATION and bool(self.media_id)
 
     @property

@@ -29,6 +29,10 @@ void request_volume_step(int step);
 // the caller falls back to the process it would have spawned anyway.
 bool send_volume_over_helper(int step);
 
+// Mute/unmute the active speaker for foobar pause while the output continues
+// feeding paced silence. False leaves the legacy PCM pause path untouched.
+bool send_pause_over_helper(bool paused);
+
 // Tell the output that the speaker is now at this raw step because something
 // other than the slider moved it.
 //

@@ -52,6 +52,7 @@ class FakePlaybackWatcher:
         self.failure_checks = 0
         self.offered: list[str] = []
         self.volumes: list[int] = []
+        self.pause_mutes: list[bool] = []
         self.released = False
         self.sleep_timer_cancellations = 0
         self.sleep_after_stop = kwargs.get("sleep_after_stop", 0)
@@ -85,6 +86,9 @@ class FakePlaybackWatcher:
     def set_volume(self, level: int) -> None:
         self.volumes.append(level)
 
+    def set_pause_mute(self, paused: bool) -> None:
+        self.pause_mutes.append(paused)
+
     def wait_for_start(self, *, timeout: float) -> None:
         self.waited = True
 
@@ -107,6 +111,7 @@ class FakeControlConnection:
         rejection: str | None = None,
         rejection_method: str = "SetPlaybackControl",
         failing: bool = False,
+        mute_state: str = "off",
     ) -> None:
         self._watcher = watcher
         self._rejection = rejection
@@ -115,6 +120,7 @@ class FakeControlConnection:
         # refused", so a test could not say which one it meant.
         self._rejection_method = rejection_method
         self._failing = failing
+        self._mute_state = mute_state
         self.sent: list[tuple[str, list | None, bool]] = []
 
     def send(
@@ -130,7 +136,17 @@ class FakeControlConnection:
         self.sent.append((method, arguments, power_on))
         # What the listener thread would have recorded, without the thread.
         answer = self._rejection if method == self._rejection_method else None
+        event = WamEvent(
+            method=method,
+            result="ng" if answer else "ok",
+            user_identifier=CLIENT_UUID,
+            error_code="3" if answer else None,
+            values={"mute": self._mute_state} if method == "GetMute" else {},
+        )
+        self._watcher._response_events[method] = event
         self._watcher._results[method] = answer or ""
+        if method == "SetMute" and answer is None and arguments:
+            self._mute_state = str(arguments[0][1])
 
 
 class PcmCliTests(TestCase):
@@ -619,6 +635,7 @@ class PcmCliTests(TestCase):
         rejection_method: str = "SetPlaybackControl",
         failing: bool = False,
         stream_active: bool = True,
+        mute_state: str = "off",
     ) -> tuple[PlaybackWatcher, FakeControlConnection]:
         watcher = PlaybackWatcher(
             "10.0.0.118",
@@ -632,6 +649,7 @@ class PcmCliTests(TestCase):
             rejection=rejection,
             rejection_method=rejection_method,
             failing=failing,
+            mute_state=mute_state,
         )
         watcher._connection = connection
         # Default on, because every release test below describes a live session:
@@ -641,6 +659,94 @@ class PcmCliTests(TestCase):
         if stream_active:
             watcher.mark_stream_active()
         return watcher, connection
+
+    def test_pause_mute_uses_the_existing_connection(self) -> None:
+        watcher, connection = self._connected_watcher(rejection_method="SetMute")
+
+        watcher.set_pause_mute(True)
+        watcher.set_pause_mute(False)
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("GetMute", None, False),
+                ("SetMute", [("mute", "on", "str")], True),
+                ("SetMute", [("mute", "off", "str")], True),
+            ],
+        )
+
+    def test_pause_mute_preserves_an_already_muted_speaker(self) -> None:
+        watcher, connection = self._connected_watcher(mute_state="on")
+
+        watcher.set_pause_mute(True)
+        watcher.set_pause_mute(False)
+
+        self.assertEqual(connection.sent, [("GetMute", None, False)])
+
+    def test_release_restores_pause_mute_before_stopping(self) -> None:
+        watcher, connection = self._connected_watcher()
+        watcher.arm()
+
+        watcher.set_pause_mute(True)
+        watcher.release()
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("GetMute", None, False),
+                ("SetMute", [("mute", "on", "str")], True),
+                ("SetMute", [("mute", "off", "str")], True),
+                ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
+            ],
+        )
+
+    def test_release_preserves_a_speaker_that_was_already_muted(self) -> None:
+        watcher, connection = self._connected_watcher(mute_state="on")
+        watcher.arm()
+
+        watcher.set_pause_mute(True)
+        watcher.release()
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("GetMute", None, False),
+                ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
+            ],
+        )
+
+    def test_resume_rejection_marks_the_helper_failed(self) -> None:
+        watcher, connection = self._connected_watcher()
+        watcher.set_pause_mute(True)
+        connection._rejection = "Speaker rejected SetMute (error 3)"
+        connection._rejection_method = "SetMute"
+
+        with self.assertRaisesRegex(WamApiError, "rejected SetMute"):
+            watcher.set_pause_mute(False)
+
+        self.assertIn("Could not restore speaker mute after pause", watcher._error)
+
+    def test_mute_status_matches_the_pending_set_mute(self) -> None:
+        watcher, _connection = self._connected_watcher()
+        watcher._pending.append("SetMute")
+        event = WamEvent(
+            method="MuteStatus",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"mute": "on"},
+        )
+
+        self.assertEqual(watcher._match_pending(event), "SetMute")
+
+    def test_pause_mute_surfaces_an_explicit_rejection(self) -> None:
+        watcher, _connection = self._connected_watcher(
+            rejection="Speaker rejected SetMute (error 3)",
+            rejection_method="SetMute",
+        )
+
+        with self.assertRaisesRegex(WamApiError, "rejected SetMute"):
+            watcher.set_pause_mute(True)
 
     def test_release_stops_playback_over_the_connection_already_open(self) -> None:
         watcher, connection = self._connected_watcher()

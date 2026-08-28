@@ -395,6 +395,17 @@ asking someone to look at the speaker.
 `standby` sends `set_mute(True)`, and startup mutes before unmuting - so `mute=on` means dark
 *only when nothing has just muted it*. As an idle-state detector it is sound; as a check run
 immediately after one of this component's own actions it is not.
+Measured 2026-08-27 on the same M5: `SetMute` replies as `MuteStatus`, not `SetMute`, in about
+0.04-0.23 s on the healthy path. Treat that as the command response alias; silence is still a
+valid firmware outcome, so callers must not require the reply to arrive inside another component's
+identical timeout budget.
+
+The same 2026-08-27 run also started a URL stream from `mute=on`: `SetUrlPlayback` moved the M5
+to `mute=off` without any `SetMute` being sent. That makes the next URL track forgiving if a
+previous session was torn down badly, but it is **not** a teardown contract: another source or
+client can take the speaker without sending `SetUrlPlayback`, so pause still restores the mute
+state it found.
+
 
 Two properties that matter when measuring this:
 
@@ -763,9 +774,40 @@ returns, besides the title and artwork, a ready-to-play URL:
 <stationurl>http://opml.radiotime.com/Tune.ashx?id=s87779&amp;partnerId=...&amp;serial=...</stationurl>
 ```
 
-That is a plain HTTP stream URL carrying the speaker's own TuneIn partner id and serial. It
-means browsing does not have to end in a preset write: browse, read the station URL, hand it to
-`SetUrlPlayback`, which this project already implements. The whole of rung 3 can stay untouched.
+**That URL is not ready to play, and an earlier revision of this section said it was.** It
+claimed browsing could end in "read the station URL, hand it to `SetUrlPlayback`", which was
+written from the shape of the URL rather than from a test. Measured 2026-08-28: `Tune.ashx`
+answers `Content-Type: audio/x-mpegurl` with a one-line playlist - for `s15984` it is
+`http://stream3.polskieradio.pl:8954/` - and `SetUrlPlayback` on the URL exactly as
+`GetStationData` returns it is refused with `ErrorEvent` `ng`.
+
+Resolving that playlist on the client is the first half of the answer. Handed the resolved
+stream URL instead, the speaker answered **nothing at all** - no `StartPlaybackEvent`, no
+`ErrorEvent` over 25 s on the persistent connection, and no HTTP response to the one-shot form
+of the same command, which had answered the rejection above readily enough.
+
+**That silence was the speaker wedged, and this section called it unexplained for a day.**
+Settled the next morning, 2026-08-28. What gave it away was the same silence appearing on the
+ordinary relay path, which had worked for weeks: the fault was not in what was being sent but
+in the speaker's state. In that state `SetUrlPlayback` **and** `SetStopPlayback` hang for their
+full timeout with no reply, while `GetFunc`, `GetPlayStatus`, `GetVolume` and `SetVolume` all
+answer in 0.1 s and ping stays at 2-3 ms. A power cycle clears it instantly - replies came back
+in 0.3 s afterwards - and nothing short of one does, because the commands that would recover it
+are precisely the ones not answering.
+
+**What wedges it is a `SetUrlPlayback` aimed at a URL the speaker cannot pull.** That is wider
+than the HLS case `tunein.py` already warns about; a plain HTTP URL on a dead port does it too.
+The command is accepted and answers normally, and the speaker jams a moment later, which is why
+a probe built out of one is a trap rather than a diagnostic: use `SetStopPlayback` to test
+instead, since it is idempotent on a stopped speaker and times out the same way when wedged.
+
+`submode=cp` never had anything to do with it: cp is normal for URL playback, as documented
+above.
+
+Until it is answered, the way to play a browsed station is the one this project already uses for
+every other radio: resolve the id and relay the stream from the client, rather than pointing the
+speaker at the internet.
+
 The `partnerId` and `serial` are the speaker's credentials with TuneIn and are redacted here.
 
 **Browsing costs nothing, and an earlier revision of this section said otherwise.** That
@@ -1084,9 +1126,11 @@ promise that no preset ever drops one. If a preset with a known-good stream fail
 `GetRadioInfo` is polled to the full 25 s, that is a new finding and this paragraph is where it
 belongs.
 
-Which changes the design question rather than settling it. Browsing to a station, reading
-`stationurl` and handing it to `SetUrlPlayback` remains useful because it reaches stations the
-speaker has not saved - not because the preset path is broken. And **overwriting a preset is
+Which changes the design question rather than settling it. Browsing to a station remains
+useful because it reaches stations the speaker has not saved - not because the preset path is
+broken. What it cannot do is hand `stationurl` to `SetUrlPlayback`: that URL is a `Tune.ashx`
+playlist and the speaker refuses it, so the browsed station has to be resolved here and relayed
+like every other radio in this project. See `GetStationData` above. And **overwriting a preset is
 worth reconsidering**: swapping preset 0's dead Trójka for a station that streams is now the
 obvious repair, where the previous conclusion said it would change nothing. `SetRemovePreset`
 still has no undo, so that is a decision to take deliberately, not a side effect.
@@ -1098,8 +1142,8 @@ across: fetch upstream, re-serve as plain HTTP. The cost is that the PC or phone
 running, which the plain-HTTP stations do not require.
 
 This is the one thing that keeps preset writing on the table. For this project's own playback
-it is unnecessary - browse, take `stationurl`, `SetUrlPlayback`. For the physical button it is
-the only route there is.
+it is unnecessary - browse, resolve the `mediaid`, relay. For the physical button it is the only
+route there is, because the button plays presets and nothing else.
 
 **A trap for anything that browses.** The browse cursor lives in the speaker and **survives
 across client processes**. A fresh run that calls `GetSelectRadioList` assuming it starts at the

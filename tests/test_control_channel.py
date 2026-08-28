@@ -23,13 +23,18 @@ def _connect(channel: ControlChannel, *, token: str | None = None) -> socket.soc
 class ControlChannelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.levels: list[int] = []
+        self.paused: list[bool] = []
         self.applied = threading.Event()
 
         def record(level: int) -> None:
             self.levels.append(level)
             self.applied.set()
 
-        self.channel = ControlChannel(record)
+        def record_paused(paused: bool) -> None:
+            self.paused.append(paused)
+            self.applied.set()
+
+        self.channel = ControlChannel(record, set_paused=record_paused)
         self.channel.start()
         self.addCleanup(self.channel.close)
 
@@ -58,6 +63,26 @@ class ControlChannelTests(unittest.TestCase):
                 self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [3, 5, 9])
 
+    def test_pause_and_resume_use_the_same_connection_without_ack_waits(self) -> None:
+        with _connect(self.channel) as client:
+            self._send(client, "pause")
+            self.assertTrue(self.applied.wait(timeout=2))
+            self.applied.clear()
+            self._send(client, "resume")
+            self.assertTrue(self.applied.wait(timeout=2))
+        self.assertEqual(self.paused, [True, False])
+
+    def test_failing_pause_does_not_end_the_channel(self) -> None:
+        def explode(_paused: bool) -> None:
+            raise RuntimeError("speaker said no")
+
+        channel = ControlChannel(lambda _level: None, set_paused=explode)
+        channel.start()
+        self.addCleanup(channel.close)
+        with _connect(channel) as client:
+            client.sendall(b"pause\n")
+            client.sendall(b"volume 3\n")
+
     def test_rejects_a_wrong_token(self) -> None:
         with _connect(self.channel, token="not-the-token") as client:
             self._send(client, "volume 7")
@@ -74,7 +99,7 @@ class ControlChannelTests(unittest.TestCase):
 
     def test_ignores_a_malformed_command(self) -> None:
         with _connect(self.channel) as client:
-            for line in ("volume", "volume x", "mute 1", ""):
+            for line in ("volume", "volume x", "pause now", "mute 1", ""):
                 self._send(client, line)
             self._send(client, "volume 2")
             self.assertTrue(self.applied.wait(timeout=2))

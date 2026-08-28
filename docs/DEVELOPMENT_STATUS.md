@@ -326,11 +326,17 @@ operating system records.
    default is now 0 in both the helper and foobar settings. Hardware had already passed a full
    session at 0; a fresh short check on the physical M5 also held the seekbar at 1.00x and
    stopped with no helper or FFmpeg left behind.
-4. **Route pause onto `55001`** (`SetPlaybackControl pause`/`resume`), then stop, seek and
-   skip. Same shape as the volume fix. Baseline measured 2026-08-08: about 5 s to fall
-   silent, about 6 s to come back. Risk to watch: whether a paused speaker stops pulling and
-   the HTTP connection times out - a 30 s pause did not disturb either socket or restart any
-   process.
+4. **Route pause onto `55001`. In progress in PR #112, final hardware pass pending.** The
+   first idea, `SetPlaybackControl pause`, is rejected by measurement: on URL/PCM it answers
+   cleanly but leaves `playstatus=play`. The current route therefore uses `SetMute` for prompt
+   speaker-side silence while the established PCM stream keeps receiving paced zeroes, preserving
+   the proven long-pause transport fallback. Measured 2026-08-27, `SetMute` answers as
+   `MuteStatus` in about **0.04-0.23 s**. The component sends pause/resume to the local helper
+   without waiting for a loopback acknowledgement, so a slow/silent firmware reply cannot block
+   foobar or retire the shared fast control channel. The helper snapshots the pre-pause mute state
+   and restores it on resume or teardown. A failed resume makes the helper fail and restart rather
+   than leaving live playback silently muted. Baseline before this work remains about 5 s to fall
+   silent and 6 s to come back; do not replace those numbers until the final build is heard.
 5. ~~**Stop the helper respawn storm.**~~ **Merged and measured 2026-08-19**, PR #55. The
    backoff is charged at the spawn and refunded by `PLAYING`; see the section above for the two
    placements that failed first and why. Nothing is left open here.
@@ -418,8 +424,10 @@ operating system records.
 
     **Browsing is measured as of 2026-08-19** and the first rung is done: the catalogue is a
     tree, descended with `GetSelectRadioList` and a `contentid`, and `GetStationData` hands
-    back a playable `stationurl`. Writing presets may therefore never be needed - browse, take
-    the URL, `SetUrlPlayback`. Browsing also costs nothing: it does not move the submode, a
+    back a `stationurl`. **That URL is not playable** - it is a `Tune.ashx` playlist and
+    `SetUrlPlayback` refuses it, corrected 2026-08-28 after this paragraph had claimed the
+    opposite since 19.08. Writing presets may still never be needed, but the route is browse,
+    resolve the `mediaid`, relay. Browsing also costs nothing: it does not move the submode, a
     claim this file and `WAM_PROTOCOL.md` briefly carried in the opposite direction. What is
     **Search is measured as of 2026-08-20** and works: `SearchQuery` is paginated and returned
     66 hits for `Trojka`, with the owner's own preset station `s15984` among them. So finding a
@@ -438,6 +446,17 @@ operating system records.
     has content means the CPM subsystem is recovering, so an empty page is retried before it is
     believed. Verified against the physical M5 the same day. Still left is the UI, desktop and
     mobile alike.
+
+    **What is left is more than the UI, measured 2026-08-28.** The step from a browsed station to
+    audio does not work the way `WAM_PROTOCOL.md` said it did: the `stationurl` from
+    `GetStationData` is a `Tune.ashx` playlist, not a stream, and `SetUrlPlayback` refuses it with
+    `ErrorEvent` `ng`. Resolving the playlist client-side is half of it; the resolved URL then
+    drew no answer of any kind, which read as a second protocol puzzle at the time and was not
+    one - the speaker was wedged, see `GetStationData` in the protocol file. So a browsed station
+    should reach the speaker the way every other radio here does - resolved, then relayed from
+    the client. Confirmed end to end on the physical M5, 2026-08-28, on a station taken straight
+    out of the speaker's own listing: `SetUrlPlayback` accepted, and the speaker held a
+    connection back to the relay port while it played.
 
     The concrete want behind this is the **physical Radio button**, which cycles the three
     presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
@@ -529,6 +548,46 @@ operating system records.
     65 534 addresses. `discover` now returns the coverage alongside the speakers
     (`Scan.Full` / `Narrowed` / `NoAddresses` / `NotRun`), and only a full sweep is allowed to
     say "not found".
+
+16. **Get the speaker out of the three states it can be abandoned in.** All three come from
+    the same asymmetry: on the relayed path the speaker holds a session that only this side
+    can end, so anything that kills this side without a `stop` strands it. Nothing here is
+    hypothetical - two were measured, the third is documented above.
+
+    - *The source vanished mid-stream.* A PC that loses power, a helper killed outright.
+      The speaker falls silent, keeps the session, and **never idles** - the standby
+      countdown only starts once every program has let go (`WAM_PROTOCOL.md`, measured
+      2026-08-16: 33 minutes still lit after a session that sent no release, against 17
+      minutes to dark after one that did). Recovery is one command, `emergency-stop` or
+      `standby`; nothing sends it today because the side that would is gone.
+    - *The phone walked out of Wi-Fi.* Same end state, plus a second wrong one: nothing in
+      `RadioService` watches for the network going away, so the foreground notification goes
+      on claiming playback that stopped minutes ago, and coming back into range recovers
+      neither side. The service should notice and say so - and, once back, either resume or
+      release the speaker rather than leaving both halves lying.
+    - *The playback path wedged.* Measured 2026-08-28: after a `SetUrlPlayback` aimed at a
+      URL the speaker cannot pull, `SetUrlPlayback` and `SetStopPlayback` stop answering
+      entirely - the full timeout, no reply - while `GetFunc`, `GetVolume` and `SetVolume`
+      keep answering in 0.1 s. **Only a power cycle clears this one**, so the commands that
+      would recover the first two states are exactly the ones unavailable here. Worth a
+      cheap guard on the way in: refuse to hand the speaker a URL that has not been shown
+      to be fetchable.
+
+    Presets are the counter-example that shows what "abandoned" is really about: they play
+    from the speaker's own connection to the internet, so none of this applies to them.
+    Verified 2026-08-28 - a preset kept playing with no established TCP connection between
+    this machine and the speaker at all.
+
+17. **Bring `catalogue.py` back in step with its mobile twin.** The two are meant to be the
+    same reader, and the phone side has since gained two fixes the desktop one has not.
+    `RadioEntry.is_station` accepts any `type="2"` row with a `media_id`, but a podcast
+    episode is `type="2"` as well and carries a `t…` id nothing here can resolve - measured
+    2026-08-28 by descending into a programme found through a search, 50 of them in one
+    level. And `open_catalogue` breaks out of its retry loop on `is_root` alone, so a
+    recovering CPM answering `totallistcount=0` yields an empty catalogue root that the
+    caller then believes; the root is never genuinely empty, so that case has to keep
+    retrying like `_fetch_page` does. Neither has bitten on the desktop yet, which is
+    exactly why it is worth doing before they drift further.
 
 ## What the 7-8 s speaker figure was
 

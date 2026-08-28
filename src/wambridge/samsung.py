@@ -199,6 +199,8 @@ def _local_name(tag: str) -> str:
 # Commands whose reply carries an unrelated name. Only entries observed on a
 # physical M5 belong here; guesses would reintroduce the bug this table fixes.
 _RESPONSE_ALIASES: dict[str, tuple[str, ...]] = {
+    # Measured on the physical M5: SetMute answers as MuteStatus.
+    "SetMute": ("MuteStatus",),
     "SetPlaybackControl": ("PlaybackStatus",),
     "SetSharePlaybackControl": ("MusicInfo",),
     "SetNewFolderPlaybackControl": ("MusicInfo",),
