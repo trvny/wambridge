@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -211,10 +212,6 @@ class CatalogueActivity : Activity() {
             statusView.text = "Still working on the last request…"
             return
         }
-        val target = speakerAddress() ?: run {
-            statusView.text = "Configure the M5 address in WAM Bridge first."
-            return
-        }
         // The application context, not this activity: the request outlives a rotation
         // or a back press, and holding the activity from a background thread leaks it.
         val appContext = applicationContext
@@ -226,7 +223,22 @@ class CatalogueActivity : Activity() {
         // Queueing is right here, unlike for a tap: the new instance does want its
         // request, just not at the same time as the old one.
         CATALOGUE_WORKER.execute {
-            val result = runCatching { work(appContext, target) }
+            val result = runCatching {
+                // Browsing talks to 55001, and the M5 allows one owner of that
+                // connection. A renderer or a radio relay still holding it is what
+                // "extra listeners have broken a working stream" in AGENTS.md means,
+                // so let go first - the same thing TuneInActivity does before every
+                // speaker interaction.
+                releasePlaybackOwners()
+                // Resolved rather than read from preferences: DHCP moves the speaker,
+                // and a saved address is only a hint. This also covers the case of no
+                // saved address at all, where discovery is the only way to a target.
+                val target = SpeakerTarget.resolve(appContext)
+                    ?: throw java.io.IOException(
+                        "No WAM speaker found. Set its address in WAM Bridge.",
+                    )
+                work(appContext, target)
+            }
             runOnUiThread {
                 busy = false
                 // The activity may be gone by now - the work was allowed to outlive it.
@@ -331,15 +343,34 @@ class CatalogueActivity : Activity() {
         }, 1_200)
     }
 
-    private fun speakerAddress(): String? {
-        val target = getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
-            .getString(RendererService.KEY_SPEAKER_IP, "")
-            .orEmpty()
-            .trim()
-        return if (RendererService.isReasonableIpv4(target)) target else null
+    /**
+     * Stops whatever else owns the speaker's control connection, and waits for it.
+     *
+     * Runs on the catalogue worker, never on the UI thread. Throws when an owner
+     * will not let go, which surfaces as the request's own failure message rather
+     * than as a browse that quietly fights a live stream.
+     */
+    private fun releasePlaybackOwners() {
+        releaseOwner("Renderer", { RendererService.busy }) {
+            Intent(this, RendererService::class.java).apply { action = RendererService.ACTION_STOP }
+        }
+        releaseOwner("Radio", { RadioService.running }) {
+            Intent(this, RadioService::class.java).apply { action = RadioService.ACTION_STOP }
+        }
+    }
+
+    private fun releaseOwner(name: String, busyNow: () -> Boolean, stop: () -> Intent) {
+        if (!busyNow()) return
+        startService(stop())
+        val deadline = SystemClock.elapsedRealtime() + OWNER_STOP_TIMEOUT_MS
+        while (busyNow() && SystemClock.elapsedRealtime() < deadline) Thread.sleep(50)
+        check(!busyNow()) { "$name did not release the WAM control channel" }
     }
 
     private companion object {
+        /** How long an owner gets to let go of the speaker before browsing gives up. */
+        const val OWNER_STOP_TIMEOUT_MS = 2_500L
+
         /**
          * One worker for the whole process, because there is one cursor in the
          * speaker. It outlives any single activity on purpose: that is what keeps a

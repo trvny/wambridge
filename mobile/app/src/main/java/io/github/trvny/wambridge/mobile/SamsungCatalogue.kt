@@ -106,13 +106,17 @@ internal object SamsungCatalogue {
             page = parsePage(
                 cpm(context, speakerIp, "GetUpperRadioList", paged(0)),
             )
-            if (page.isRoot) break
+            // `isRoot` alone is not enough to accept the answer. A recovering CPM
+            // reports `totallistcount=0` for a level that does have content - the
+            // trap `fetchPage` already retries around - and the Browse root is never
+            // genuinely empty, so an empty one here means "ask again", not "done".
+            if (page.isRoot && page.entries.isNotEmpty()) break
             if (attempt + 1 < OPEN_ATTEMPTS) Thread.sleep(SETTLE_MS)
         }
-        if (!page.isRoot) {
+        if (!page.isRoot || page.entries.isEmpty()) {
             throw IOException(
-                "Could not return the speaker's browse cursor to a root; " +
-                    "results from any deeper level would be misleading",
+                "Could not read the speaker's browse root; results from any " +
+                    "other level would be misleading",
             )
         }
         if (page.root != null && page.root != BROWSE_ROOT) {
