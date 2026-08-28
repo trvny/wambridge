@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from wambridge.pcm_cli import PlaybackWatcher
 from wambridge.samsung import WamApiError
+from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent
 
 
@@ -71,3 +72,32 @@ class RejectedVolumeCacheTests(TestCase):
 
         self.assertEqual(watcher._pause_restore_volume, 4)
         self.assertEqual(watcher._current_volume, 0)
+
+    def test_rejected_reapply_zero_fails_the_paused_helper(self) -> None:
+        watcher = self._watcher(volume=7)
+
+        with patch("wambridge.pcm_cli._PAUSE_ACK_TIMEOUT", 0.01):
+            watcher.set_pause_volume(True)
+
+        external = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "4"},
+        )
+        watcher._observe_volume_event(external, external=True)
+        rejection = WamEvent(
+            method="SetVolume",
+            result="ng",
+            user_identifier=CLIENT_UUID,
+            error_code="3",
+            values={},
+        )
+        command = watcher._match_pending(rejection)
+        self.assertEqual(command, "SetVolume")
+
+        watcher._record_response(command, rejection)
+
+        with self.assertRaisesRegex(StreamError, "Could not keep speaker paused"):
+            watcher.raise_if_failed()

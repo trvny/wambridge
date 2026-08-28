@@ -736,6 +736,14 @@ class PlaybackWatcher:
             # the cache, so pause cannot restore a level the speaker rejected.
             with self._volume_lock:
                 self._current_volume = None
+                paused = self._pause_restore_volume is not None
+            if paused:
+                # The listener-thread re-zero after an external volume change is
+                # deliberately fire-and-forget: waiting here would deadlock the
+                # response path. A matched rejection is therefore surfaced as an
+                # asynchronous helper failure so foobar rebuilds instead of leaving
+                # buffered pre-pause audio audible at the externally selected level.
+                self._error = f"Could not keep speaker paused: {message}"
         if command == _PLAYBACK_COMMAND:
             self._error = message
             return
