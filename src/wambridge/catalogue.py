@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from xml.etree import ElementTree
 
+from .stations import is_tunein_station_id
 from .samsung import (
     DEFAULT_PORT,
     WamApiError,
@@ -81,13 +82,19 @@ class RadioEntry:
     def is_station(self) -> bool:
         """Return whether this entry names a station whose id can be resolved.
 
-        It cannot yield a playable URL by itself; see the module docstring. Note
-        also that ``item_type`` alone does not identify a station - podcast
-        episodes are ``type="2"`` too, with ``t…`` ids this project cannot use.
-        The mobile twin already filters on the ``s…`` shape and this one does
-        not yet; keeping the two in step is tracked in ``DEVELOPMENT_STATUS.md``.
+        It cannot yield a playable URL by itself; see the module docstring.
+
+        ``item_type`` alone does not identify a station. Measured on the M5,
+        2026-08-28: descending into a podcast programme reached through a search
+        lists 50 episodes that are ``type="2"`` exactly like stations, carrying
+        ``media_id`` such as ``t573501779``. Nothing here can resolve those, so
+        the station id shape is part of the test.
         """
-        return self.item_type == ITEM_STATION and bool(self.media_id)
+        return (
+            self.item_type == ITEM_STATION
+            and bool(self.media_id)
+            and is_tunein_station_id(self.media_id)
+        )
 
     @property
     def index(self) -> int:
@@ -334,14 +341,18 @@ def open_catalogue(
                 timeout=timeout,
             )
         )
-        if page.is_root:
+        # ``is_root`` alone is not enough to accept the answer. A recovering CPM
+        # reports ``totallistcount=0`` for a level that does have content - the
+        # trap ``_fetch_page`` already retries around - and the Browse root is
+        # never genuinely empty, so an empty one here means ask again.
+        if page.is_root and page.entries:
             break
         if attempt + 1 < attempts:
             time.sleep(settle)
     else:
         raise WamApiError(
-            "Could not return the speaker's browse cursor to a root; "
-            "results from any deeper level would be misleading"
+            "Could not read the speaker's browse root; results from any "
+            "other level would be misleading"
         )
 
     if page.root and page.root != BROWSE_ROOT:

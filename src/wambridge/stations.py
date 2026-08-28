@@ -98,6 +98,11 @@ def validate_station_url(url: str) -> str:
     return url
 
 
+def is_tunein_station_id(value: str) -> bool:
+    """Return whether a value has the TuneIn *station* shape, without raising."""
+    return bool(_TUNEIN_ID_RE.match(value))
+
+
 def validate_tunein_id(value: str) -> str:
     """Return a validated TuneIn station id such as ``s15984``."""
     if not _TUNEIN_ID_RE.match(value):
