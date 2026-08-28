@@ -830,6 +830,23 @@ The command is accepted and answers normally, and the speaker jams a moment late
 a probe built out of one is a trap rather than a diagnostic: use `SetStopPlayback` to test
 instead, since it is idempotent on a stopped speaker and times out the same way when wedged.
 
+**The `SetFunc` detour does not clear it either** - measured 2026-08-29 on a speaker found
+wedged. That detour is the documented way out of `submode=cp`, and it had never been tried
+against this state, so it was the one cheap hope left. It is not one:
+
+    SetStopPlayback   6.19 s  silence
+    SetFunc aux       0.82 s  ok
+    GetFunc           0.40 s  ok
+    SetFunc wifi      0.93 s  ok
+    GetFunc           0.23 s  ok
+    SetStopPlayback   6.01 s  silence
+
+Both `SetFunc` calls are accepted and answered normally, and the playback commands stay dead
+across the source change. So the wedge is not held by the selected source, and the standing
+conclusion - only a power cycle - now has one fewer untested alternative behind it. Trying it
+costs nothing and is silent (`aux` does not announce itself, unlike `bt`), so it remains worth
+one attempt before asking a person to walk to the speaker.
+
 `submode=cp` never had anything to do with it: cp is normal for URL playback, as documented
 above.
 
