@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
@@ -25,6 +29,10 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     private var station: MobileRadioStation? = null
     private var safeVolumeApplied = false
     private var speakerIp = ""
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    @Volatile
+    private var networkLost = false
 
     @Volatile
     private var destroyed = false
@@ -160,6 +168,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             activeProxy = null
             activeChannel = null
             running = true
+            watchNetwork()
             lastStatus = "Starting ${selected.alias}…"
             publish(lastStatus)
         } catch (error: Exception) {
@@ -260,6 +269,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     }
 
     private fun stopRadio(removeForeground: Boolean = true) {
+        unwatchNetwork()
         if (channel != null) {
             runCatching { channel?.pause() }
         }
@@ -274,6 +284,63 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         running = false
         WamBridgeWidget.updateAll(applicationContext)
         if (removeForeground) stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    /**
+     * Notice the Wi-Fi going away, and do something honest about it.
+     *
+     * Watches Wi-Fi specifically rather than "any network": the speaker is on the LAN, so a phone
+     * that falls back to mobile data has lost it just as completely as one with no connection at
+     * all, and `NetworkCapabilities.NET_CAPABILITY_INTERNET` would call that healthy.
+     */
+    private fun watchNetwork() {
+        if (networkCallback != null) return
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return
+        networkLost = false
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = onNetworkChange(available = true)
+            override fun onLost(network: Network) = onNetworkChange(available = false)
+            override fun onUnavailable() = onNetworkChange(available = false)
+        }
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+        runCatching { manager.registerNetworkCallback(request, callback) }
+            .onSuccess { networkCallback = callback }
+    }
+
+    private fun unwatchNetwork() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        networkLost = false
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return
+        // Unregistering a callback that never registered throws, and teardown is not the place
+        // to find that out.
+        runCatching { manager.unregisterNetworkCallback(callback) }
+    }
+
+    private fun onNetworkChange(available: Boolean) = execute {
+        when (networkChangeAction(running, networkLost, available)) {
+            NetworkChangeAction.Ignore -> Unit
+
+            NetworkChangeAction.ReportLoss -> {
+                networkLost = true
+                // The speaker is unreachable from here, so this is a report and nothing more.
+                // Saying "playing" now would be the lie this whole change exists to stop.
+                val alias = station?.alias ?: "Radio"
+                lastStatus = "$alias · Wi-Fi lost, the speaker is still holding the stream"
+                publish(lastStatus)
+                WamBridgeWidget.updateAll(applicationContext)
+            }
+
+            NetworkChangeAction.ReleaseAfterLoss -> {
+                networkLost = false
+                lastStatus = "Wi-Fi is back · released the speaker"
+                publish(lastStatus)
+                stopRadio()
+                stopSelf()
+            }
+        }
     }
 
     private fun fail(message: String) {

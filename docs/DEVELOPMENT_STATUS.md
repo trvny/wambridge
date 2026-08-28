@@ -589,11 +589,33 @@ operating system records.
       2026-08-16: 33 minutes still lit after a session that sent no release, against 17
       minutes to dark after one that did). Recovery is one command, `emergency-stop` or
       `standby`; nothing sends it today because the side that would is gone.
-    - *The phone walked out of Wi-Fi.* Same end state, plus a second wrong one: nothing in
+    - *The phone walked out of Wi-Fi.* Same end state, plus a second wrong one: ~~nothing in
       `RadioService` watches for the network going away, so the foreground notification goes
       on claiming playback that stopped minutes ago, and coming back into range recovers
       neither side. The service should notice and say so - and, once back, either resume or
-      release the speaker rather than leaving both halves lying.
+      release the speaker rather than leaving both halves lying.~~ **Half done 2026-08-28,
+      and the half that is done is the lie.** `RadioService` now registers a
+      `NetworkCallback` for the duration of a session and reports the loss instead of going
+      on claiming playback. Coming back releases the speaker rather than resuming: the
+      stream was interrupted for an unknown length of time, the proxy's resolved sources may
+      be stale, and a re-offer is a second run at `55001` - the socket whose restart loop is
+      this project's most expensive measured failure (77 helper restarts in 90 seconds,
+      ending with the speaker refusing commands entirely). Letting go cannot go wrong.
+
+      It watches **Wi-Fi specifically**, not "any network": the speaker is on the LAN, so a
+      phone that falls back to mobile data has lost it as completely as one with no
+      connection, and `NET_CAPABILITY_INTERNET` would call that healthy.
+
+      The decision is `networkChangeAction` in `NetworkChange.kt`, a pure function of
+      (running, lostEarlier, available), so the six cases are unit-tested without a phone -
+      including `onAvailable` firing once at registration, which must not read as recovery
+      from a loss that never happened. **Not yet validated on hardware**, and that part
+      needs a person: start the radio, walk out of range, come back.
+
+      What is still open here is the speaker's own side. Nothing this phone does can reach a
+      speaker it has no route to, so the release only happens once the phone returns. A
+      speaker abandoned by a phone that never comes back still needs the sleep timer from
+      item 7, armed at session start - the only lever that works with this side gone.
     - *The playback path wedged.* Measured 2026-08-28: after a `SetUrlPlayback` aimed at a
       URL the speaker cannot pull, `SetUrlPlayback` and `SetStopPlayback` stop answering
       entirely - the full timeout, no reply - while `GetFunc`, `GetVolume` and `SetVolume`
