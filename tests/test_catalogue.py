@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from wambridge.catalogue import (
     BROWSE_ROOT,
+    RadioEntry,
     RadioPage,
     ascend,
     current_page,
@@ -57,6 +58,24 @@ EMPTY_BODY = (
     '<CPM><method>RadioList</method><response result="ok">'
     "<cpname>TuneIn</cpname>"
     '<category isroot="0">Favorites</category>'
+    "<totallistcount>0</totallistcount><startindex>0</startindex>"
+    "<menulist></menulist></response></CPM>"
+)
+
+EMPTY_ROOT_BODY = (
+    '<CPM><method>RadioList</method><response result="ok">'
+    "<cpname>TuneIn</cpname>"
+    '<root>Browse</root>'
+    '<category isroot="1">Browse</category>'
+    "<totallistcount>0</totallistcount><startindex>0</startindex>"
+    "<menulist></menulist></response></CPM>"
+)
+
+EMPTY_SEARCH_BODY = (
+    '<CPM><method>RadioList</method><response result="ok">'
+    "<cpname>TuneIn</cpname>"
+    "<root>Search</root>"
+    '<category isroot="1">Search</category>'
     "<totallistcount>0</totallistcount><startindex>0</startindex>"
     "<menulist></menulist></response></CPM>"
 )
@@ -139,6 +158,30 @@ class RadioPageParsingTests(TestCase):
         self.assertTrue(station.is_station)
         self.assertEqual(station.media_id, "s15984")
 
+    def test_a_podcast_episode_is_not_a_station(self) -> None:
+        # Measured on the M5: descending into a podcast programme reached through
+        # a search lists episodes that are type="2" exactly like stations, but
+        # carry t… ids nothing here can resolve.
+        episode = RadioEntry(
+            content_id="0",
+            title="Information scarcity after Nepal flash floods (47m)",
+            item_type="2",
+            media_id="t573501779",
+        )
+
+        self.assertFalse(episode.is_station)
+        self.assertFalse(episode.is_folder)
+
+    def test_a_station_id_is_still_a_station(self) -> None:
+        bbc = RadioEntry(
+            content_id="4",
+            title="BBC Radio 2",
+            item_type="2",
+            media_id="s24940",
+        )
+
+        self.assertTrue(bbc.is_station)
+
     def test_content_id_is_the_number_the_commands_expect(self) -> None:
         entry = parse_radio_page(LEVEL_BODY).entries[1]
 
@@ -150,7 +193,7 @@ class RadioPageParsingTests(TestCase):
 
 
 class StationDetailTests(TestCase):
-    def test_reads_the_playable_url(self) -> None:
+    def test_reads_the_station_url_the_speaker_cannot_play(self) -> None:
         detail = parse_station_detail(STATION_BODY)
 
         self.assertEqual(detail.title, "ESKA Kraków 97.7")
@@ -207,6 +250,71 @@ class CursorTests(TestCase):
 
         self.assertIn("Search", str(caught.exception))
         self.assertIn(BROWSE_ROOT, str(caught.exception))
+
+    def test_an_empty_root_is_retried_rather_than_believed(self) -> None:
+        # A recovering CPM answers totallistcount=0 for a level that has content.
+        # The Browse root is never genuinely empty, so an empty one means the
+        # speaker is not ready yet - not that there is nothing to show.
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [
+                response("<CPM/>"),
+                response(EMPTY_ROOT_BODY),
+                response(ROOT_BODY),
+            ]
+            page = open_catalogue("10.0.0.104")
+
+        self.assertTrue(page.is_root)
+        self.assertTrue(page.entries)
+
+    def test_a_root_that_stays_empty_is_an_error(self) -> None:
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [response("<CPM/>"), *[response(EMPTY_ROOT_BODY)] * 5]
+            with self.assertRaises(WamApiError):
+                open_catalogue("10.0.0.104", attempts=5)
+
+    def test_a_search_that_matched_nothing_is_still_crossed_out_of(self) -> None:
+        # The Search root is legitimately empty after a search with no hits, and
+        # only BrowseMain leaves that tree. Retrying it as if CPM were recovering
+        # would strand the cursor there and fail every later browse.
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [
+                response("<CPM/>"),
+                response(EMPTY_SEARCH_BODY),
+                response("<CPM/>"),
+                response(ROOT_BODY),
+            ]
+            page = open_catalogue("10.0.0.104")
+
+        self.assertEqual(page.root, BROWSE_ROOT)
+        self.assertTrue(page.entries)
+        methods = [call.args[1] for call in send.call_args_list]
+        self.assertEqual(methods[2:], ["BrowseMain", "GetCurrentRadioList"])
+
+    def test_a_recovering_browse_root_is_retried_after_the_crossing(self) -> None:
+        # The read straight after BrowseMain is the first one aimed at the Browse
+        # root, so it can meet the transient empty answer like any other. Raising
+        # there would fail a healthy speaker on the one path that has just spent
+        # its settle time crossing out of the search tree.
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [
+                response("<CPM/>"),
+                response(EMPTY_SEARCH_BODY),
+                response("<CPM/>"),
+                response(EMPTY_ROOT_BODY),
+                response(ROOT_BODY),
+            ]
+            page = open_catalogue("10.0.0.104")
+
+        self.assertEqual(page.root, BROWSE_ROOT)
+        self.assertTrue(page.entries)
 
     def test_a_cursor_that_will_not_normalise_is_an_error(self) -> None:
         # Reporting the wrong level as the root would make every later call

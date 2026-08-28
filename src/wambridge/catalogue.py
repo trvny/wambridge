@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from xml.etree import ElementTree
 
+from .stations import is_tunein_station_id
 from .samsung import (
     DEFAULT_PORT,
     WamApiError,
@@ -81,13 +82,19 @@ class RadioEntry:
     def is_station(self) -> bool:
         """Return whether this entry names a station whose id can be resolved.
 
-        It cannot yield a playable URL by itself; see the module docstring. Note
-        also that ``item_type`` alone does not identify a station - podcast
-        episodes are ``type="2"`` too, with ``t…`` ids this project cannot use.
-        The mobile twin already filters on the ``s…`` shape and this one does
-        not yet; keeping the two in step is tracked in ``DEVELOPMENT_STATUS.md``.
+        It cannot yield a playable URL by itself; see the module docstring.
+
+        ``item_type`` alone does not identify a station. Measured on the M5,
+        2026-08-28: descending into a podcast programme reached through a search
+        lists 50 episodes that are ``type="2"`` exactly like stations, carrying
+        ``media_id`` such as ``t573501779``. Nothing here can resolve those, so
+        the station id shape is part of the test.
         """
-        return self.item_type == ITEM_STATION and bool(self.media_id)
+        return (
+            self.item_type == ITEM_STATION
+            and bool(self.media_id)
+            and is_tunein_station_id(self.media_id)
+        )
 
     @property
     def index(self) -> int:
@@ -334,17 +341,27 @@ def open_catalogue(
                 timeout=timeout,
             )
         )
-        if page.is_root:
+        # ``is_root`` alone is not enough to accept the answer. A recovering CPM
+        # reports ``totallistcount=0`` for a level that does have content - the
+        # trap ``_fetch_page`` already retries around - and the Browse root is
+        # never genuinely empty, so an empty one there means ask again.
+        #
+        # A *foreign* root is accepted empty, and must be: a search that matched
+        # nothing leaves the cursor on a legitimately empty ``Search`` root, and
+        # only ``BrowseMain`` below crosses back out of it. Retrying that one
+        # instead would strand the cursor in the search tree for good, failing
+        # every later browse the same way.
+        if page.is_root and (page.entries or _is_foreign_root(page)):
             break
         if attempt + 1 < attempts:
             time.sleep(settle)
     else:
         raise WamApiError(
-            "Could not return the speaker's browse cursor to a root; "
-            "results from any deeper level would be misleading"
+            "Could not read the speaker's browse root; results from any "
+            "other level would be misleading"
         )
 
-    if page.root and page.root != BROWSE_ROOT:
+    if _is_foreign_root(page):
         page = _leave_foreign_root(
             page,
             speaker_ip,
@@ -352,8 +369,19 @@ def open_catalogue(
             timeout=timeout,
             list_count=list_count,
             settle=settle,
+            attempts=attempts,
+        )
+    if not page.entries:
+        raise WamApiError(
+            "The speaker's browse root came back empty; results from any "
+            "other level would be misleading"
         )
     return page
+
+
+def _is_foreign_root(page: RadioPage) -> bool:
+    """Return whether the cursor sits on a root that is not the catalogue."""
+    return bool(page.root) and page.root != BROWSE_ROOT
 
 
 def _leave_foreign_root(
@@ -364,8 +392,15 @@ def _leave_foreign_root(
     timeout: float,
     list_count: int,
     settle: float,
+    attempts: int,
 ) -> RadioPage:
-    """Cross from the search tree back into the catalogue with ``BrowseMain``."""
+    """Cross from the search tree back into the catalogue with ``BrowseMain``.
+
+    The read after the crossing is retried like any other, because it is the
+    first one aimed at the Browse root and can meet the transient empty answer a
+    recovering CPM gives. Raising on that would make a healthy speaker look
+    broken for the one path that has just spent its settle time crossing.
+    """
     was = page.root
     _cpm(
         speaker_ip,
@@ -374,16 +409,19 @@ def _leave_foreign_root(
         port=port,
         timeout=timeout,
     )
-    time.sleep(settle)
-    page = parse_radio_page(
-        _cpm(
-            speaker_ip,
-            "GetCurrentRadioList",
-            _paged(0, list_count),
-            port=port,
-            timeout=timeout,
+    for _attempt in range(attempts):
+        time.sleep(settle)
+        page = parse_radio_page(
+            _cpm(
+                speaker_ip,
+                "GetCurrentRadioList",
+                _paged(0, list_count),
+                port=port,
+                timeout=timeout,
+            )
         )
-    )
+        if page.entries or page.root != BROWSE_ROOT:
+            break
     if page.root != BROWSE_ROOT:
         raise WamApiError(
             f"The speaker's radio cursor is in the {was} tree and BrowseMain "
