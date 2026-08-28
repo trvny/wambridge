@@ -12,6 +12,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import java.util.concurrent.Executors
 
 /**
  * Whether "Up" has to re-open the catalogue instead of climbing one level.
@@ -27,23 +28,35 @@ internal fun catalogueUpNeedsReopen(inSearch: Boolean, atRoot: Boolean): Boolean
  * Folds a freshly fetched page into what is already on screen.
  *
  * Paging appends so a long level reads as one list; everything else replaces.
- * The fresh page wins on all the level metadata, because it is the speaker's
- * account of where the cursor now is.
+ * The fresh page wins on the level metadata, because it is the speaker's account
+ * of where the cursor now is - **except** `startIndex`, which has to keep
+ * describing the accumulated list rather than the last fetch.
+ *
+ * Taking the fresh `startIndex` alongside the accumulated entries counts part of
+ * the level twice. On a 90-row level fetched 30 at a time, the second merge would
+ * hold `startIndex=30` with 60 rows, `hasMore` would compute 90 of 90 and hide the
+ * button with rows 60-89 never fetched.
  */
 internal fun mergedCataloguePage(
     previous: SamsungCatalogue.Page?,
     fresh: SamsungCatalogue.Page,
     append: Boolean,
 ): SamsungCatalogue.Page =
-    if (append && previous != null) fresh.copy(entries = previous.entries + fresh.entries) else fresh
+    if (append && previous != null) {
+        fresh.copy(startIndex = previous.startIndex, entries = previous.entries + fresh.entries)
+    } else {
+        fresh
+    }
 
 /**
  * Browses the speaker's own TuneIn catalogue.
  *
  * **The cursor lives in the speaker, not here.** Every call moves one shared
- * position, so this screen runs catalogue work on a single thread and refuses to
- * start a second request while one is in flight. Firing two would interleave on
- * the speaker and the answers would describe levels neither request asked for.
+ * position, so catalogue work runs on one process-wide thread and a tap is refused
+ * while a request is in flight. Firing two would interleave on the speaker and the
+ * answers would describe levels neither request asked for. The worker is
+ * process-scoped rather than per-activity because a rotation destroys the screen
+ * without stopping the request it started.
  *
  * For the same reason "Up" sends [SamsungCatalogue.ascend] instead of popping a
  * local stack: a stack would only describe where this screen believes it is.
@@ -67,7 +80,7 @@ class CatalogueActivity : Activity() {
     /** Last page the speaker reported, or null before the first answer. */
     private var page: SamsungCatalogue.Page? = null
 
-    /** Guards the speaker-side cursor: one request at a time, no queue. */
+    /** Refuses a tap while this screen already has a request out. */
     private var busy = false
 
     /** Set while the cursor sits in the search tree, which needs a different way back. */
@@ -207,10 +220,17 @@ class CatalogueActivity : Activity() {
         val appContext = applicationContext
         busy = true
         statusView.text = message
-        Thread({
+        // Process-scoped, not per-activity: `busy` dies with the instance, so a
+        // rotation mid-request would let the recreated activity open the root while
+        // the old thread is still walking the cursor, and the speaker owns only one.
+        // Queueing is right here, unlike for a tap: the new instance does want its
+        // request, just not at the same time as the old one.
+        CATALOGUE_WORKER.execute {
             val result = runCatching { work(appContext, target) }
             runOnUiThread {
                 busy = false
+                // The activity may be gone by now - the work was allowed to outlive it.
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 result.fold(
                     onSuccess = { fresh ->
                         page = mergedCataloguePage(page, fresh, append)
@@ -222,7 +242,7 @@ class CatalogueActivity : Activity() {
                     },
                 )
             }
-        }, "wam-catalogue").start()
+        }
     }
 
     // ---- rendering ---------------------------------------------------------------
@@ -317,5 +337,16 @@ class CatalogueActivity : Activity() {
             .orEmpty()
             .trim()
         return if (RendererService.isReasonableIpv4(target)) target else null
+    }
+
+    private companion object {
+        /**
+         * One worker for the whole process, because there is one cursor in the
+         * speaker. It outlives any single activity on purpose: that is what keeps a
+         * request started before a rotation from running beside the one started after.
+         */
+        val CATALOGUE_WORKER = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "wam-catalogue").apply { isDaemon = true }
+        }
     }
 }

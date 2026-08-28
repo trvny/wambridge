@@ -149,4 +149,32 @@ class SamsungCatalogueParsingTest {
                 "<title>PR3 Trójka</title><contentid>1</contentid></menuitem>" +
                 "</menulist></response></CPM>"
     }
+
+    @Test
+    fun aPodcastEpisodeIsNotOfferedAsAStation() {
+        // Measured on the M5: descending into a podcast programme found by search
+        // lists episodes that are `type="2"` like stations, but carry `t…` media
+        // ids the resolver cannot use. A Play button there could only fail.
+        val episode = SamsungCatalogue.Entry(
+            contentId = "0",
+            title = "Information scarcity after Nepal flash floods (47m)",
+            itemType = "2",
+            mediaId = "t573501779",
+        )
+
+        assertFalse(episode.isStation)
+        assertFalse(episode.isFolder)
+    }
+
+    @Test
+    fun aStationIdIsStillOfferedAsAStation() {
+        val bbc = SamsungCatalogue.Entry(
+            contentId = "4",
+            title = "BBC Radio 2",
+            itemType = "2",
+            mediaId = "s24940",
+        )
+
+        assertTrue(bbc.isStation)
+    }
 }

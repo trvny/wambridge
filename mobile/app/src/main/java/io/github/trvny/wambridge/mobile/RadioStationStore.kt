@@ -7,6 +7,9 @@ import java.net.URI
 
 private val TUNEIN_ID_PATTERN = Regex("^s[0-9]{1,12}$")
 
+/** Whether a value has the TuneIn *station* shape, without throwing when it does not. */
+internal fun isTuneInStationId(value: String): Boolean = TUNEIN_ID_PATTERN.matches(value)
+
 /** Return a validated TuneIn station id such as `s15984`. */
 internal fun validateTuneInId(value: String): String {
     require(TUNEIN_ID_PATTERN.matches(value)) {

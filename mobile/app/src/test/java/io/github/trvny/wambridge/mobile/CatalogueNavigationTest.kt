@@ -74,8 +74,9 @@ class CatalogueNavigationTest {
         val merged = mergedCataloguePage(first, next, append = true)
 
         assertEquals(listOf("One", "Two", "Three"), merged.entries.map { it.title })
-        // The fresh page is the speaker's account of the level, so its metadata wins.
-        assertEquals(2, merged.startIndex)
+        // `startIndex` describes where the accumulated list begins, not where the last
+        // fetch did, so that it plus the row count is what has actually been fetched.
+        assertEquals(0, merged.startIndex)
         assertEquals(90, merged.total)
     }
 
@@ -94,10 +95,38 @@ class CatalogueNavigationTest {
             append = true,
         )
 
-        // startIndex 2 plus three accumulated rows would overshoot if `hasMore` counted
-        // the merged list against the total; it must count what is still unfetched.
         assertEquals(3, merged.entries.size)
         assertFalse(merged.hasMore)
+    }
+
+    @Test
+    fun athirdPageIsStillOfferedOnALevelThatHasOne() {
+        // The regression this guards: taking the fresh page's startIndex alongside the
+        // accumulated rows counts the first page twice, so a 90-row level looked
+        // complete after 60 rows and the last thirty could not be reached.
+        val pageSize = 30
+        val total = 90
+        var accumulated: SamsungCatalogue.Page? = null
+
+        repeat(2) { fetched ->
+            val startIndex = fetched * pageSize
+            accumulated = mergedCataloguePage(
+                accumulated,
+                SamsungCatalogue.Page(
+                    category = "Local Radio",
+                    total = total,
+                    startIndex = startIndex,
+                    entries = (0 until pageSize).map { station("${startIndex + it}", "row") },
+                ),
+                append = accumulated != null,
+            )
+        }
+
+        val page = accumulated!!
+        assertEquals(60, page.entries.size)
+        assertTrue("60 of 90 rows fetched, so there is more", page.hasMore)
+        // What `loadMore` would ask for next.
+        assertEquals(60, page.startIndex + page.entries.size)
     }
 
     @Test

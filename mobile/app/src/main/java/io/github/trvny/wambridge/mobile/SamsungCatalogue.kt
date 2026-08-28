@@ -47,8 +47,17 @@ internal object SamsungCatalogue {
         /** Whether descending into this row is meaningful. */
         val isFolder: Boolean get() = itemType == ITEM_FOLDER
 
-        /** Whether this row can yield a playable URL. */
-        val isStation: Boolean get() = itemType == ITEM_STATION && !mediaId.isNullOrBlank()
+        /**
+         * Whether this row can yield a playable URL.
+         *
+         * `type="2"` is not enough. Measured on the M5, 2026-08-28: descending into
+         * a podcast programme found under a search - "Newshour" beneath a search for
+         * BBC - lists 50 episodes that are all `type="2"` and carry `mediaid` like
+         * `t573501779`. Those are not station ids, and the resolver only accepts the
+         * `s…` shape, so offering them would be offering a button that cannot play.
+         */
+        val isStation: Boolean
+            get() = itemType == ITEM_STATION && mediaId != null && isTuneInStationId(mediaId)
 
         /** [contentId] as the number the commands expect. */
         val index: Int
