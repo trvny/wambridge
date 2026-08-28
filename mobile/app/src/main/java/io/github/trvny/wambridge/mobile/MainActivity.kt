@@ -95,6 +95,13 @@ class MainActivity : Activity() {
         })
 
         layout.addView(Button(this).apply {
+            text = "TuneIn catalogue"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, CatalogueActivity::class.java))
+            }
+        })
+
+        layout.addView(Button(this).apply {
             text = "Radio stations"
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, RadioStationsActivity::class.java))
