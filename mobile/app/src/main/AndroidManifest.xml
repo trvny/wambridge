@@ -32,6 +32,10 @@
             android:name=".RadioStationsActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".CatalogueActivity"
+            android:exported="false" />
+
         <activity-alias
             android:name="trvny.wambridge.mobile.LauncherAlias"
             android:enabled="true"

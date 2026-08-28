@@ -68,8 +68,9 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
             ACTION_PLAY -> {
                 val alias = intent.getStringExtra(EXTRA_ALIAS).orEmpty().trim()
+                val tuneInId = intent.getStringExtra(EXTRA_TUNEIN_ID)
                 promoteToForeground("Starting radio…")
-                if (alias.isBlank()) {
+                if (alias.isBlank() && tuneInId.isNullOrBlank()) {
                     lastStatus = "Choose a radio station first."
                     stopSelf()
                     return START_NOT_STICKY
@@ -77,7 +78,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
                 if (startPending.compareAndSet(false, true)) {
                     execute {
                         try {
-                            startStation(alias)
+                            startStation(alias, tuneInId)
                         } finally {
                             startPending.set(false)
                         }
@@ -104,7 +105,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startStation(alias: String) {
+    private fun startStation(alias: String, tuneInId: String? = null) {
         if (destroyed) return
         stopRadio(removeForeground = false)
         releaseRenderer()
@@ -115,8 +116,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             return
         }
 
-        val selected = RadioStationStore(this).all()
-            .firstOrNull { it.alias.equals(alias, ignoreCase = true) }
+        val selected = radioStationToPlay(alias, tuneInId, RadioStationStore(this).all())
         if (selected == null) {
             fail("Radio station '$alias' is no longer saved.")
             return
@@ -133,6 +133,12 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         // endpoint - the failure a hardcoded URL cannot survive. Failure here is
         // not fatal: the saved URLs come back unchanged.
         val sources = TuneInResolver.candidateUrls(this, selected)
+        // A catalogue station carries no saved URLs, so an unresolvable TuneIn id
+        // leaves nothing to relay. Saying so beats handing the proxy an empty list.
+        if (sources.isEmpty()) {
+            fail("TuneIn has no directly playable stream for ${selected.alias}.")
+            return
+        }
 
         var activeProxy: RadioProxyServer? = null
         var activeChannel: SamsungWamChannel? = null
@@ -359,6 +365,13 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         const val ACTION_VOLUME_DOWN = "trvny.wambridge.mobile.RADIO_VOLUME_DOWN"
         const val ACTION_VOLUME_UP = "trvny.wambridge.mobile.RADIO_VOLUME_UP"
         const val EXTRA_ALIAS = "station_alias"
+
+        /**
+         * Play a station that is not saved, straight from its TuneIn id - what the
+         * speaker's own catalogue hands out as `mediaid`. Set alongside
+         * [EXTRA_ALIAS], which is then only the name to show.
+         */
+        const val EXTRA_TUNEIN_ID = "station_tunein_id"
 
         private const val KEY_CLIENT_UUID = "radio_client_uuid"
         private const val CHANNEL_ID = "wambridge-radio"

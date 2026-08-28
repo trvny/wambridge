@@ -132,7 +132,7 @@ internal object SamsungTuneIn {
         throw IOException("TuneIn preset did not start: ${lastBody.take(160)}")
     }
 
-    private fun request(
+    internal fun request(
         context: Context,
         speakerIp: String,
         method: String,
@@ -300,10 +300,10 @@ internal object SamsungTuneIn {
         return result
     }
 
-    private fun localName(name: String): String = name.substringAfterLast(':').lowercase()
+    internal fun localName(name: String): String = name.substringAfterLast(':').lowercase()
 
-    private data class Argument(val name: String, val value: String, val kind: Kind)
-    private enum class Kind { STR, DEC }
+    internal data class Argument(val name: String, val value: String, val kind: Kind)
+    internal enum class Kind { STR, DEC }
 
     private const val PORT = 55001
     private const val COMMAND_TIMEOUT_MS = 5_000

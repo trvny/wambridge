@@ -7,6 +7,9 @@ import java.net.URI
 
 private val TUNEIN_ID_PATTERN = Regex("^s[0-9]{1,12}$")
 
+/** Whether a value has the TuneIn *station* shape, without throwing when it does not. */
+internal fun isTuneInStationId(value: String): Boolean = TUNEIN_ID_PATTERN.matches(value)
+
 /** Return a validated TuneIn station id such as `s15984`. */
 internal fun validateTuneInId(value: String): String {
     require(TUNEIN_ID_PATTERN.matches(value)) {
@@ -36,6 +39,32 @@ internal fun mergeRadioStations(
     val bundledAliases = bundled.mapTo(mutableSetOf()) { it.alias.lowercase() }
     merged += saved.filterNot { it.alias.lowercase() in bundledAliases }
     return merged
+}
+
+/**
+ * Pick the station a play request names.
+ *
+ * A station browsed out of the speaker's own TuneIn catalogue is never saved, so
+ * it arrives as a title plus a TuneIn id and is played straight from that: the
+ * resolver turns the id into stream URLs at play time, which is the same thing it
+ * does for a saved station. Anything else is a saved alias.
+ */
+internal fun radioStationToPlay(
+    alias: String,
+    tuneInId: String?,
+    saved: List<MobileRadioStation>,
+): MobileRadioStation? {
+    val name = alias.trim()
+    val id = tuneInId?.trim()?.takeUnless { it.isEmpty() }
+    if (id != null) {
+        return MobileRadioStation(
+            alias = name.ifEmpty { id },
+            urls = emptyList(),
+            tuneInId = id,
+        )
+    }
+    if (name.isEmpty()) return null
+    return saved.firstOrNull { it.alias.equals(name, ignoreCase = true) }
 }
 
 internal class RadioStationStore(context: Context) {
