@@ -1126,9 +1126,11 @@ promise that no preset ever drops one. If a preset with a known-good stream fail
 `GetRadioInfo` is polled to the full 25 s, that is a new finding and this paragraph is where it
 belongs.
 
-Which changes the design question rather than settling it. Browsing to a station, reading
-`stationurl` and handing it to `SetUrlPlayback` remains useful because it reaches stations the
-speaker has not saved - not because the preset path is broken. And **overwriting a preset is
+Which changes the design question rather than settling it. Browsing to a station remains
+useful because it reaches stations the speaker has not saved - not because the preset path is
+broken. What it cannot do is hand `stationurl` to `SetUrlPlayback`: that URL is a `Tune.ashx`
+playlist and the speaker refuses it, so the browsed station has to be resolved here and relayed
+like every other radio in this project. See `GetStationData` above. And **overwriting a preset is
 worth reconsidering**: swapping preset 0's dead Trójka for a station that streams is now the
 obvious repair, where the previous conclusion said it would change nothing. `SetRemovePreset`
 still has no undo, so that is a decision to take deliberately, not a side effect.
@@ -1140,8 +1142,8 @@ across: fetch upstream, re-serve as plain HTTP. The cost is that the PC or phone
 running, which the plain-HTTP stations do not require.
 
 This is the one thing that keeps preset writing on the table. For this project's own playback
-it is unnecessary - browse, take `stationurl`, `SetUrlPlayback`. For the physical button it is
-the only route there is.
+it is unnecessary - browse, resolve the `mediaid`, relay. For the physical button it is the only
+route there is, because the button plays presets and nothing else.
 
 **A trap for anything that browses.** The browse cursor lives in the speaker and **survives
 across client processes**. A fresh run that calls `GetSelectRadioList` assuming it starts at the

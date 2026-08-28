@@ -424,8 +424,10 @@ operating system records.
 
     **Browsing is measured as of 2026-08-19** and the first rung is done: the catalogue is a
     tree, descended with `GetSelectRadioList` and a `contentid`, and `GetStationData` hands
-    back a playable `stationurl`. Writing presets may therefore never be needed - browse, take
-    the URL, `SetUrlPlayback`. Browsing also costs nothing: it does not move the submode, a
+    back a `stationurl`. **That URL is not playable** - it is a `Tune.ashx` playlist and
+    `SetUrlPlayback` refuses it, corrected 2026-08-28 after this paragraph had claimed the
+    opposite since 19.08. Writing presets may still never be needed, but the route is browse,
+    resolve the `mediaid`, relay. Browsing also costs nothing: it does not move the submode, a
     claim this file and `WAM_PROTOCOL.md` briefly carried in the opposite direction. What is
     **Search is measured as of 2026-08-20** and works: `SearchQuery` is paginated and returned
     66 hits for `Trojka`, with the owner's own preset station `s15984` among them. So finding a
