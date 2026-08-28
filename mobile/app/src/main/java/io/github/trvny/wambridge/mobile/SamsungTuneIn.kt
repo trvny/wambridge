@@ -66,39 +66,36 @@ internal object SamsungTuneIn {
             powerOn = true,
         )
 
-        try {
-            selectTuneIn(context, speakerIp)
-            request(
-                context,
-                speakerIp,
-                apiType = "CPM",
-                method = "SetPlayPreset",
-                arguments = listOf(
-                    Argument("presettype", preset.presetType.toString(), Kind.DEC),
-                    Argument("presetindex", preset.presetIndex.toString(), Kind.DEC),
-                ),
-                timeoutMs = PLAY_TIMEOUT_MS,
-            )
-            waitForPlayback(context, speakerIp)
+        // From here on, propagate the original failure unchanged. No cleanup is
+        // intentional: failed TuneIn startup must leave the speaker silenced.
+        selectTuneIn(context, speakerIp)
+        request(
+            context,
+            speakerIp,
+            apiType = "CPM",
+            method = "SetPlayPreset",
+            arguments = listOf(
+                Argument("presettype", preset.presetType.toString(), Kind.DEC),
+                Argument("presetindex", preset.presetIndex.toString(), Kind.DEC),
+            ),
+            timeoutMs = PLAY_TIMEOUT_MS,
+        )
+        waitForPlayback(context, speakerIp)
 
-            request(
-                context,
-                speakerIp,
-                method = "SetVolume",
-                arguments = listOf(Argument("volume", SAFE_START_VOLUME.toString(), Kind.DEC)),
-                powerOn = true,
-            )
-            request(
-                context,
-                speakerIp,
-                method = "SetMute",
-                arguments = listOf(Argument("mute", "off", Kind.STR)),
-                powerOn = true,
-            )
-        } catch (error: Exception) {
-            // Deliberately keep volume 0 + mute on after failed TuneIn startup.
-            throw error
-        }
+        request(
+            context,
+            speakerIp,
+            method = "SetVolume",
+            arguments = listOf(Argument("volume", SAFE_START_VOLUME.toString(), Kind.DEC)),
+            powerOn = true,
+        )
+        request(
+            context,
+            speakerIp,
+            method = "SetMute",
+            arguments = listOf(Argument("mute", "off", Kind.STR)),
+            powerOn = true,
+        )
     }
 
     private fun selectTuneIn(context: Context, speakerIp: String) {
