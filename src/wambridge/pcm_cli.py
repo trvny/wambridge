@@ -289,6 +289,10 @@ class PlaybackWatcher:
         self._response_events: dict[str, WamEvent] = {}
         self._response_lock = threading.Lock()
         self._volume_lock = threading.Lock()
+        # Serialize actual SetVolume writes. In particular, a listener-thread
+        # pause re-zero must either finish before resume/teardown restores the
+        # saved level, or be cancelled when that restore already owns the lane.
+        self._volume_write_lock = threading.Lock()
         # Actual raw level last sent through this helper, or later observed from
         # the speaker. Startup seeds it before the loopback control channel is
         # announced, and VolumeLevel broadcasts keep it honest when another
@@ -300,6 +304,8 @@ class PlaybackWatcher:
         # its requested level so an unsolicited physical/client change is not
         # mistaken for that response merely because Samsung uses the same event.
         self._pending_volume_level: int | None = None
+        self._pending_volume_rezero = False
+        self._matched_volume_rezero = False
 
     def __enter__(self) -> PlaybackWatcher:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -500,17 +506,19 @@ class PlaybackWatcher:
                 # not the speaker's current zero. PCM keeps flowing as silence.
                 self._pause_restore_volume = level
                 return
-            # Publish the optimistic level before sending. The listener can receive
-            # an immediate rejection while `send()` is still on this thread; a
-            # post-send assignment would otherwise overwrite its invalidation.
-            self._current_volume = level
-        try:
-            self._send_volume_state(level)
-        except (StreamError, WamApiError):
+        with self._volume_write_lock:
             with self._volume_lock:
-                if self._current_volume == level:
-                    self._current_volume = None
-            raise
+                # Publish the optimistic level before sending. The listener can
+                # receive an immediate rejection while `send()` is still on this
+                # thread; a post-send assignment would overwrite its invalidation.
+                self._current_volume = level
+            try:
+                self._send_volume_state(level)
+            except (StreamError, WamApiError):
+                with self._volume_lock:
+                    if self._current_volume == level:
+                        self._current_volume = None
+                raise
 
     def set_pause_volume(self, paused: bool) -> None:
         """Silence pause with raw volume 0 while preserving the live HTTP stream."""
@@ -529,9 +537,10 @@ class PlaybackWatcher:
             # Physical M5, 2026-08-28: 3 -> 0 -> 3 kept the exact same HTTP
             # request, helper PID, FFmpeg PID and advancing CLOCK. SetMute did
             # the opposite and closed the speaker's HTTP pull.
-            self._set_volume_and_wait(0)
-            with self._volume_lock:
-                self._current_volume = 0
+            with self._volume_write_lock:
+                self._set_volume_and_wait(0)
+                with self._volume_lock:
+                    self._current_volume = 0
             return
 
         try:
@@ -542,12 +551,13 @@ class PlaybackWatcher:
             self._error = f"Could not restore speaker volume after pause: {error}"
             raise
 
-    def _send_volume_state(self, level: int) -> None:
+    def _send_volume_state(self, level: int, *, pause_rezero: bool = False) -> None:
         self._send_command(
             method=_VOLUME_COMMAND,
             arguments=[("volume", level, "dec")],
             power_on=True,
             requested_volume=level,
+            pause_rezero=pause_rezero,
         )
 
     def _set_volume_and_wait(self, level: int) -> None:
@@ -560,15 +570,16 @@ class PlaybackWatcher:
             raise WamApiError(rejection)
 
     def _restore_pause_volume(self) -> None:
-        with self._volume_lock:
-            previous = self._pause_restore_volume
-        if previous is None:
-            return
-        if previous != 0:
-            self._set_volume_and_wait(previous)
-        with self._volume_lock:
-            self._current_volume = previous
-            self._pause_restore_volume = None
+        with self._volume_write_lock:
+            with self._volume_lock:
+                previous = self._pause_restore_volume
+            if previous is None:
+                return
+            if previous != 0:
+                self._set_volume_and_wait(previous)
+            with self._volume_lock:
+                self._current_volume = previous
+                self._pause_restore_volume = None
 
     @staticmethod
     def _event_volume_level(event: WamEvent) -> int | None:
@@ -606,16 +617,25 @@ class PlaybackWatcher:
             # A physical button/second client temporarily made the speaker audible
             # while foobar is still paused. Preserve that level for resume, but
             # immediately put the live URL/PCM session back at raw 0. This runs on
-            # the listener thread, so it must be fire-and-forget rather than wait
-            # for the SetVolume response that this same thread has to receive.
-            try:
-                self._send_volume_state(0)
-            except (StreamError, WamApiError) as error:
-                self._error = f"Could not reapply pause volume: {error}"
-                LOGGER.warning("%s", self._error)
+            # the listener thread, so it must never wait behind a restore: if
+            # resume/teardown already owns the write lane, that newer operation wins
+            # and this now-stale re-zero is cancelled.
+            if not self._volume_write_lock.acquire(blocking=False):
                 return
-            with self._volume_lock:
-                self._current_volume = 0
+            try:
+                with self._volume_lock:
+                    if self._pause_restore_volume is None:
+                        return
+                try:
+                    self._send_volume_state(0, pause_rezero=True)
+                except (StreamError, WamApiError) as error:
+                    self._error = f"Could not reapply pause volume: {error}"
+                    LOGGER.warning("%s", self._error)
+                    return
+                with self._volume_lock:
+                    self._current_volume = 0
+            finally:
+                self._volume_write_lock.release()
 
     def _restore_pause_volume_quietly(self) -> str | None:
         for attempt in range(2):
@@ -683,6 +703,7 @@ class PlaybackWatcher:
             self._pending[:] = [pending for pending in self._pending if pending != method]
             if method == _VOLUME_COMMAND:
                 self._pending_volume_level = None
+                self._pending_volume_rezero = False
 
     def _send_command(
         self,
@@ -691,6 +712,7 @@ class PlaybackWatcher:
         arguments: list[tuple[str, str | int, str]] | None = None,
         power_on: bool = False,
         requested_volume: int | None = None,
+        pause_rezero: bool = False,
     ) -> None:
         with self._connection_lock:
             connection = self._connection
@@ -707,6 +729,7 @@ class PlaybackWatcher:
                     pending for pending in self._pending if pending != method
                 ]
                 self._pending_volume_level = requested_volume
+                self._pending_volume_rezero = pause_rezero
             self._pending.append(method)
         try:
             connection.send(
@@ -749,7 +772,9 @@ class PlaybackWatcher:
                     continue
                 del self._pending[index]
                 if command == _VOLUME_COMMAND:
+                    self._matched_volume_rezero = self._pending_volume_rezero
                     self._pending_volume_level = None
+                    self._pending_volume_rezero = False
                 return command
         return None
 
@@ -763,6 +788,13 @@ class PlaybackWatcher:
         with self._response_lock:
             self._response_events[command] = event
             self._results[command] = message
+            pause_rezero = (
+                self._matched_volume_rezero
+                if command == _VOLUME_COMMAND
+                else False
+            )
+            if command == _VOLUME_COMMAND:
+                self._matched_volume_rezero = False
         if not message:
             return
         if command == _VOLUME_COMMAND:
@@ -774,13 +806,10 @@ class PlaybackWatcher:
             # the cache, so pause cannot restore a level the speaker rejected.
             with self._volume_lock:
                 self._current_volume = None
-                paused = self._pause_restore_volume is not None
-            if paused:
-                # The listener-thread re-zero after an external volume change is
-                # deliberately fire-and-forget: waiting here would deadlock the
-                # response path. A matched rejection is therefore surfaced as an
-                # asynchronous helper failure so foobar rebuilds instead of leaving
-                # buffered pre-pause audio audible at the externally selected level.
+            if pause_rezero:
+                # Only the listener-thread compensating re-zero is asynchronous.
+                # The initial pause write has its own waiter and, if rejected, must
+                # simply fall back to paced PCM silence rather than kill the helper.
                 self._error = f"Could not keep speaker paused: {message}"
         if command == _PLAYBACK_COMMAND:
             self._error = message

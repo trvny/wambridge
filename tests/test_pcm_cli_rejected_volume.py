@@ -160,3 +160,44 @@ class RejectedVolumeCacheTests(TestCase):
         self.assertEqual(watcher._current_volume, 0)
         self.assertEqual(watcher._pending, ["SetVolume"])
         self.assertEqual(watcher._pending_volume_level, 0)
+
+    def test_initial_pause_rejection_is_not_an_async_helper_failure(self) -> None:
+        watcher = self._watcher(volume=7)
+        watcher._connection = ImmediateRejectingControlConnection(watcher)
+
+        with self.assertRaisesRegex(WamApiError, "rejected SetVolume"):
+            watcher.set_pause_volume(True)
+
+        self.assertEqual(watcher._error, "")
+        watcher.raise_if_failed()
+
+    def test_external_rezero_is_cancelled_when_restore_owns_write_lane(self) -> None:
+        watcher = self._watcher(volume=7)
+        with patch("wambridge.pcm_cli._PAUSE_ACK_TIMEOUT", 0.01):
+            watcher.set_pause_volume(True)
+
+        watcher._volume_write_lock.acquire()
+        try:
+            event = WamEvent(
+                method="VolumeLevel",
+                result="ok",
+                user_identifier=CLIENT_UUID,
+                error_code=None,
+                values={"volume": "4"},
+            )
+            watcher._observe_volume_event(event, external=True)
+        finally:
+            watcher._volume_write_lock.release()
+
+        # Resume/teardown owns the newer operation, so the listener must not
+        # enqueue a stale raw-0 write behind it. The external level remains the
+        # restore target and no SetVolume request was left pending.
+        self.assertEqual(watcher._pause_restore_volume, 4)
+        self.assertEqual(watcher._current_volume, 4)
+        self.assertEqual(watcher._pending, [])
+
+        with patch("wambridge.pcm_cli._PAUSE_ACK_TIMEOUT", 0.01):
+            watcher.set_pause_volume(False)
+
+        self.assertIsNone(watcher._pause_restore_volume)
+        self.assertEqual(watcher._current_volume, 4)
