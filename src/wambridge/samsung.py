@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+import socket
 from dataclasses import dataclass, field, replace
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import ProxyHandler, build_opener
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
@@ -35,6 +36,11 @@ API_TYPES = ("UIC", "CPM")
 # default of exactly one function today. Give any of the others a wrapper and
 # it wants this as its default too; nothing applies it automatically.
 SILENT_COMMAND_TIMEOUT = 1.0
+# The stream server this checks is on the same machine or the same Wi-Fi, and it
+# is already listening by the time anything is offered, so a connection that has
+# not landed in two seconds is not slow - it is absent. Keep it short: this runs
+# on the path to every playback start.
+STREAM_REACHABILITY_TIMEOUT = 2.0
 LOCAL_OPENER = build_opener(ProxyHandler({}))
 _NAME_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_.-]*\Z")
 _HOST_RE = re.compile(r"\A[A-Za-z0-9._:%\[\]-]+\Z")
@@ -46,6 +52,20 @@ class WamApiError(RuntimeError):
 
 class WamModeError(WamApiError):
     """Raised when the speaker's submode cannot accept local playback."""
+
+
+class WamUnreachableStreamError(WamApiError):
+    """Raised before offering the speaker a stream nothing is serving.
+
+    This is not a politeness check. Measured 2026-08-28: a ``SetUrlPlayback``
+    aimed at an address the speaker cannot pull leaves the control port wedged -
+    ``SetUrlPlayback`` and ``SetStopPlayback`` both stop answering, for the full
+    timeout, while ``GetFunc``, ``GetVolume`` and ``SetVolume`` keep replying in
+    0.1 s. So the two commands that could recover the speaker are exactly the two
+    that go dead, and only a power cycle clears it. That makes this the one
+    failure in the project a program cannot undo, and refusing on the way in is
+    the only lever left.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -868,14 +888,68 @@ def identify(
     return WamIdentity(device_id=device_id, name=name)
 
 
+def assert_stream_reachable(
+    stream_url: str,
+    *,
+    timeout: float = STREAM_REACHABILITY_TIMEOUT,
+) -> None:
+    """Refuse a stream URL nothing is listening on, before the speaker sees it.
+
+    Opens a TCP connection to the URL's host and port and closes it again
+    without sending a request. **Deliberately not an HTTP fetch**: every URL
+    handed to ``SetUrlPlayback`` in this project is served by our own local
+    HTTP server - the desktop relays radio through FFmpeg, and both mobile call
+    sites offer the phone's own proxy - and those servers hand the stream to one
+    consumer. A probe that asked for the body would be the second, which
+    ``AGENTS.md`` lists among the traps that have already broken a working
+    stream. A connect and an immediate close tells us the one thing worth
+    knowing, that something is there to answer, and tells the server nothing.
+
+    It is therefore a check for the failure that has actually happened - a port
+    with nothing behind it - and not a judgement about the audio. A server that
+    accepts the connection and then serves a 404 still gets through; catching
+    that would cost a real request.
+    """
+
+    parts = urlsplit(stream_url)
+    if parts.scheme not in ("http", "https"):
+        raise WamUnreachableStreamError(
+            f"Refusing to offer {stream_url!r}: only http and https can be "
+            "fetched by the speaker."
+        )
+    host = parts.hostname
+    if not host:
+        raise WamUnreachableStreamError(
+            f"Refusing to offer {stream_url!r}: it names no host."
+        )
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+    except OSError as error:
+        raise WamUnreachableStreamError(
+            f"Refusing to offer {stream_url!r}: nothing is listening on "
+            f"{host}:{port} ({error}). Handing this to the speaker would wedge "
+            "its control port until someone power-cycles it."
+        ) from error
+
+
 def play_url(
     speaker_ip: str,
     stream_url: str,
     *,
     port: int = DEFAULT_PORT,
     timeout: float = 10.0,
+    verify_reachable: bool = True,
 ) -> WamResponse:
-    """Tell the speaker to fetch and play a local HTTP stream."""
+    """Tell the speaker to fetch and play a local HTTP stream.
+
+    ``verify_reachable`` runs :func:`assert_stream_reachable` first. Turning it
+    off is for tests and for a caller that has just proven the server is up by
+    other means; it is not a way past a URL that failed the check.
+    """
+    if verify_reachable:
+        assert_stream_reachable(stream_url)
     return request(
         speaker_ip,
         "SetUrlPlayback",

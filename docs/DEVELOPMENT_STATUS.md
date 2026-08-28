@@ -598,9 +598,22 @@ operating system records.
       URL the speaker cannot pull, `SetUrlPlayback` and `SetStopPlayback` stop answering
       entirely - the full timeout, no reply - while `GetFunc`, `GetVolume` and `SetVolume`
       keep answering in 0.1 s. **Only a power cycle clears this one**, so the commands that
-      would recover the first two states are exactly the ones unavailable here. Worth a
+      would recover the first two states are exactly the ones unavailable here. ~~Worth a
       cheap guard on the way in: refuse to hand the speaker a URL that has not been shown
-      to be fetchable.
+      to be fetchable.~~ **Guarded 2026-08-28.** `assert_stream_reachable` in `samsung.py`
+      and its twin in `SamsungWamChannel.kt` run on every path that sends the command -
+      `play_url`, the PCM session's `offer_stream`, and the phone's `offerStream` - and
+      refuse a URL whose host and port accept no connection.
+
+      Two deliberate limits, both about the same fact. It **connects and closes without
+      sending a request**, because every URL offered here is served by our own local HTTP
+      server and those serve one consumer: a probe that asked for the body would be the
+      second, which `AGENTS.md` already lists among the traps that have broken a working
+      stream. And it is therefore a check on the address, not on the audio - a server that
+      accepts the connection and then answers 404 still gets through. That is the right
+      trade while nothing hands the speaker a remote URL: the desktop relays radio through
+      FFmpeg and both mobile call sites offer the phone's own proxy, so a dead port is the
+      failure that actually happens, and it is the one that cost two power cycles.
 
     Presets are the counter-example that shows what "abandoned" is really about: they play
     from the speaker's own connection to the internet, so none of this applies to them.
