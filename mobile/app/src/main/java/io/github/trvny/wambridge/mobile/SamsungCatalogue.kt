@@ -73,6 +73,10 @@ internal object SamsungCatalogue {
         val startIndex: Int = 0,
         val entries: List<Entry> = emptyList(),
     ) {
+        /** Whether the cursor sits on a root that is not the catalogue. */
+        val isForeignRoot: Boolean
+            get() = root != null && root != BROWSE_ROOT
+
         /** Whether the level continues past this page. */
         val hasMore: Boolean
             get() = total != null && startIndex + entries.size < total
@@ -109,18 +113,30 @@ internal object SamsungCatalogue {
             // `isRoot` alone is not enough to accept the answer. A recovering CPM
             // reports `totallistcount=0` for a level that does have content - the
             // trap `fetchPage` already retries around - and the Browse root is never
-            // genuinely empty, so an empty one here means "ask again", not "done".
-            if (page.isRoot && page.entries.isNotEmpty()) break
+            // genuinely empty, so an empty one there means "ask again", not "done".
+            //
+            // A *foreign* root is accepted empty, and must be: a search that matched
+            // nothing leaves the cursor on a legitimately empty `Search` root, and
+            // only `BrowseMain` below crosses back out of it. Retrying that one
+            // instead would strand the cursor in the search tree for good, failing
+            // every later browse the same way.
+            if (page.isRoot && (page.entries.isNotEmpty() || page.isForeignRoot)) break
             if (attempt + 1 < OPEN_ATTEMPTS) Thread.sleep(SETTLE_MS)
         }
-        if (!page.isRoot || page.entries.isEmpty()) {
+        if (!page.isRoot) {
             throw IOException(
-                "Could not read the speaker's browse root; results from any " +
-                    "other level would be misleading",
+                "Could not return the speaker's browse cursor to a root; " +
+                    "results from any deeper level would be misleading",
             )
         }
-        if (page.root != null && page.root != BROWSE_ROOT) {
+        if (page.isForeignRoot) {
             page = leaveForeignRoot(context, speakerIp, page)
+        }
+        if (page.entries.isEmpty()) {
+            throw IOException(
+                "The speaker's browse root came back empty; results from any " +
+                    "other level would be misleading",
+            )
         }
         return page
     }

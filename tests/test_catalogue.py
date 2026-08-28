@@ -71,6 +71,15 @@ EMPTY_ROOT_BODY = (
     "<menulist></menulist></response></CPM>"
 )
 
+EMPTY_SEARCH_BODY = (
+    '<CPM><method>RadioList</method><response result="ok">'
+    "<cpname>TuneIn</cpname>"
+    "<root>Search</root>"
+    '<category isroot="1">Search</category>'
+    "<totallistcount>0</totallistcount><startindex>0</startindex>"
+    "<menulist></menulist></response></CPM>"
+)
+
 STATION_BODY = (
     '<CPM><method>StationData</method><response result="ok">'
     "<cpname>TuneIn</cpname>"
@@ -266,6 +275,26 @@ class CursorTests(TestCase):
             send.side_effect = [response("<CPM/>"), *[response(EMPTY_ROOT_BODY)] * 5]
             with self.assertRaises(WamApiError):
                 open_catalogue("10.0.0.104", attempts=5)
+
+    def test_a_search_that_matched_nothing_is_still_crossed_out_of(self) -> None:
+        # The Search root is legitimately empty after a search with no hits, and
+        # only BrowseMain leaves that tree. Retrying it as if CPM were recovering
+        # would strand the cursor there and fail every later browse.
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [
+                response("<CPM/>"),
+                response(EMPTY_SEARCH_BODY),
+                response("<CPM/>"),
+                response(ROOT_BODY),
+            ]
+            page = open_catalogue("10.0.0.104")
+
+        self.assertEqual(page.root, BROWSE_ROOT)
+        self.assertTrue(page.entries)
+        methods = [call.args[1] for call in send.call_args_list]
+        self.assertEqual(methods[2:], ["BrowseMain", "GetCurrentRadioList"])
 
     def test_a_cursor_that_will_not_normalise_is_an_error(self) -> None:
         # Reporting the wrong level as the root would make every later call

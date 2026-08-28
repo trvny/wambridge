@@ -344,8 +344,14 @@ def open_catalogue(
         # ``is_root`` alone is not enough to accept the answer. A recovering CPM
         # reports ``totallistcount=0`` for a level that does have content - the
         # trap ``_fetch_page`` already retries around - and the Browse root is
-        # never genuinely empty, so an empty one here means ask again.
-        if page.is_root and page.entries:
+        # never genuinely empty, so an empty one there means ask again.
+        #
+        # A *foreign* root is accepted empty, and must be: a search that matched
+        # nothing leaves the cursor on a legitimately empty ``Search`` root, and
+        # only ``BrowseMain`` below crosses back out of it. Retrying that one
+        # instead would strand the cursor in the search tree for good, failing
+        # every later browse the same way.
+        if page.is_root and (page.entries or _is_foreign_root(page)):
             break
         if attempt + 1 < attempts:
             time.sleep(settle)
@@ -355,7 +361,7 @@ def open_catalogue(
             "other level would be misleading"
         )
 
-    if page.root and page.root != BROWSE_ROOT:
+    if _is_foreign_root(page):
         page = _leave_foreign_root(
             page,
             speaker_ip,
@@ -364,7 +370,17 @@ def open_catalogue(
             list_count=list_count,
             settle=settle,
         )
+    if not page.entries:
+        raise WamApiError(
+            "The speaker's browse root came back empty; results from any "
+            "other level would be misleading"
+        )
     return page
+
+
+def _is_foreign_root(page: RadioPage) -> bool:
+    """Return whether the cursor sits on a root that is not the catalogue."""
+    return bool(page.root) and page.root != BROWSE_ROOT
 
 
 def _leave_foreign_root(
