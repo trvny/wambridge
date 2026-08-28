@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.IOException
 import java.io.StringReader
 import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.parsers.ParserConfigurationException
 import org.w3c.dom.Element
 import org.w3c.dom.Text
 import org.xml.sax.InputSource
@@ -345,7 +346,18 @@ internal object SamsungCatalogue {
         val factory = DocumentBuilderFactory.newInstance().apply {
             // Local speaker XML, but it costs one call to make an entity
             // declaration in it inert rather than a file read.
-            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            //
+            // Each feature is set on its own and a refusal is tolerated, because
+            // **Android's parser does not implement them**. The desktop JVM does,
+            // so `setFeature` outside a try passed every unit test here and then
+            // threw `ParserConfigurationException` on the phone, where its message
+            // - the bare feature URI - became the screen's error text. Measured on
+            // the M5 test device 2026-08-28. `isExpandEntityReferences` is a
+            // property rather than a feature and never throws, so the entity
+            // protection that matters survives either way.
+            harden("http://apache.org/xml/features/disallow-doctype-decl")
+            harden("http://xml.org/sax/features/external-general-entities", false)
+            harden("http://xml.org/sax/features/external-parameter-entities", false)
             isExpandEntityReferences = false
             isNamespaceAware = false
         }
@@ -355,6 +367,16 @@ internal object SamsungCatalogue {
                 .documentElement
         } catch (error: Exception) {
             throw IOException("Samsung WAM returned invalid $what XML: ${body.take(200)}", error)
+        }
+    }
+
+    /** Ask for one hardening feature, and carry on where the parser has never heard of it. */
+    private fun DocumentBuilderFactory.harden(feature: String, value: Boolean = true) {
+        try {
+            setFeature(feature, value)
+        } catch (_: ParserConfigurationException) {
+            // Android's parser refuses several of these by name. Nothing to do:
+            // the parse itself is what matters, and the remaining settings hold.
         }
     }
 
