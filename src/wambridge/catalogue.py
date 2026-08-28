@@ -409,7 +409,7 @@ def _leave_foreign_root(
         port=port,
         timeout=timeout,
     )
-    for attempt in range(attempts):
+    for _attempt in range(attempts):
         time.sleep(settle)
         page = parse_radio_page(
             _cpm(
