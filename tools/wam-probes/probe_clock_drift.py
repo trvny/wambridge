@@ -107,7 +107,7 @@ def _in_flight(audio_emitted: float) -> str:
     """Sekundy audio oddane, a jeszcze nieuslyszane. Bez kotwicy nie do policzenia."""
     if _playback_start is None:
         return "      -"
-    return "%+7.1fs" % (audio_emitted - (time.monotonic() - _playback_start))
+    return f"{audio_emitted - (time.monotonic() - _playback_start):+7.1f}s"
 
 
 def main() -> int:
