@@ -578,6 +578,17 @@ operating system records.
     Verified 2026-08-28 - a preset kept playing with no established TCP connection between
     this machine and the speaker at all.
 
+17. **Bring `catalogue.py` back in step with its mobile twin.** The two are meant to be the
+    same reader, and the phone side has since gained two fixes the desktop one has not.
+    `RadioEntry.is_station` accepts any `type="2"` row with a `media_id`, but a podcast
+    episode is `type="2"` as well and carries a `t…` id nothing here can resolve - measured
+    2026-08-28 by descending into a programme found through a search, 50 of them in one
+    level. And `open_catalogue` breaks out of its retry loop on `is_root` alone, so a
+    recovering CPM answering `totallistcount=0` yields an empty catalogue root that the
+    caller then believes; the root is never genuinely empty, so that case has to keep
+    retrying like `_fetch_page` does. Neither has bitten on the desktop yet, which is
+    exactly why it is worth doing before they drift further.
+
 ## What the 7-8 s speaker figure was
 
 A subtraction remainder, not a measurement: total delay minus the terms that could be
