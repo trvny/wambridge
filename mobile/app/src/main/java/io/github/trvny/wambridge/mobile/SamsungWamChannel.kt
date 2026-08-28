@@ -5,11 +5,64 @@ import android.net.Uri
 import java.io.BufferedInputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.URI
+import java.net.URISyntaxException
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** How long to wait for the local stream server to accept a connection. */
+private const val STREAM_REACHABILITY_TIMEOUT_MS = 2_000
+
+/**
+ * Refuse a stream URL nothing is listening on, before the speaker ever sees it.
+ *
+ * Measured on the physical M5 on 2026-08-28: a `SetUrlPlayback` aimed at an address the speaker
+ * cannot pull wedges its control port, and the two commands that would recover it -
+ * `SetUrlPlayback` and `SetStopPlayback` - are exactly the two that then stop answering, for the
+ * full timeout, while `GetFunc` and `GetVolume` keep replying in 0.1 s. Only a power cycle clears
+ * it. That makes refusing on the way in the only lever software still has.
+ *
+ * It connects and closes again **without sending a request**. Every URL offered here is served by
+ * this phone's own proxy, and that proxy serves one consumer; a probe that asked for the body
+ * would be a second one, which has broken a working stream before.
+ */
+internal fun assertStreamReachable(
+    streamUrl: String,
+    timeoutMs: Int = STREAM_REACHABILITY_TIMEOUT_MS,
+    connect: (String, Int, Int) -> Unit = ::openAndClose,
+) {
+    val uri = try {
+        URI(streamUrl)
+    } catch (error: URISyntaxException) {
+        throw IOException("Refusing to offer $streamUrl: it is not a URL (${error.reason})")
+    }
+    val scheme = uri.scheme?.lowercase()
+    if (scheme != "http" && scheme != "https") {
+        throw IOException("Refusing to offer $streamUrl: only http and https can be fetched.")
+    }
+    val host = uri.host
+        ?: throw IOException("Refusing to offer $streamUrl: it names no host.")
+    val port = if (uri.port != -1) uri.port else if (scheme == "https") 443 else 80
+    try {
+        connect(host, port, timeoutMs)
+    } catch (error: IOException) {
+        throw IOException(
+            "Refusing to offer $streamUrl: nothing is listening on $host:$port " +
+                "(${error.message}). Handing this to the speaker would wedge its control " +
+                "port until someone power-cycles it.",
+        )
+    }
+}
+
+private fun openAndClose(host: String, port: Int, timeoutMs: Int) {
+    Socket().use { probe ->
+        probe.connect(InetSocketAddress(host, port), timeoutMs)
+    }
+}
 
 internal class SamsungWamChannel(
     context: Context,
@@ -55,6 +108,7 @@ internal class SamsungWamChannel(
     }
 
     fun offerStream(url: String) {
+        assertStreamReachable(url)
         send(
             method = "SetUrlPlayback",
             arguments = listOf(

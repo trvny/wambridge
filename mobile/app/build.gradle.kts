@@ -55,6 +55,21 @@ android {
     }
 
     buildTypes {
+        // A debug build is signed with the throwaway debug keystore and a
+        // release with the real one, so with a single applicationId the two can
+        // never sit on a phone together - Android refuses the second with
+        // "conflicts with an existing package" and the only way forward is to
+        // uninstall the other. That bit on 2026-08-28: a debug build put on the
+        // test device blocked the user's own release install afterwards, and a
+        // leftover copy under another MIUI user profile is invisible enough to
+        // look like a broken APK. Giving debug its own applicationId ends it.
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            // The launcher label is overridden in src/debug/res rather than with
+            // resValue, which would collide with the app_name already in
+            // src/main/res and fail the build on a duplicate resource.
+        }
         release {
             isMinifyEnabled = false
             if (releaseSigningReady) {

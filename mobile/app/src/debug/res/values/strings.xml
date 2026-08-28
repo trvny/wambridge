@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug builds carry their own applicationId (see build.gradle.kts), so they can
+  sit beside a release install. Give them their own launcher label too, or the
+  two are indistinguishable on the home screen.
+-->
+<resources>
+    <string name="app_name">WAM Bridge (debug)</string>
+</resources>

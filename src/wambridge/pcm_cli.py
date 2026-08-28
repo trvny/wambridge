@@ -29,6 +29,7 @@ from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import (
     WamApiError,
+    assert_stream_reachable,
     get_volume,
     methods_agree,
     probe,
@@ -493,7 +494,14 @@ class PlaybackWatcher:
         self._startup_complete.set()
 
     def offer_stream(self, stream_url: str) -> None:
-        """Send SetUrlPlayback through the connection that receives its events."""
+        """Send SetUrlPlayback through the connection that receives its events.
+
+        The reachability check runs here too, and it matters more on this path
+        than on the plain one: this connection is the single owner of the
+        control socket, so a wedge here takes the listener down with it and the
+        session cannot even report its own stop.
+        """
+        assert_stream_reachable(stream_url)
         self._send_command(
             method="SetUrlPlayback",
             arguments=[
