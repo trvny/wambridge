@@ -97,7 +97,7 @@ internal object SamsungTuneIn {
             )
         } catch (error: Exception) {
             // Deliberately keep volume 0 + mute on after failed TuneIn startup.
-            throw error
+            throw RuntimeException("Failed to start TuneIn playback", error)
         }
     }
 
