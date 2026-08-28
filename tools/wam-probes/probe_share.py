@@ -214,7 +214,7 @@ def url_playback() -> str:
 
 def phase_report(label: str, before_hits: int, before_events: int) -> dict:
     new_http = http_hits[before_hits:]
-    new_ev = [e for e in events[before_events:]]
+    new_ev = events[before_events:]
     interesting = [
         m
         for _, _, m, _ in new_ev
