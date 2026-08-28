@@ -40,7 +40,7 @@ class _Listener:
 class StreamReachabilityTests(TestCase):
     def test_accepts_a_port_something_is_listening_on(self) -> None:
         with _Listener() as url:
-            assert_stream_reachable(url)
+            self.assertIsNone(assert_stream_reachable(url))
 
     def test_refuses_a_port_with_nothing_behind_it(self) -> None:
         with self.assertRaises(WamUnreachableStreamError) as raised:

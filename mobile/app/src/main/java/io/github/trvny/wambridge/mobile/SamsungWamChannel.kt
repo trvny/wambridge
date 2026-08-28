@@ -38,7 +38,7 @@ internal fun assertStreamReachable(
     val uri = try {
         URI(streamUrl)
     } catch (error: URISyntaxException) {
-        throw IOException("Refusing to offer $streamUrl: it is not a URL (${error.reason})")
+        throw IOException("Refusing to offer $streamUrl: it is not a URL (${error.reason})", error)
     }
     val scheme = uri.scheme?.lowercase()
     if (scheme != "http" && scheme != "https") {
@@ -54,6 +54,7 @@ internal fun assertStreamReachable(
             "Refusing to offer $streamUrl: nothing is listening on $host:$port " +
                 "(${error.message}). Handing this to the speaker would wedge its control " +
                 "port until someone power-cycles it.",
+            error,
         )
     }
 }

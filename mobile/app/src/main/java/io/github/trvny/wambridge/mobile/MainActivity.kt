@@ -17,6 +17,14 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
+/**
+ * The launcher alias, spelled as `AndroidManifest.xml` declares it.
+ *
+ * `LauncherAliasNameTest` pins the two together, because nothing else would notice them drifting:
+ * `setComponentEnabledSetting` on a component that does not exist is a silent no-op.
+ */
+internal const val LAUNCHER_ALIAS_CLASS = "trvny.wambridge.mobile.LauncherAlias"
+
 class MainActivity : Activity() {
     private lateinit var launcherButton: Button
     private lateinit var discoverButton: Button
@@ -336,8 +344,18 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /**
+     * The launcher alias, named exactly as the manifest declares it.
+     *
+     * **Do not rebuild this from `packageName`.** The alias is declared with an absolute name, so
+     * it stays `trvny.wambridge.mobile.LauncherAlias` in every variant, while `packageName` is the
+     * applicationId and a debug build suffixes that to `trvny.wambridge.mobile.debug`. Deriving one
+     * from the other pointed the hide/show control at a component that does not exist, and
+     * `setComponentEnabledSetting` on a missing component is a silent no-op - the button would have
+     * looked fine and done nothing. Caught in review on the commit that added the suffix.
+     */
     private fun launcherAliasComponent(): ComponentName =
-        ComponentName(this, "$packageName.LauncherAlias")
+        ComponentName(this, LAUNCHER_ALIAS_CLASS)
 
     private fun setLauncherVisible(visible: Boolean) {
         val launcher = launcherAliasComponent()
