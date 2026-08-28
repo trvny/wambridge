@@ -225,6 +225,26 @@ class RejectedVolumeCacheTests(TestCase):
         self.assertEqual(watcher._current_volume, 0)
         self.assertFalse(watcher._pause_rezero_pending)
 
+    def test_deferred_rezero_at_unlock_boundary_is_drained(self) -> None:
+        watcher = self._watcher(volume=7)
+        connection = watcher._connection
+        self.assertIsInstance(connection, SilentControlConnection)
+        watcher._pause_volume_active = True
+        watcher._pause_restore_volume = 4
+        watcher._pause_rezero_pending = True
+        watcher._current_volume = 4
+
+        watcher._drain_pause_rezero_after_unlock()
+
+        sent_levels = [
+            call["arguments"][0][1]
+            for call in connection.sent
+            if call.get("method") == "SetVolume"
+        ]
+        self.assertEqual(sent_levels, [0])
+        self.assertEqual(watcher._current_volume, 0)
+        self.assertFalse(watcher._pause_rezero_pending)
+
     def test_external_change_during_restore_is_not_overwritten_after_wait(self) -> None:
         watcher = self._watcher(volume=7)
         with patch("wambridge.pcm_cli._PAUSE_ACK_TIMEOUT", 0.01):

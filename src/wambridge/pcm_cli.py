@@ -578,6 +578,7 @@ class PlaybackWatcher:
                         if self._current_volume == 0:
                             self._current_volume = None
                     raise
+            self._drain_pause_rezero_after_unlock()
             return
 
         try:
@@ -624,6 +625,15 @@ class PlaybackWatcher:
                 self._set_volume_and_wait(previous)
             with self._volume_lock:
                 self._pause_restore_volume = None
+
+    def _drain_pause_rezero_after_unlock(self) -> None:
+        """Drain work deferred at the write-lane release boundary."""
+        with self._volume_lock:
+            pending = self._pause_volume_active and self._pause_rezero_pending
+        if not pending:
+            return
+        with self._volume_write_lock:
+            self._reapply_pause_zero_locked(required=False)
 
     def _reapply_pause_zero_locked(self, *, required: bool) -> None:
         """Send deferred raw-0 writes while the caller owns the write lane."""
