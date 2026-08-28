@@ -1145,6 +1145,21 @@ This is the one thing that keeps preset writing on the table. For this project's
 it is unnecessary - browse, resolve the `mediaid`, relay. For the physical button it is the only
 route there is, because the button plays presets and nothing else.
 
+### `RadioList (error 60)` is transient, not a stuck cursor (measured 2026-08-28)
+
+`GetUpperRadioList` refuses with `RadioList (error 60)` now and then, always shortly after
+another CPM state change - a search, a `SetSelectRadio` - and **never reproducibly**. Three
+times in one day; each time the very next command answered normally, and a deliberate attempt to
+provoke it (empty search, `SetSelectRadio`, then the read, twice over) came back `ok` both times.
+`GetCurrentRadioList` answered correctly in the same second the refusal arrived, reporting the
+Browse root with its usual twelve entries.
+
+**It reads exactly like a browse cursor stranded somewhere odd, and it is not.** That mistake was
+made twice the same afternoon, once blaming a search for leaving the cursor behind and once
+blaming a level that could not be entered. Treat it as the same recovering CPM that answers
+`totallistcount=0` for a level that has content: retry on the same budget. `open_catalogue` now
+does, and only reports the refusal after the attempts are spent.
+
 **A trap for anything that browses.** The browse cursor lives in the speaker and **survives
 across client processes**. A fresh run that calls `GetSelectRadioList` assuming it starts at the
 root will descend from wherever the last run stopped - which produced an empty level and looked

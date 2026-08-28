@@ -332,15 +332,27 @@ def open_catalogue(
 
     page = RadioPage(category=None, is_root=False)
     for attempt in range(attempts):
-        page = parse_radio_page(
-            _cpm(
-                speaker_ip,
-                "GetUpperRadioList",
-                _paged(0, list_count),
-                port=port,
-                timeout=timeout,
+        try:
+            page = parse_radio_page(
+                _cpm(
+                    speaker_ip,
+                    "GetUpperRadioList",
+                    _paged(0, list_count),
+                    port=port,
+                    timeout=timeout,
+                )
             )
-        )
+        except WamApiError:
+            # A refusal here is the same recovering CPM the empty page below is,
+            # and it deserves the same budget rather than ending the whole open.
+            # Measured 2026-08-28: `RadioList (error 60)` came back three times
+            # in a day, always shortly after another CPM state change, and never
+            # reproduced on demand - the very next command answered normally.
+            # Twice that afternoon it was mistaken for a stuck browse cursor.
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(settle)
+            continue
         # ``is_root`` alone is not enough to accept the answer. A recovering CPM
         # reports ``totallistcount=0`` for a level that does have content - the
         # trap ``_fetch_page`` already retries around - and the Browse root is

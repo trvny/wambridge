@@ -316,6 +316,37 @@ class CursorTests(TestCase):
         self.assertEqual(page.root, BROWSE_ROOT)
         self.assertTrue(page.entries)
 
+    def test_a_transient_refusal_is_retried_rather_than_fatal(self) -> None:
+        # Measured on the M5: GetUpperRadioList can answer "RadioList (error 60)"
+        # shortly after another CPM state change and then work on the next call.
+        # Ending the open on it turns a speaker that is merely busy into one that
+        # looks broken.
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [
+                response("<CPM/>"),
+                WamApiError("Samsung WAM rejected RadioList (error 60)"),
+                response(ROOT_BODY),
+            ]
+            page = open_catalogue("10.0.0.104")
+
+        self.assertTrue(page.is_root)
+        self.assertTrue(page.entries)
+
+    def test_a_refusal_that_never_clears_is_still_reported(self) -> None:
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [
+                response("<CPM/>"),
+                *[WamApiError("Samsung WAM rejected RadioList (error 60)")] * 5,
+            ]
+            with self.assertRaises(WamApiError) as caught:
+                open_catalogue("10.0.0.104", attempts=5)
+
+        self.assertIn("error 60", str(caught.exception))
+
     def test_a_cursor_that_will_not_normalise_is_an_error(self) -> None:
         # Reporting the wrong level as the root would make every later call
         # describe somewhere else, so this fails instead.
