@@ -326,17 +326,25 @@ operating system records.
    default is now 0 in both the helper and foobar settings. Hardware had already passed a full
    session at 0; a fresh short check on the physical M5 also held the seekbar at 1.00x and
    stopped with no helper or FFmpeg left behind.
-4. **Route pause onto `55001`. In progress in PR #112, final hardware pass pending.** The
-   first idea, `SetPlaybackControl pause`, is rejected by measurement: on URL/PCM it answers
-   cleanly but leaves `playstatus=play`. The current route therefore uses `SetMute` for prompt
-   speaker-side silence while the established PCM stream keeps receiving paced zeroes, preserving
-   the proven long-pause transport fallback. Measured 2026-08-27, `SetMute` answers as
-   `MuteStatus` in about **0.04-0.23 s**. The component sends pause/resume to the local helper
-   without waiting for a loopback acknowledgement, so a slow/silent firmware reply cannot block
-   foobar or retire the shared fast control channel. The helper snapshots the pre-pause mute state
-   and restores it on resume or teardown. A failed resume makes the helper fail and restart rather
-   than leaving live playback silently muted. Baseline before this work remains about 5 s to fall
-   silent and 6 s to come back; do not replace those numbers until the final build is heard.
+4. ~~**Route pause onto `55001`.**~~ **Done and hardware-validated 2026-08-28 in PR #112.** Two
+   tempting speaker controls were rejected first: UIC `SetPlaybackControl pause` answers cleanly on
+   URL/PCM but does nothing, while `SetMute` silences promptly but closes the M5 HTTP pull and can
+   hand the speaker back muted. The accepted route uses raw speaker volume on the helper's existing
+   `55001` connection: pause stores the active level, writes 0, keeps paced PCM silence flowing, and
+   resume/teardown restores the saved or externally updated level. `VolumeLevel` broadcasts refresh
+   that target; a nonzero external change during pause is immediately countered with raw 0 while
+   remaining the resume target, and the helper ignores its own pause-generated zero for restore
+   purposes. A matched teardown restore rejection is retried once and then reported as
+   `restore=rejected` rather than being hidden behind an otherwise clean Stop.
+
+   The final artifact `75daa1a` passed the physical M5 checklist through authenticated Beefweb:
+   an external raw-volume change to 3 survived a **40 s pause** at 0 and resumed to exactly 3 with
+   the same helper and FFmpeg PIDs and no timeout; Stop during pause restored 3, left `muted=off`,
+   `holding=0`, and 0 helper/FFmpeg processes; Next during pause cleanly retired Starburster and
+   started Andor at volume 3 with one fresh helper/FFmpeg pair. Final Stop again ended at volume 3,
+   `muted=off`, `holding=0`, with foobar closed and no helper/FFmpeg left. The old ~5 s pause / ~6 s
+   resume figures remain historical measurements of the PCM-only path; routed audible latency was
+   not re-timed acoustically in this pass.
 5. ~~**Stop the helper respawn storm.**~~ **Merged and measured 2026-08-19**, PR #55. The
    backoff is charged at the spawn and refunded by `PLAYING`; see the section above for the two
    placements that failed first and why. Nothing is left open here.

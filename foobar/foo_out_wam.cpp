@@ -530,18 +530,18 @@ public:
 
     void pause(bool state) override {
         bool wasPaused = false;
-        bool hadPauseMuteRequest = false;
+        bool hadPauseVolumeRequest = false;
         {
             std::lock_guard lock(m_mutex);
             wasPaused = m_paused.load();
             if (state == wasPaused) return;
-            hadPauseMuteRequest = m_pauseMuteRequested.load();
+            hadPauseVolumeRequest = m_pauseVolumeRequested.load();
         }
 
         bool controlSent = true;
         if (state) {
             controlSent = wam::send_pause_over_helper(true);
-        } else if (hadPauseMuteRequest) {
+        } else if (hadPauseVolumeRequest) {
             controlSent = wam::send_pause_over_helper(false);
         }
 
@@ -551,15 +551,15 @@ public:
             refresh_playback_clock_locked(now);
             if (state) {
                 m_pauseStarted = now;
-                m_pauseMuteRequested.store(controlSent);
+                m_pauseVolumeRequested.store(controlSent);
             } else {
                 if (m_clockStarted &&
                     m_pauseStarted != std::chrono::steady_clock::time_point{}) {
                     m_clockAnchor += now - m_pauseStarted;
                 }
                 m_pauseStarted = {};
-                m_pauseMuteRequested.store(false);
-                if (hadPauseMuteRequest && !controlSent) m_restart = true;
+                m_pauseVolumeRequested.store(false);
+                if (hadPauseVolumeRequest && !controlSent) m_restart = true;
             }
             m_paused.store(state);
         }
@@ -1718,7 +1718,7 @@ private:
     std::chrono::steady_clock::time_point m_flushDeadline{};
     std::string m_failure;
     std::atomic<bool> m_paused{false};
-    std::atomic<bool> m_pauseMuteRequested{false};
+    std::atomic<bool> m_pauseVolumeRequested{false};
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_helperReady{false};
     std::atomic<bool> m_childStopping{false};

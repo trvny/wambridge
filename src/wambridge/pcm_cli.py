@@ -45,8 +45,6 @@ _FAILURE_EVENT = "ErrorEvent"
 _PUBLIC_IDENTIFIER = "public"
 _PLAYBACK_COMMAND = "SetUrlPlayback"
 _VOLUME_COMMAND = "SetVolume"
-_GET_MUTE_COMMAND = "GetMute"
-_MUTE_COMMAND = "SetMute"
 _VOLUME_ACK_TIMEOUT = 1.0
 _PAUSE_ACK_TIMEOUT = 1.0
 _STOP_COMMAND = "SetPlaybackControl"
@@ -290,7 +288,30 @@ class PlaybackWatcher:
         self._results: dict[str, str] = {}
         self._response_events: dict[str, WamEvent] = {}
         self._response_lock = threading.Lock()
-        self._pause_restore_mute: bool | None = None
+        self._volume_lock = threading.Lock()
+        # Serialize actual SetVolume writes. In particular, a listener-thread
+        # pause re-zero must either finish before resume/teardown restores the
+        # saved level, or be cancelled when that restore already owns the lane.
+        self._volume_write_lock = threading.Lock()
+        # Actual raw level last sent through this helper, or later observed from
+        # the speaker. Startup seeds it before the loopback control channel is
+        # announced, and VolumeLevel broadcasts keep it honest when another
+        # client or the physical buttons move the M5. Pause can therefore avoid
+        # a GetVolume round trip without restoring stale state.
+        self._current_volume: int | None = None
+        self._pause_restore_volume: int | None = None
+        # Keep logical routed-pause state separate from the restore target. A
+        # rejected SetVolume(0) is ambiguous on this firmware because replies
+        # have no request IDs: the target may still be needed to unstick raw 0
+        # even after we fall back to paced PCM silence.
+        self._pause_volume_active = False
+        self._pause_rezero_pending = False
+        # One SetVolume can be awaiting a VolumeLevel response at a time. Keep
+        # its requested level so an unsolicited physical/client change is not
+        # mistaken for that response merely because Samsung uses the same event.
+        self._pending_volume_level: int | None = None
+        self._pending_volume_rezero = False
+        self._matched_volume_rezero = False
 
     def __enter__(self) -> PlaybackWatcher:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -336,14 +357,15 @@ class PlaybackWatcher:
             return
         self._released = True
         # A stop, track change or foobar shutdown does not have to deliver a
-        # matching resume callback. Restore a mute we applied for pause while
-        # the persistent 55001 connection is still alive.
-        self._restore_pause_mute_quietly()
+        # matching resume callback. Restore the raw volume we replaced with 0 for pause
+        # while the persistent 55001 connection is still alive.
+        restore_status = self._restore_pause_volume_quietly()
+        restore_suffix = f" restore={restore_status}" if restore_status else ""
         if not self._armed.is_set():
             # No URL was ever offered, so there is no playback session of ours
             # to end. Sending a stop anyway would reach past this helper into
             # whatever else the speaker is doing.
-            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}{restore_suffix}"
             return
         with self._response_lock:
             refused = self._results.get(_PLAYBACK_COMMAND)
@@ -355,7 +377,7 @@ class PlaybackWatcher:
             # that instead. Arming happens before the offer, so it cannot carry
             # this distinction on its own.
             LOGGER.debug("Not releasing a playback the speaker refused")
-            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}{restore_suffix}"
             return
         if not self._stream_active.is_set():
             # Offered and never taken up. The rejection above only catches a
@@ -367,7 +389,7 @@ class PlaybackWatcher:
             # guess does the same harm the rejection case avoids: it reaches
             # past this helper into whatever the speaker is really doing.
             LOGGER.debug("Not releasing a stream the speaker never requested")
-            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=skipped {self._unarmed_sleep_field()}{restore_suffix}"
             return
 
         # `pause` rather than `stop`: measured on this firmware, the URL and DLNA
@@ -380,14 +402,14 @@ class PlaybackWatcher:
                 arguments=[("playbackcontrol", "pause", "str")],
             )
         except (StreamError, WamApiError) as error:
-            self.release_summary = f"stop=unreachable {self._unarmed_sleep_field()}"
+            self.release_summary = f"stop=unreachable {self._unarmed_sleep_field()}{restore_suffix}"
             LOGGER.warning("Could not stop speaker playback: %s", error)
             return
         rejection = self.wait_for_response(
             _STOP_COMMAND,
             timeout=_STOP_ACK_TIMEOUT,
         )
-        self.release_summary = "stop=rejected" if rejection else "stop=sent"
+        self.release_summary = ("stop=rejected" if rejection else "stop=sent") + restore_suffix
         if rejection:
             LOGGER.warning("%s while releasing the speaker", rejection)
 
@@ -483,87 +505,231 @@ class PlaybackWatcher:
         )
 
     def set_volume(self, level: int) -> None:
-        """Set startup volume without opening a competing control socket."""
-        self._send_command(
-            method="SetVolume",
-            arguments=[("volume", level, "dec")],
-            power_on=True,
-        )
+        """Set speaker volume without opening a competing control socket."""
+        with self._volume_write_lock:
+            with self._volume_lock:
+                if self._pause_volume_active:
+                    # A slider move while routed pause is active changes what
+                    # resume should restore, not the speaker's current zero.
+                    self._pause_restore_volume = level
+                    return
+                if self._pause_restore_volume is not None:
+                    # An earlier pause write may have been rejected ambiguously.
+                    # Keep the newest desired level as the safety restore target,
+                    # but do not swallow the slider while paced PCM is fallback.
+                    self._pause_restore_volume = level
+                # Publish the optimistic level before sending. The listener can
+                # receive an immediate rejection while `send()` is still on this
+                # thread; a post-send assignment would overwrite its invalidation.
+                self._current_volume = level
+            try:
+                self._send_volume_state(level)
+            except (StreamError, WamApiError):
+                with self._volume_lock:
+                    if self._current_volume == level:
+                        self._current_volume = None
+                raise
 
-    def set_pause_mute(self, paused: bool) -> None:
-        """Mute for foobar pause, restoring the speaker's previous mute state."""
+    def set_pause_volume(self, paused: bool) -> None:
+        """Silence pause with raw volume 0 while preserving the live HTTP stream."""
         if paused:
-            if self._pause_restore_mute is not None:
-                return
-            previous = self._read_mute_state()
-            self._pause_restore_mute = previous
-            if previous:
-                return
-            # Keep the saved state even if this write fails: a timed-out write
-            # may still have landed, and teardown must get a chance to undo it.
-            self._set_mute_state(True)
+            with self._volume_write_lock:
+                with self._volume_lock:
+                    if self._pause_volume_active:
+                        return
+                    if self._pause_restore_volume is not None:
+                        # A previous ambiguous pause failure still carries a
+                        # restore debt. The component is already using paced PCM
+                        # fallback, so do not stack another indistinguishable 0.
+                        return
+                    previous = self._current_volume
+                    if previous is None:
+                        # The control channel is announced only after startup has
+                        # sent its volume, so this is defensive rather than normal.
+                        raise WamApiError("Speaker volume is unknown at pause")
+                    self._pause_restore_volume = previous
+                    self._pause_volume_active = True
+                    self._pause_rezero_pending = False
+                    if previous != 0:
+                        # Optimistic raw 0 is published before sending so an
+                        # immediate rejection can invalidate it without being
+                        # overwritten after send returns.
+                        self._current_volume = 0
+                if previous == 0:
+                    return
+                # Physical M5, 2026-08-28: 3 -> 0 -> 3 kept the exact same HTTP
+                # request, helper PID, FFmpeg PID and advancing CLOCK. SetMute did
+                # the opposite and closed the speaker's HTTP pull.
+                try:
+                    self._set_volume_and_wait(0)
+                    # A physical/client change can arrive during the one-second
+                    # pause response budget while this thread owns the write lane.
+                    # The listener records that as deferred work; flush it before
+                    # releasing the lane so buffered audio cannot leak.
+                    self._reapply_pause_zero_locked(required=False)
+                except (StreamError, WamApiError):
+                    with self._volume_lock:
+                        # The rejection may belong to an older superseded slider
+                        # because Samsung gives SetVolume no request ID. Fall back
+                        # to paced PCM, but retain the restore target so resume or
+                        # teardown can still recover if raw 0 actually took.
+                        self._pause_volume_active = False
+                        self._pause_rezero_pending = False
+                        if self._current_volume == 0:
+                            self._current_volume = None
+                    raise
+            self._drain_pause_rezero_after_unlock()
             return
 
         try:
-            self._restore_pause_mute()
+            self._restore_pause_volume()
         except (StreamError, WamApiError) as error:
-            # The component intentionally does not wait for a loopback ACK: it
-            # must never block foobar's pause callback on a firmware timeout. A
-            # failed resume is different from a failed pause, though. Paced
-            # silence is a safe pause fallback; a failed unmute would leave live
-            # playback inaudible. Make the helper fail so the component restarts
-            # the URL session instead of staying silently wedged.
-            self._error = f"Could not restore speaker mute after pause: {error}"
+            # Failed resume must not leave live playback at raw volume 0. Mark
+            # the helper failed so the component can rebuild the URL session.
+            self._error = f"Could not restore speaker volume after pause: {error}"
             raise
 
-    def _read_mute_state(self) -> bool:
-        self._send_command(method=_GET_MUTE_COMMAND)
-        event = self.wait_for_response_event(
-            _GET_MUTE_COMMAND,
-            timeout=_PAUSE_ACK_TIMEOUT,
-        )
-        if event is None:
-            raise WamApiError("Speaker did not report mute state")
-        with self._response_lock:
-            rejection = self._results.get(_GET_MUTE_COMMAND)
-        if rejection:
-            raise WamApiError(rejection)
-        for key, value in event.values.items():
-            if key.casefold() not in {"mute", "mutestatus"}:
-                continue
-            normalized = value.strip().casefold()
-            if normalized in {"on", "1", "true"}:
-                return True
-            if normalized in {"off", "0", "false"}:
-                return False
-        raise WamApiError("Speaker GetMute response did not contain mute state")
-
-    def _set_mute_state(self, muted: bool) -> None:
+    def _send_volume_state(self, level: int, *, pause_rezero: bool = False) -> None:
         self._send_command(
-            method=_MUTE_COMMAND,
-            arguments=[("mute", "on" if muted else "off", "str")],
+            method=_VOLUME_COMMAND,
+            arguments=[("volume", level, "dec")],
             power_on=True,
+            requested_volume=level,
+            pause_rezero=pause_rezero,
         )
+
+    def _set_volume_and_wait(self, level: int) -> None:
+        self._send_volume_state(level)
         rejection = self.wait_for_response(
-            _MUTE_COMMAND,
+            _VOLUME_COMMAND,
             timeout=_PAUSE_ACK_TIMEOUT,
         )
         if rejection is not None:
             raise WamApiError(rejection)
 
-    def _restore_pause_mute(self) -> None:
-        previous = self._pause_restore_mute
-        if previous is None:
-            return
-        if not previous:
-            self._set_mute_state(False)
-        self._pause_restore_mute = None
+    def _restore_pause_volume(self) -> None:
+        with self._volume_write_lock:
+            with self._volume_lock:
+                previous = self._pause_restore_volume
+                self._pause_volume_active = False
+                self._pause_rezero_pending = False
+                if previous is None:
+                    return
+                if previous != 0:
+                    # Publish the restore optimistically before sending. Any
+                    # later VolumeLevel event, including a physical/client change
+                    # during the response wait, remains authoritative and must not
+                    # be overwritten when the wait finishes.
+                    self._current_volume = previous
+            if previous != 0:
+                self._set_volume_and_wait(previous)
+            with self._volume_lock:
+                self._pause_restore_volume = None
 
-    def _restore_pause_mute_quietly(self) -> None:
+    def _drain_pause_rezero_after_unlock(self) -> None:
+        """Drain work deferred at the write-lane release boundary."""
+        with self._volume_lock:
+            pending = self._pause_volume_active and self._pause_rezero_pending
+        if not pending:
+            return
+        with self._volume_write_lock:
+            self._reapply_pause_zero_locked(required=False)
+
+    def _reapply_pause_zero_locked(self, *, required: bool) -> None:
+        """Send deferred raw-0 writes while the caller owns the write lane."""
+        while True:
+            with self._volume_lock:
+                if not self._pause_volume_active:
+                    self._pause_rezero_pending = False
+                    return
+                if not required and not self._pause_rezero_pending:
+                    return
+                required = False
+                self._pause_rezero_pending = False
+                self._current_volume = 0
+            try:
+                # This compensating write must not block the listener thread on a
+                # firmware response. A later matched rejection is tagged and makes
+                # the helper fail rather than leaving queued audio audible.
+                self._send_volume_state(0, pause_rezero=True)
+            except (StreamError, WamApiError) as error:
+                with self._volume_lock:
+                    self._current_volume = None
+                self._error = f"Could not reapply pause volume: {error}"
+                LOGGER.warning("%s", self._error)
+                return
+            # If another external level arrived while send() held this same lane,
+            # _observe_volume_event marked another deferred re-zero. Loop only for
+            # work actually observed; normal operation exits after one send.
+
+    @staticmethod
+    def _event_volume_level(event: WamEvent) -> int | None:
+        """Return a valid raw level carried by a SetVolume/VolumeLevel event."""
+        if not event.method or not methods_agree(_VOLUME_COMMAND, event.method):
+            return None
+        for key, value in event.values.items():
+            if key.casefold() not in {"volume", "volumelevel", "volume_level"}:
+                continue
+            try:
+                candidate = int(value)
+            except (TypeError, ValueError):
+                return None
+            if RAW_MIN_VOLUME <= candidate <= RAW_MAX_VOLUME:
+                return candidate
+            return None
+        return None
+
+    def _observe_volume_event(self, event: WamEvent, *, external: bool) -> None:
+        """Refresh cached raw volume from a VolumeLevel speaker event."""
+        level = self._event_volume_level(event)
+        if level is None:
+            return
+        reapply_zero = False
+        with self._volume_lock:
+            self._current_volume = level
+            # Non-zero speaker changes while a restore target exists become the
+            # newest target. This also covers the ambiguous-pause fallback state:
+            # resume/teardown should preserve a later physical/client choice even
+            # though routed pause itself is no longer considered active.
+            if self._pause_restore_volume is not None and level != 0:
+                self._pause_restore_volume = level
+                reapply_zero = self._pause_volume_active and external
+        if not reapply_zero:
+            return
+
+        # A physical button/second client temporarily made the speaker audible
+        # while routed pause is still active. Preserve that level for resume, but
+        # immediately put the live URL/PCM session back at raw 0. If initial pause
+        # still owns the write lane, defer instead of dropping this compensation.
+        if not self._volume_write_lock.acquire(blocking=False):
+            with self._volume_lock:
+                if self._pause_volume_active:
+                    self._pause_rezero_pending = True
+            return
         try:
-            self._restore_pause_mute()
-        except (StreamError, WamApiError) as error:
-            LOGGER.warning("Could not restore speaker mute after pause: %s", error)
+            self._reapply_pause_zero_locked(required=True)
+        finally:
+            self._volume_write_lock.release()
+
+    def _restore_pause_volume_quietly(self) -> str | None:
+        for attempt in range(2):
+            try:
+                self._restore_pause_volume()
+                return None
+            except StreamError as error:
+                LOGGER.warning("Could not restore speaker volume after pause: %s", error)
+                return "unreachable"
+            except WamApiError as error:
+                rejected = "rejected" in str(error).casefold()
+                if rejected and attempt == 0:
+                    LOGGER.warning(
+                        "Speaker rejected pause-volume restore; retrying once: %s",
+                        error,
+                    )
+                    continue
+                LOGGER.warning("Could not restore speaker volume after pause: %s", error)
+                return "rejected" if rejected else "unreachable"
+        return "rejected"
 
     def wait_for_start(self, *, timeout: float) -> None:
         for budget in _wait_slices(timeout):
@@ -586,6 +752,7 @@ class PlaybackWatcher:
                 if event is not None:
                     return event
             if monotonic() >= deadline or self._stop.wait(timeout=0.05):
+                self._retire_pending(method)
                 return None
 
     def wait_for_response(self, method: str, *, timeout: float) -> str | None:
@@ -601,7 +768,16 @@ class PlaybackWatcher:
                 if method in self._results:
                     return self._results[method] or None
             if monotonic() >= deadline or self._stop.wait(timeout=0.05):
+                self._retire_pending(method)
                 return None
+
+    def _retire_pending(self, method: str) -> None:
+        """Stop treating an unanswered command as a future response target."""
+        with self._response_lock:
+            self._pending[:] = [pending for pending in self._pending if pending != method]
+            if method == _VOLUME_COMMAND:
+                self._pending_volume_level = None
+                self._pending_volume_rezero = False
 
     def _send_command(
         self,
@@ -609,6 +785,8 @@ class PlaybackWatcher:
         method: str,
         arguments: list[tuple[str, str | int, str]] | None = None,
         power_on: bool = False,
+        requested_volume: int | None = None,
+        pause_rezero: bool = False,
     ) -> None:
         with self._connection_lock:
             connection = self._connection
@@ -617,6 +795,15 @@ class PlaybackWatcher:
         with self._response_lock:
             self._results.pop(method, None)
             self._response_events.pop(method, None)
+            if method == _VOLUME_COMMAND:
+                # SetVolume has no request ID and may answer with silence. A newer
+                # setter supersedes every older one, otherwise an old pending entry
+                # can steal a later unsolicited VolumeLevel broadcast.
+                self._pending[:] = [
+                    pending for pending in self._pending if pending != method
+                ]
+                self._pending_volume_level = requested_volume
+                self._pending_volume_rezero = pause_rezero
             self._pending.append(method)
         try:
             connection.send(
@@ -625,6 +812,7 @@ class PlaybackWatcher:
                 power_on=power_on,
             )
         except (OSError, WamEventError) as error:
+            self._retire_pending(method)
             raise WamApiError(
                 f"Cannot reach Samsung WAM at "
                 f"{self._speaker_ip}:{self._port}: {error}"
@@ -639,11 +827,29 @@ class PlaybackWatcher:
         """
         if not event.method or event.result is None:
             return None
+        event_volume = self._event_volume_level(event)
         with self._response_lock:
             for index, command in enumerate(self._pending):
-                if methods_agree(command, event.method):
-                    del self._pending[index]
-                    return command
+                if not methods_agree(command, event.method):
+                    continue
+                if (
+                    command == _VOLUME_COMMAND
+                    and (event.result or "").casefold() == "ok"
+                    and event_volume is not None
+                    and self._pending_volume_level is not None
+                    and event_volume != self._pending_volume_level
+                ):
+                    # Samsung uses VolumeLevel for both SetVolume replies and
+                    # unsolicited physical/client changes. A different explicit
+                    # level cannot acknowledge our request, so leave the setter
+                    # pending and let the caller classify this event as external.
+                    continue
+                del self._pending[index]
+                if command == _VOLUME_COMMAND:
+                    self._matched_volume_rezero = self._pending_volume_rezero
+                    self._pending_volume_level = None
+                    self._pending_volume_rezero = False
+                return command
         return None
 
     def _record_response(self, command: str, event: WamEvent) -> None:
@@ -656,8 +862,29 @@ class PlaybackWatcher:
         with self._response_lock:
             self._response_events[command] = event
             self._results[command] = message
+            pause_rezero = (
+                self._matched_volume_rezero
+                if command == _VOLUME_COMMAND
+                else False
+            )
+            if command == _VOLUME_COMMAND:
+                self._matched_volume_rezero = False
         if not message:
             return
+        if command == _VOLUME_COMMAND:
+            # Routed slider writes are cached optimistically because this firmware
+            # may answer successful SetVolume with silence. A matched rejection is
+            # the one case where that optimistic level is definitely false. Do not
+            # guess the previous level amid possibly overlapping slider writes; mark
+            # it unknown until a later routed write or observed VolumeLevel refreshes
+            # the cache, so pause cannot restore a level the speaker rejected.
+            with self._volume_lock:
+                self._current_volume = None
+            if pause_rezero:
+                # Only the listener-thread compensating re-zero is asynchronous.
+                # The initial pause write has its own waiter and, if rejected, must
+                # simply fall back to paced PCM silence rather than kill the helper.
+                self._error = f"Could not keep speaker paused: {message}"
         if command == _PLAYBACK_COMMAND:
             self._error = message
             return
@@ -692,6 +919,7 @@ class PlaybackWatcher:
                         )
                         continue
                     command = self._match_pending(event)
+                    self._observe_volume_event(event, external=command is None)
                     if command is not None:
                         self._record_response(command, event)
                         continue
@@ -912,7 +1140,7 @@ def run(
             # PLAYING depends on.
             with ControlChannel(
                 watcher.set_volume,
-                set_paused=watcher.set_pause_mute,
+                set_paused=watcher.set_pause_volume,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

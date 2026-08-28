@@ -329,6 +329,28 @@ the ear about six seconds later. Volume that should feel immediate belongs on th
 matched `result="ng"` for `SetVolume` must be surfaced: startup mutes the speaker on purpose,
 so a rejected unmute leaves it silent while every other signal says it is playing.
 
+Measured again 2026-08-28 during PR #112: changing the active URL/PCM session **3 -> 0 -> 3**
+kept the exact same `wambridge-pcm` and FFmpeg PIDs alive and `CLOCK` advanced continuously. The
+M5 stayed `muted=off`; only its raw level changed. Unlike `SetMute`, raw volume 0 therefore gives
+a transport-preserving speaker-side silence primitive, provided the previous level is restored.
+The helper also refreshes that restoration target from observed `VolumeLevel` broadcasts. If a
+physical button or second client raises the speaker above 0 while foobar is still paused, the new
+level becomes the resume target and the helper immediately writes raw 0 again so queued pre-pause
+audio cannot leak out while paced silence catches up.
+The PR #112 helper keeps that active level from startup and every routed volume command, so normal
+pause does not spend another `GetVolume` round trip before writing 0. Its loopback control shutdown
+waits for any in-flight pause/volume callback before playback teardown can release the 55001 owner.
+
+Final PR #112 hardware validation used artifact `75daa1a` through authenticated Beefweb. Starting
+from an externally-set raw level 3, a 40-second pause held the speaker at raw 0 while the same
+`wambridge-pcm` and FFmpeg PIDs stayed alive; resume restored exactly 3 without a respawn or timeout.
+Stop during pause restored 3 and ended `muted=off`, `holding=0`, with no helper/FFmpeg process left.
+Next during pause cleanly retired Starburster and started Andor in one new helper/FFmpeg pair at raw
+3. The final Stop repeated the clean teardown, after which foobar was closed and the speaker was left
+idle at volume 3 / `muted=off` for its normal automatic standby. The acoustic response time of the
+routed pause was not separately timed; the old ~5 s / ~6 s figures describe the superseded PCM-only
+pause/resume path.
+
 ## The speaker's own radio, and reading it
 
 `GetApInfo` returns `ssid`, `mac`, `rssi`, `ch` and `connectiontype`, answers in 0.13 s and
@@ -405,6 +427,11 @@ to `mute=off` without any `SetMute` being sent. That makes the next URL track fo
 previous session was torn down badly, but it is **not** a teardown contract: another source or
 client can take the speaker without sending `SetUrlPlayback`, so pause still restores the mute
 state it found.
+
+A later PR #112 hardware run on 2026-08-28 ruled `SetMute` out as the PCM pause primitive. Beefweb
+pause set `muted=on` promptly, but the M5 then closed its HTTP pull and the helper ended with
+`WAMBRIDGE STOPPED`; a subsequent foobar Stop left the speaker at `muted=on`. `SetMute` is useful
+for standby/startup semantics, but it cannot preserve the live URL/PCM transport during pause.
 
 
 Two properties that matter when measuring this:
@@ -484,7 +511,9 @@ The helper now releases the speaker before it goes, over the persistent `55001` 
 already holds: `SetPlaybackControl pause` on the UIC API, the same command `stop_playback`
 uses on this path, without the mute that would hand the speaker back silent, and without
 `pwron`. It then reports `WAMBRIDGE STOPPED stop=<sent|rejected|unreachable|skipped>
-sleep=<off|Ns|skipped|unreachable|rejected> holding=<count>` once its own sockets are gone. `holding` counts every local
+[restore=<rejected|unreachable>] sleep=<off|Ns|skipped|unreachable|rejected> holding=<count>` once its
+own sockets are gone. `restore=` appears only when a pause-volume teardown restore still fails after
+one retry; a clean restore keeps the historical line shape. `holding` counts every local
 socket attached to the speaker, this helper's included — one it failed to close is a leak
 like any other, and hiding it would make the count's zero mean "nobody checked". What it
 skips is only its own sockets that are *already closing*: those linger in `FIN_WAIT` for a

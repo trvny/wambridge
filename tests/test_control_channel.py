@@ -137,6 +137,38 @@ class ControlChannelTests(unittest.TestCase):
             self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [3, 8])
 
+
+    def test_close_waits_for_in_flight_pause(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        def slow_pause(_paused: bool) -> None:
+            entered.set()
+            release.wait(timeout=2)
+            finished.set()
+
+        channel = ControlChannel(lambda _level: None, set_paused=slow_pause)
+        channel.start()
+        client = _connect(channel)
+        self.addCleanup(client.close)
+        client.sendall(b"pause\n")
+        self.assertTrue(entered.wait(timeout=2))
+
+        closed = threading.Event()
+
+        def close_channel() -> None:
+            channel.close()
+            closed.set()
+
+        closer = threading.Thread(target=close_channel)
+        closer.start()
+        self.addCleanup(lambda: closer.join(timeout=2))
+        self.assertFalse(closed.wait(timeout=0.1))
+        release.set()
+        self.assertTrue(finished.wait(timeout=2))
+        self.assertTrue(closed.wait(timeout=2))
+
     def test_close_is_safe_without_a_client(self) -> None:
         channel = ControlChannel(lambda _level: None)
         channel.start()

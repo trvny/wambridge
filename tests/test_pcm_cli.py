@@ -52,7 +52,7 @@ class FakePlaybackWatcher:
         self.failure_checks = 0
         self.offered: list[str] = []
         self.volumes: list[int] = []
-        self.pause_mutes: list[bool] = []
+        self.pause_volumes: list[bool] = []
         self.released = False
         self.sleep_timer_cancellations = 0
         self.sleep_after_stop = kwargs.get("sleep_after_stop", 0)
@@ -86,8 +86,8 @@ class FakePlaybackWatcher:
     def set_volume(self, level: int) -> None:
         self.volumes.append(level)
 
-    def set_pause_mute(self, paused: bool) -> None:
-        self.pause_mutes.append(paused)
+    def set_pause_volume(self, paused: bool) -> None:
+        self.pause_volumes.append(paused)
 
     def wait_for_start(self, *, timeout: float) -> None:
         self.waited = True
@@ -112,6 +112,7 @@ class FakeControlConnection:
         rejection_method: str = "SetPlaybackControl",
         failing: bool = False,
         mute_state: str = "off",
+        volume_state: int = 7,
     ) -> None:
         self._watcher = watcher
         self._rejection = rejection
@@ -121,6 +122,7 @@ class FakeControlConnection:
         self._rejection_method = rejection_method
         self._failing = failing
         self._mute_state = mute_state
+        self._volume_state = volume_state
         self.sent: list[tuple[str, list | None, bool]] = []
 
     def send(
@@ -141,12 +143,20 @@ class FakeControlConnection:
             result="ng" if answer else "ok",
             user_identifier=CLIENT_UUID,
             error_code="3" if answer else None,
-            values={"mute": self._mute_state} if method == "GetMute" else {},
+            values=(
+                {"mute": self._mute_state}
+                if method == "GetMute"
+                else {"volume": str(self._volume_state)}
+                if method == "GetVolume"
+                else {}
+            ),
         )
         self._watcher._response_events[method] = event
         self._watcher._results[method] = answer or ""
         if method == "SetMute" and answer is None and arguments:
             self._mute_state = str(arguments[0][1])
+        if method == "SetVolume" and answer is None and arguments:
+            self._volume_state = int(arguments[0][1])
 
 
 class PcmCliTests(TestCase):
@@ -636,6 +646,7 @@ class PcmCliTests(TestCase):
         failing: bool = False,
         stream_active: bool = True,
         mute_state: str = "off",
+        volume_state: int = 7,
     ) -> tuple[PlaybackWatcher, FakeControlConnection]:
         watcher = PlaybackWatcher(
             "10.0.0.118",
@@ -650,8 +661,10 @@ class PcmCliTests(TestCase):
             rejection_method=rejection_method,
             failing=failing,
             mute_state=mute_state,
+            volume_state=volume_state,
         )
         watcher._connection = connection
+        watcher._current_volume = volume_state
         # Default on, because every release test below describes a live session:
         # the speaker fetched the stream and this helper owns the playback.
         # `release()` skips an offer the speaker never took up, so a watcher that
@@ -660,73 +673,170 @@ class PcmCliTests(TestCase):
             watcher.mark_stream_active()
         return watcher, connection
 
-    def test_pause_mute_uses_the_existing_connection(self) -> None:
-        watcher, connection = self._connected_watcher(rejection_method="SetMute")
+    def test_pause_volume_uses_the_existing_connection(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=7)
 
-        watcher.set_pause_mute(True)
-        watcher.set_pause_mute(False)
+        watcher.set_pause_volume(True)
+        watcher.set_pause_volume(False)
 
         self.assertEqual(
             connection.sent,
             [
-                ("GetMute", None, False),
-                ("SetMute", [("mute", "on", "str")], True),
-                ("SetMute", [("mute", "off", "str")], True),
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 7, "dec")], True),
             ],
         )
 
-    def test_pause_mute_preserves_an_already_muted_speaker(self) -> None:
-        watcher, connection = self._connected_watcher(mute_state="on")
+    def test_external_volume_event_refreshes_pause_restore_target(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=12)
+        event = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "3"},
+        )
 
-        watcher.set_pause_mute(True)
-        watcher.set_pause_mute(False)
+        watcher._observe_volume_event(event, external=True)
+        watcher.set_pause_volume(True)
+        watcher.set_pause_volume(False)
 
-        self.assertEqual(connection.sent, [("GetMute", None, False)])
+        self.assertEqual(
+            connection.sent,
+            [
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 3, "dec")], True),
+            ],
+        )
+        self.assertEqual(watcher._current_volume, 3)
 
-    def test_release_restores_pause_mute_before_stopping(self) -> None:
-        watcher, connection = self._connected_watcher()
+    def test_unmatched_zero_event_during_pause_keeps_restore_target(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=3)
+        watcher.set_pause_volume(True)
+        event = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "0"},
+        )
+
+        watcher._observe_volume_event(event, external=True)
+        watcher.set_pause_volume(False)
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 3, "dec")], True),
+            ],
+        )
+
+    def test_external_volume_event_while_paused_updates_target_and_reapplies_zero(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=7)
+        watcher.set_pause_volume(True)
+        event = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "4"},
+        )
+
+        watcher._observe_volume_event(event, external=True)
+        watcher.set_pause_volume(False)
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 4, "dec")], True),
+            ],
+        )
+        self.assertEqual(watcher._current_volume, 4)
+
+    def test_pause_volume_preserves_an_already_zero_speaker(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=0)
+
+        watcher.set_pause_volume(True)
+        watcher.set_pause_volume(False)
+
+        self.assertEqual(connection.sent, [])
+
+    def test_slider_change_while_paused_updates_resume_target_only(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=7)
+
+        watcher.set_pause_volume(True)
+        watcher.set_volume(4)
+        watcher.set_pause_volume(False)
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 4, "dec")], True),
+            ],
+        )
+
+    def test_release_restores_pause_volume_before_stopping(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=7)
         watcher.arm()
 
-        watcher.set_pause_mute(True)
+        watcher.set_pause_volume(True)
         watcher.release()
 
         self.assertEqual(
             connection.sent,
             [
-                ("GetMute", None, False),
-                ("SetMute", [("mute", "on", "str")], True),
-                ("SetMute", [("mute", "off", "str")], True),
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 7, "dec")], True),
                 ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
             ],
         )
 
-    def test_release_preserves_a_speaker_that_was_already_muted(self) -> None:
-        watcher, connection = self._connected_watcher(mute_state="on")
+    def test_release_retries_and_reports_a_rejected_pause_restore(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=7)
+        watcher.arm()
+        watcher.set_pause_volume(True)
+        connection._rejection = "Speaker rejected SetVolume (error 3)"
+        connection._rejection_method = "SetVolume"
+
+        watcher.release()
+
+        restore = ("SetVolume", [("volume", 7, "dec")], True)
+        self.assertEqual(connection.sent.count(restore), 2)
+        self.assertEqual(watcher.release_summary, "stop=sent restore=rejected sleep=off")
+        self.assertEqual(watcher._pause_restore_volume, 7)
+
+    def test_release_preserves_a_speaker_that_was_already_at_zero(self) -> None:
+        watcher, connection = self._connected_watcher(volume_state=0)
         watcher.arm()
 
-        watcher.set_pause_mute(True)
+        watcher.set_pause_volume(True)
         watcher.release()
 
         self.assertEqual(
             connection.sent,
             [
-                ("GetMute", None, False),
                 ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
             ],
         )
 
     def test_resume_rejection_marks_the_helper_failed(self) -> None:
-        watcher, connection = self._connected_watcher()
-        watcher.set_pause_mute(True)
-        connection._rejection = "Speaker rejected SetMute (error 3)"
-        connection._rejection_method = "SetMute"
+        watcher, connection = self._connected_watcher(volume_state=7)
+        watcher.set_pause_volume(True)
+        connection._rejection = "Speaker rejected SetVolume (error 3)"
+        connection._rejection_method = "SetVolume"
 
-        with self.assertRaisesRegex(WamApiError, "rejected SetMute"):
-            watcher.set_pause_mute(False)
+        with self.assertRaisesRegex(WamApiError, "rejected SetVolume"):
+            watcher.set_pause_volume(False)
 
-        self.assertIn("Could not restore speaker mute after pause", watcher._error)
+        self.assertIn("Could not restore speaker volume after pause", watcher._error)
 
     def test_mute_status_matches_the_pending_set_mute(self) -> None:
+        # Kept as protocol regression: the M5 really replies MuteStatus to SetMute,
+        # even though pause no longer uses mute because it closes the HTTP pull.
         watcher, _connection = self._connected_watcher()
         watcher._pending.append("SetMute")
         event = WamEvent(
@@ -739,14 +849,15 @@ class PcmCliTests(TestCase):
 
         self.assertEqual(watcher._match_pending(event), "SetMute")
 
-    def test_pause_mute_surfaces_an_explicit_rejection(self) -> None:
+    def test_pause_volume_surfaces_an_explicit_rejection(self) -> None:
         watcher, _connection = self._connected_watcher(
-            rejection="Speaker rejected SetMute (error 3)",
-            rejection_method="SetMute",
+            rejection="Speaker rejected SetVolume (error 3)",
+            rejection_method="SetVolume",
+            volume_state=7,
         )
 
-        with self.assertRaisesRegex(WamApiError, "rejected SetMute"):
-            watcher.set_pause_mute(True)
+        with self.assertRaisesRegex(WamApiError, "rejected SetVolume"):
+            watcher.set_pause_volume(True)
 
     def test_release_stops_playback_over_the_connection_already_open(self) -> None:
         watcher, connection = self._connected_watcher()
