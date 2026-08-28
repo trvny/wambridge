@@ -296,6 +296,26 @@ class CursorTests(TestCase):
         methods = [call.args[1] for call in send.call_args_list]
         self.assertEqual(methods[2:], ["BrowseMain", "GetCurrentRadioList"])
 
+    def test_a_recovering_browse_root_is_retried_after_the_crossing(self) -> None:
+        # The read straight after BrowseMain is the first one aimed at the Browse
+        # root, so it can meet the transient empty answer like any other. Raising
+        # there would fail a healthy speaker on the one path that has just spent
+        # its settle time crossing out of the search tree.
+        with patch("wambridge.catalogue.request") as send, patch(
+            "wambridge.catalogue.time.sleep"
+        ):
+            send.side_effect = [
+                response("<CPM/>"),
+                response(EMPTY_SEARCH_BODY),
+                response("<CPM/>"),
+                response(EMPTY_ROOT_BODY),
+                response(ROOT_BODY),
+            ]
+            page = open_catalogue("10.0.0.104")
+
+        self.assertEqual(page.root, BROWSE_ROOT)
+        self.assertTrue(page.entries)
+
     def test_a_cursor_that_will_not_normalise_is_an_error(self) -> None:
         # Reporting the wrong level as the root would make every later call
         # describe somewhere else, so this fails instead.

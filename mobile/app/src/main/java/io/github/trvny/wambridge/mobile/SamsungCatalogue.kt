@@ -141,14 +141,25 @@ internal object SamsungCatalogue {
         return page
     }
 
-    /** Cross from the search tree back into the catalogue with `BrowseMain`. */
+    /**
+     * Cross from the search tree back into the catalogue with `BrowseMain`.
+     *
+     * The read after the crossing is retried like any other, because it is the
+     * first one aimed at the Browse root and can meet the transient empty answer
+     * a recovering CPM gives. Raising on that would make a healthy speaker look
+     * broken for the one path that has just spent its settle time crossing.
+     */
     private fun leaveForeignRoot(context: Context, speakerIp: String, page: Page): Page {
         val was = page.root
         cpm(context, speakerIp, "BrowseMain", paged(0))
-        Thread.sleep(SETTLE_MS)
-        val crossed = parsePage(
-            cpm(context, speakerIp, "GetCurrentRadioList", paged(0)),
-        )
+        var crossed = Page()
+        for (attempt in 0 until OPEN_ATTEMPTS) {
+            Thread.sleep(SETTLE_MS)
+            crossed = parsePage(
+                cpm(context, speakerIp, "GetCurrentRadioList", paged(0)),
+            )
+            if (crossed.entries.isNotEmpty() || crossed.root != BROWSE_ROOT) break
+        }
         if (crossed.root != BROWSE_ROOT) {
             throw IOException(
                 "The speaker's radio cursor is in the $was tree and BrowseMain did not " +

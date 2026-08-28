@@ -369,6 +369,7 @@ def open_catalogue(
             timeout=timeout,
             list_count=list_count,
             settle=settle,
+            attempts=attempts,
         )
     if not page.entries:
         raise WamApiError(
@@ -391,8 +392,15 @@ def _leave_foreign_root(
     timeout: float,
     list_count: int,
     settle: float,
+    attempts: int,
 ) -> RadioPage:
-    """Cross from the search tree back into the catalogue with ``BrowseMain``."""
+    """Cross from the search tree back into the catalogue with ``BrowseMain``.
+
+    The read after the crossing is retried like any other, because it is the
+    first one aimed at the Browse root and can meet the transient empty answer a
+    recovering CPM gives. Raising on that would make a healthy speaker look
+    broken for the one path that has just spent its settle time crossing.
+    """
     was = page.root
     _cpm(
         speaker_ip,
@@ -401,16 +409,19 @@ def _leave_foreign_root(
         port=port,
         timeout=timeout,
     )
-    time.sleep(settle)
-    page = parse_radio_page(
-        _cpm(
-            speaker_ip,
-            "GetCurrentRadioList",
-            _paged(0, list_count),
-            port=port,
-            timeout=timeout,
+    for attempt in range(attempts):
+        time.sleep(settle)
+        page = parse_radio_page(
+            _cpm(
+                speaker_ip,
+                "GetCurrentRadioList",
+                _paged(0, list_count),
+                port=port,
+                timeout=timeout,
+            )
         )
-    )
+        if page.entries or page.root != BROWSE_ROOT:
+            break
     if page.root != BROWSE_ROOT:
         raise WamApiError(
             f"The speaker's radio cursor is in the {was} tree and BrowseMain "
