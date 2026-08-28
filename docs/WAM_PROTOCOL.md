@@ -781,12 +781,28 @@ answers `Content-Type: audio/x-mpegurl` with a one-line playlist - for `s15984` 
 `http://stream3.polskieradio.pl:8954/` - and `SetUrlPlayback` on the URL exactly as
 `GetStationData` returns it is refused with `ErrorEvent` `ng`.
 
-Resolving that playlist on the client is the first half of the answer. The second half is not
-established. Handed the resolved stream URL instead, the speaker answered **nothing at all** -
-no `StartPlaybackEvent`, no `ErrorEvent` over 25 s on the persistent connection, and no HTTP
-response to the one-shot form of the same command, which had answered the rejection above
-readily enough. The speaker was in `submode=cp` throughout, but that is normal for URL playback
-and not a fault in itself, so it explains nothing here. What silences the command is open.
+Resolving that playlist on the client is the first half of the answer. Handed the resolved
+stream URL instead, the speaker answered **nothing at all** - no `StartPlaybackEvent`, no
+`ErrorEvent` over 25 s on the persistent connection, and no HTTP response to the one-shot form
+of the same command, which had answered the rejection above readily enough.
+
+**That silence was the speaker wedged, and this section called it unexplained for a day.**
+Settled the next morning, 2026-08-28. What gave it away was the same silence appearing on the
+ordinary relay path, which had worked for weeks: the fault was not in what was being sent but
+in the speaker's state. In that state `SetUrlPlayback` **and** `SetStopPlayback` hang for their
+full timeout with no reply, while `GetFunc`, `GetPlayStatus`, `GetVolume` and `SetVolume` all
+answer in 0.1 s and ping stays at 2-3 ms. A power cycle clears it instantly - replies came back
+in 0.3 s afterwards - and nothing short of one does, because the commands that would recover it
+are precisely the ones not answering.
+
+**What wedges it is a `SetUrlPlayback` aimed at a URL the speaker cannot pull.** That is wider
+than the HLS case `tunein.py` already warns about; a plain HTTP URL on a dead port does it too.
+The command is accepted and answers normally, and the speaker jams a moment later, which is why
+a probe built out of one is a trap rather than a diagnostic: use `SetStopPlayback` to test
+instead, since it is idempotent on a stopped speaker and times out the same way when wedged.
+
+`submode=cp` never had anything to do with it: cp is normal for URL playback, as documented
+above.
 
 Until it is answered, the way to play a browsed station is the one this project already uses for
 every other radio: resolve the id and relay the stream from the client, rather than pointing the

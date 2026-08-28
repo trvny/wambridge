@@ -449,9 +449,12 @@ operating system records.
     audio does not work the way `WAM_PROTOCOL.md` said it did: the `stationurl` from
     `GetStationData` is a `Tune.ashx` playlist, not a stream, and `SetUrlPlayback` refuses it with
     `ErrorEvent` `ng`. Resolving the playlist client-side is half of it; the resolved URL then
-    drew no answer of any kind, which is not explained yet. So a browsed station should reach the
-    speaker the way every other radio here does - resolved, then relayed from the client. The
-    protocol file carries the measurements under `GetStationData`.
+    drew no answer of any kind, which read as a second protocol puzzle at the time and was not
+    one - the speaker was wedged, see `GetStationData` in the protocol file. So a browsed station
+    should reach the speaker the way every other radio here does - resolved, then relayed from
+    the client. Confirmed end to end on the physical M5, 2026-08-28, on a station taken straight
+    out of the speaker's own listing: `SetUrlPlayback` accepted, and the speaker held a
+    connection back to the relay port while it played.
 
     The concrete want behind this is the **physical Radio button**, which cycles the three
     presets of kind `speaker` - today `PR3 Trójka`, `Czwórka` and `BBC Radio 1`. They are
@@ -543,6 +546,35 @@ operating system records.
     65 534 addresses. `discover` now returns the coverage alongside the speakers
     (`Scan.Full` / `Narrowed` / `NoAddresses` / `NotRun`), and only a full sweep is allowed to
     say "not found".
+
+16. **Get the speaker out of the three states it can be abandoned in.** All three come from
+    the same asymmetry: on the relayed path the speaker holds a session that only this side
+    can end, so anything that kills this side without a `stop` strands it. Nothing here is
+    hypothetical - two were measured, the third is documented above.
+
+    - *The source vanished mid-stream.* A PC that loses power, a helper killed outright.
+      The speaker falls silent, keeps the session, and **never idles** - the standby
+      countdown only starts once every program has let go (`WAM_PROTOCOL.md`, measured
+      2026-08-16: 33 minutes still lit after a session that sent no release, against 17
+      minutes to dark after one that did). Recovery is one command, `emergency-stop` or
+      `standby`; nothing sends it today because the side that would is gone.
+    - *The phone walked out of Wi-Fi.* Same end state, plus a second wrong one: nothing in
+      `RadioService` watches for the network going away, so the foreground notification goes
+      on claiming playback that stopped minutes ago, and coming back into range recovers
+      neither side. The service should notice and say so - and, once back, either resume or
+      release the speaker rather than leaving both halves lying.
+    - *The playback path wedged.* Measured 2026-08-28: after a `SetUrlPlayback` aimed at a
+      URL the speaker cannot pull, `SetUrlPlayback` and `SetStopPlayback` stop answering
+      entirely - the full timeout, no reply - while `GetFunc`, `GetVolume` and `SetVolume`
+      keep answering in 0.1 s. **Only a power cycle clears this one**, so the commands that
+      would recover the first two states are exactly the ones unavailable here. Worth a
+      cheap guard on the way in: refuse to hand the speaker a URL that has not been shown
+      to be fetchable.
+
+    Presets are the counter-example that shows what "abandoned" is really about: they play
+    from the speaker's own connection to the internet, so none of this applies to them.
+    Verified 2026-08-28 - a preset kept playing with no established TCP connection between
+    this machine and the speaker at all.
 
 ## What the 7-8 s speaker figure was
 
