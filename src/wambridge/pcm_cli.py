@@ -300,6 +300,12 @@ class PlaybackWatcher:
         # a GetVolume round trip without restoring stale state.
         self._current_volume: int | None = None
         self._pause_restore_volume: int | None = None
+        # Keep logical routed-pause state separate from the restore target. A
+        # rejected SetVolume(0) is ambiguous on this firmware because replies
+        # have no request IDs: the target may still be needed to unstick raw 0
+        # even after we fall back to paced PCM silence.
+        self._pause_volume_active = False
+        self._pause_rezero_pending = False
         # One SetVolume can be awaiting a VolumeLevel response at a time. Keep
         # its requested level so an unsolicited physical/client change is not
         # mistaken for that response merely because Samsung uses the same event.
@@ -500,14 +506,18 @@ class PlaybackWatcher:
 
     def set_volume(self, level: int) -> None:
         """Set speaker volume without opening a competing control socket."""
-        with self._volume_lock:
-            if self._pause_restore_volume is not None:
-                # A slider move while paused changes what resume should restore,
-                # not the speaker's current zero. PCM keeps flowing as silence.
-                self._pause_restore_volume = level
-                return
         with self._volume_write_lock:
             with self._volume_lock:
+                if self._pause_volume_active:
+                    # A slider move while routed pause is active changes what
+                    # resume should restore, not the speaker's current zero.
+                    self._pause_restore_volume = level
+                    return
+                if self._pause_restore_volume is not None:
+                    # An earlier pause write may have been rejected ambiguously.
+                    # Keep the newest desired level as the safety restore target,
+                    # but do not swallow the slider while paced PCM is fallback.
+                    self._pause_restore_volume = level
                 # Publish the optimistic level before sending. The listener can
                 # receive an immediate rejection while `send()` is still on this
                 # thread; a post-send assignment would overwrite its invalidation.
@@ -523,32 +533,51 @@ class PlaybackWatcher:
     def set_pause_volume(self, paused: bool) -> None:
         """Silence pause with raw volume 0 while preserving the live HTTP stream."""
         if paused:
-            with self._volume_lock:
-                if self._pause_restore_volume is not None:
-                    return
-                previous = self._current_volume
-                if previous is None:
-                    # The control channel is announced only after startup has
-                    # sent its volume, so this is defensive rather than normal.
-                    raise WamApiError("Speaker volume is unknown at pause")
-                self._pause_restore_volume = previous
-            if previous == 0:
-                return
-            # Physical M5, 2026-08-28: 3 -> 0 -> 3 kept the exact same HTTP
-            # request, helper PID, FFmpeg PID and advancing CLOCK. SetMute did
-            # the opposite and closed the speaker's HTTP pull.
-            try:
-                with self._volume_write_lock:
-                    self._set_volume_and_wait(0)
-                    with self._volume_lock:
-                        self._current_volume = 0
-            except (StreamError, WamApiError):
-                # The routed pause did not take. Clear the saved pause state so
-                # foobar can keep using paced PCM silence and later slider/pause
-                # commands are not mistaken for operations inside a live pause.
+            with self._volume_write_lock:
                 with self._volume_lock:
-                    self._pause_restore_volume = None
-                raise
+                    if self._pause_volume_active:
+                        return
+                    if self._pause_restore_volume is not None:
+                        # A previous ambiguous pause failure still carries a
+                        # restore debt. The component is already using paced PCM
+                        # fallback, so do not stack another indistinguishable 0.
+                        return
+                    previous = self._current_volume
+                    if previous is None:
+                        # The control channel is announced only after startup has
+                        # sent its volume, so this is defensive rather than normal.
+                        raise WamApiError("Speaker volume is unknown at pause")
+                    self._pause_restore_volume = previous
+                    self._pause_volume_active = True
+                    self._pause_rezero_pending = False
+                    if previous != 0:
+                        # Optimistic raw 0 is published before sending so an
+                        # immediate rejection can invalidate it without being
+                        # overwritten after send returns.
+                        self._current_volume = 0
+                if previous == 0:
+                    return
+                # Physical M5, 2026-08-28: 3 -> 0 -> 3 kept the exact same HTTP
+                # request, helper PID, FFmpeg PID and advancing CLOCK. SetMute did
+                # the opposite and closed the speaker's HTTP pull.
+                try:
+                    self._set_volume_and_wait(0)
+                    # A physical/client change can arrive during the one-second
+                    # pause response budget while this thread owns the write lane.
+                    # The listener records that as deferred work; flush it before
+                    # releasing the lane so buffered audio cannot leak.
+                    self._reapply_pause_zero_locked(required=False)
+                except (StreamError, WamApiError):
+                    with self._volume_lock:
+                        # The rejection may belong to an older superseded slider
+                        # because Samsung gives SetVolume no request ID. Fall back
+                        # to paced PCM, but retain the restore target so resume or
+                        # teardown can still recover if raw 0 actually took.
+                        self._pause_volume_active = False
+                        self._pause_rezero_pending = False
+                        if self._current_volume == 0:
+                            self._current_volume = None
+                    raise
             return
 
         try:
@@ -581,13 +610,47 @@ class PlaybackWatcher:
         with self._volume_write_lock:
             with self._volume_lock:
                 previous = self._pause_restore_volume
-            if previous is None:
-                return
+                self._pause_volume_active = False
+                self._pause_rezero_pending = False
+                if previous is None:
+                    return
+                if previous != 0:
+                    # Publish the restore optimistically before sending. Any
+                    # later VolumeLevel event, including a physical/client change
+                    # during the response wait, remains authoritative and must not
+                    # be overwritten when the wait finishes.
+                    self._current_volume = previous
             if previous != 0:
                 self._set_volume_and_wait(previous)
             with self._volume_lock:
-                self._current_volume = previous
                 self._pause_restore_volume = None
+
+    def _reapply_pause_zero_locked(self, *, required: bool) -> None:
+        """Send deferred raw-0 writes while the caller owns the write lane."""
+        while True:
+            with self._volume_lock:
+                if not self._pause_volume_active:
+                    self._pause_rezero_pending = False
+                    return
+                if not required and not self._pause_rezero_pending:
+                    return
+                required = False
+                self._pause_rezero_pending = False
+                self._current_volume = 0
+            try:
+                # This compensating write must not block the listener thread on a
+                # firmware response. A later matched rejection is tagged and makes
+                # the helper fail rather than leaving queued audio audible.
+                self._send_volume_state(0, pause_rezero=True)
+            except (StreamError, WamApiError) as error:
+                with self._volume_lock:
+                    self._current_volume = None
+                self._error = f"Could not reapply pause volume: {error}"
+                LOGGER.warning("%s", self._error)
+                return
+            # If another external level arrived while send() held this same lane,
+            # _observe_volume_event marked another deferred re-zero. Loop only for
+            # work actually observed; normal operation exits after one send.
 
     @staticmethod
     def _event_volume_level(event: WamEvent) -> int | None:
@@ -614,36 +677,29 @@ class PlaybackWatcher:
         reapply_zero = False
         with self._volume_lock:
             self._current_volume = level
-            # Non-zero speaker changes while paused become the target for resume.
-            # Raw 0 is our pause primitive and may arrive as either a matched
-            # response or an unmatched broadcast, so it must never erase the
-            # saved target merely because the firmware changed event shape.
+            # Non-zero speaker changes while a restore target exists become the
+            # newest target. This also covers the ambiguous-pause fallback state:
+            # resume/teardown should preserve a later physical/client choice even
+            # though routed pause itself is no longer considered active.
             if self._pause_restore_volume is not None and level != 0:
                 self._pause_restore_volume = level
-                reapply_zero = external
-        if reapply_zero:
-            # A physical button/second client temporarily made the speaker audible
-            # while foobar is still paused. Preserve that level for resume, but
-            # immediately put the live URL/PCM session back at raw 0. This runs on
-            # the listener thread, so it must never wait behind a restore: if
-            # resume/teardown already owns the write lane, that newer operation wins
-            # and this now-stale re-zero is cancelled.
-            if not self._volume_write_lock.acquire(blocking=False):
-                return
-            try:
-                with self._volume_lock:
-                    if self._pause_restore_volume is None:
-                        return
-                try:
-                    self._send_volume_state(0, pause_rezero=True)
-                except (StreamError, WamApiError) as error:
-                    self._error = f"Could not reapply pause volume: {error}"
-                    LOGGER.warning("%s", self._error)
-                    return
-                with self._volume_lock:
-                    self._current_volume = 0
-            finally:
-                self._volume_write_lock.release()
+                reapply_zero = self._pause_volume_active and external
+        if not reapply_zero:
+            return
+
+        # A physical button/second client temporarily made the speaker audible
+        # while routed pause is still active. Preserve that level for resume, but
+        # immediately put the live URL/PCM session back at raw 0. If initial pause
+        # still owns the write lane, defer instead of dropping this compensation.
+        if not self._volume_write_lock.acquire(blocking=False):
+            with self._volume_lock:
+                if self._pause_volume_active:
+                    self._pause_rezero_pending = True
+            return
+        try:
+            self._reapply_pause_zero_locked(required=True)
+        finally:
+            self._volume_write_lock.release()
 
     def _restore_pause_volume_quietly(self) -> str | None:
         for attempt in range(2):

@@ -6,13 +6,15 @@ from wambridge.samsung import WamApiError
 from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent
 
-
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
 
 
 class SilentControlConnection:
-    def send(self, **_kwargs) -> None:
-        pass
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    def send(self, **kwargs) -> None:
+        self.sent.append(kwargs)
 
 
 
@@ -161,7 +163,7 @@ class RejectedVolumeCacheTests(TestCase):
         self.assertEqual(watcher._pending, ["SetVolume"])
         self.assertEqual(watcher._pending_volume_level, 0)
 
-    def test_initial_pause_rejection_clears_pause_state_without_async_failure(self) -> None:
+    def test_initial_pause_rejection_keeps_restore_debt_without_async_failure(self) -> None:
         watcher = self._watcher(volume=7)
         watcher._connection = ImmediateRejectingControlConnection(watcher)
 
@@ -169,15 +171,83 @@ class RejectedVolumeCacheTests(TestCase):
             watcher.set_pause_volume(True)
 
         self.assertEqual(watcher._error, "")
-        self.assertIsNone(watcher._pause_restore_volume)
+        self.assertFalse(watcher._pause_volume_active)
+        self.assertEqual(watcher._pause_restore_volume, 7)
         watcher.raise_if_failed()
 
-        # The routed pause failed, so a later slider write must go to the speaker
-        # instead of being swallowed as a paused-session restore target.
-        watcher._connection = SilentControlConnection()
+        # The reply may have belonged to an older superseded slider, so keep a
+        # safety restore target. Routed pause itself is inactive, however: a later
+        # slider must still reach the speaker and become the newest restore target.
+        connection = SilentControlConnection()
+        watcher._connection = connection
         watcher.set_volume(12)
         self.assertEqual(watcher._current_volume, 12)
+        self.assertEqual(watcher._pause_restore_volume, 12)
         self.assertEqual(watcher._pending, ["SetVolume"])
+
+        watcher.set_pause_volume(False)
+        sent_levels = [
+            call["arguments"][0][1]
+            for call in connection.sent
+            if call.get("method") == "SetVolume"
+        ]
+        self.assertEqual(sent_levels, [12, 12])
+        self.assertIsNone(watcher._pause_restore_volume)
+
+    def test_external_change_during_initial_pause_wait_is_rezeroed_before_unlock(self) -> None:
+        watcher = self._watcher(volume=7)
+        connection = watcher._connection
+        self.assertIsInstance(connection, SilentControlConnection)
+        external = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "4"},
+        )
+
+        def observe_during_wait(_method: str, *, timeout: float) -> None:
+            self.assertGreater(timeout, 0)
+            watcher._observe_volume_event(external, external=True)
+            self.assertTrue(watcher._pause_rezero_pending)
+            return None
+
+        with patch.object(watcher, "wait_for_response", side_effect=observe_during_wait):
+            watcher.set_pause_volume(True)
+
+        sent_levels = [
+            call["arguments"][0][1]
+            for call in connection.sent
+            if call.get("method") == "SetVolume"
+        ]
+        self.assertEqual(sent_levels, [0, 0])
+        self.assertEqual(watcher._pause_restore_volume, 4)
+        self.assertEqual(watcher._current_volume, 0)
+        self.assertFalse(watcher._pause_rezero_pending)
+
+    def test_external_change_during_restore_is_not_overwritten_after_wait(self) -> None:
+        watcher = self._watcher(volume=7)
+        with patch("wambridge.pcm_cli._PAUSE_ACK_TIMEOUT", 0.01):
+            watcher.set_pause_volume(True)
+        external = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "4"},
+        )
+
+        def observe_during_restore(_method: str, *, timeout: float) -> None:
+            self.assertGreater(timeout, 0)
+            watcher._observe_volume_event(external, external=True)
+            return None
+
+        with patch.object(watcher, "wait_for_response", side_effect=observe_during_restore):
+            watcher.set_pause_volume(False)
+
+        self.assertFalse(watcher._pause_volume_active)
+        self.assertIsNone(watcher._pause_restore_volume)
+        self.assertEqual(watcher._current_volume, 4)
 
     def test_external_rezero_is_cancelled_when_restore_owns_write_lane(self) -> None:
         watcher = self._watcher(volume=7)
