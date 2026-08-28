@@ -296,6 +296,10 @@ class PlaybackWatcher:
         # a GetVolume round trip without restoring stale state.
         self._current_volume: int | None = None
         self._pause_restore_volume: int | None = None
+        # One SetVolume can be awaiting a VolumeLevel response at a time. Keep
+        # its requested level so an unsolicited physical/client change is not
+        # mistaken for that response merely because Samsung uses the same event.
+        self._pending_volume_level: int | None = None
 
     def __enter__(self) -> PlaybackWatcher:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -496,9 +500,17 @@ class PlaybackWatcher:
                 # not the speaker's current zero. PCM keeps flowing as silence.
                 self._pause_restore_volume = level
                 return
-        self._send_volume_state(level)
-        with self._volume_lock:
+            # Publish the optimistic level before sending. The listener can receive
+            # an immediate rejection while `send()` is still on this thread; a
+            # post-send assignment would otherwise overwrite its invalidation.
             self._current_volume = level
+        try:
+            self._send_volume_state(level)
+        except (StreamError, WamApiError):
+            with self._volume_lock:
+                if self._current_volume == level:
+                    self._current_volume = None
+            raise
 
     def set_pause_volume(self, paused: bool) -> None:
         """Silence pause with raw volume 0 while preserving the live HTTP stream."""
@@ -535,6 +547,7 @@ class PlaybackWatcher:
             method=_VOLUME_COMMAND,
             arguments=[("volume", level, "dec")],
             power_on=True,
+            requested_volume=level,
         )
 
     def _set_volume_and_wait(self, level: int) -> None:
@@ -557,21 +570,26 @@ class PlaybackWatcher:
             self._current_volume = previous
             self._pause_restore_volume = None
 
-    def _observe_volume_event(self, event: WamEvent, *, external: bool) -> None:
-        """Refresh cached raw volume from a VolumeLevel speaker event."""
+    @staticmethod
+    def _event_volume_level(event: WamEvent) -> int | None:
+        """Return a valid raw level carried by a SetVolume/VolumeLevel event."""
         if not event.method or not methods_agree(_VOLUME_COMMAND, event.method):
-            return
-        level: int | None = None
+            return None
         for key, value in event.values.items():
             if key.casefold() not in {"volume", "volumelevel", "volume_level"}:
                 continue
             try:
                 candidate = int(value)
             except (TypeError, ValueError):
-                return
+                return None
             if RAW_MIN_VOLUME <= candidate <= RAW_MAX_VOLUME:
-                level = candidate
-            break
+                return candidate
+            return None
+        return None
+
+    def _observe_volume_event(self, event: WamEvent, *, external: bool) -> None:
+        """Refresh cached raw volume from a VolumeLevel speaker event."""
+        level = self._event_volume_level(event)
         if level is None:
             return
         reapply_zero = False
@@ -663,6 +681,8 @@ class PlaybackWatcher:
         """Stop treating an unanswered command as a future response target."""
         with self._response_lock:
             self._pending[:] = [pending for pending in self._pending if pending != method]
+            if method == _VOLUME_COMMAND:
+                self._pending_volume_level = None
 
     def _send_command(
         self,
@@ -670,6 +690,7 @@ class PlaybackWatcher:
         method: str,
         arguments: list[tuple[str, str | int, str]] | None = None,
         power_on: bool = False,
+        requested_volume: int | None = None,
     ) -> None:
         with self._connection_lock:
             connection = self._connection
@@ -685,6 +706,7 @@ class PlaybackWatcher:
                 self._pending[:] = [
                     pending for pending in self._pending if pending != method
                 ]
+                self._pending_volume_level = requested_volume
             self._pending.append(method)
         try:
             connection.send(
@@ -708,11 +730,27 @@ class PlaybackWatcher:
         """
         if not event.method or event.result is None:
             return None
+        event_volume = self._event_volume_level(event)
         with self._response_lock:
             for index, command in enumerate(self._pending):
-                if methods_agree(command, event.method):
-                    del self._pending[index]
-                    return command
+                if not methods_agree(command, event.method):
+                    continue
+                if (
+                    command == _VOLUME_COMMAND
+                    and (event.result or "").casefold() == "ok"
+                    and event_volume is not None
+                    and self._pending_volume_level is not None
+                    and event_volume != self._pending_volume_level
+                ):
+                    # Samsung uses VolumeLevel for both SetVolume replies and
+                    # unsolicited physical/client changes. A different explicit
+                    # level cannot acknowledge our request, so leave the setter
+                    # pending and let the caller classify this event as external.
+                    continue
+                del self._pending[index]
+                if command == _VOLUME_COMMAND:
+                    self._pending_volume_level = None
+                return command
         return None
 
     def _record_response(self, command: str, event: WamEvent) -> None:

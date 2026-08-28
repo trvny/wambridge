@@ -15,6 +15,25 @@ class SilentControlConnection:
         pass
 
 
+
+
+class ImmediateRejectingControlConnection:
+    def __init__(self, watcher: PlaybackWatcher) -> None:
+        self._watcher = watcher
+
+    def send(self, *, method: str, **_kwargs) -> None:
+        event = WamEvent(
+            method=method,
+            result="ng",
+            user_identifier=CLIENT_UUID,
+            error_code="3",
+            values={},
+        )
+        command = self._watcher._match_pending(event)
+        if command is not None:
+            self._watcher._record_response(command, event)
+
+
 class RejectedVolumeCacheTests(TestCase):
     def _watcher(self, volume: int = 3) -> PlaybackWatcher:
         watcher = PlaybackWatcher("10.0.0.118", CLIENT_UUID, port=55001)
@@ -101,3 +120,43 @@ class RejectedVolumeCacheTests(TestCase):
 
         with self.assertRaisesRegex(StreamError, "Could not keep speaker paused"):
             watcher.raise_if_failed()
+
+    def test_fast_rejection_cannot_be_overwritten_by_optimistic_cache(self) -> None:
+        watcher = self._watcher()
+        watcher._connection = ImmediateRejectingControlConnection(watcher)
+
+        watcher.set_volume(12)
+
+        self.assertIsNone(watcher._current_volume)
+
+    def test_mismatched_volume_event_stays_external_while_zero_is_pending(self) -> None:
+        watcher = self._watcher(volume=7)
+        with patch("wambridge.pcm_cli._PAUSE_ACK_TIMEOUT", 0.01):
+            watcher.set_pause_volume(True)
+
+        first_external = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "4"},
+        )
+        watcher._observe_volume_event(first_external, external=True)
+        self.assertEqual(watcher._pending_volume_level, 0)
+
+        second_external = WamEvent(
+            method="VolumeLevel",
+            result="ok",
+            user_identifier=CLIENT_UUID,
+            error_code=None,
+            values={"volume": "5"},
+        )
+        command = watcher._match_pending(second_external)
+        self.assertIsNone(command)
+
+        watcher._observe_volume_event(second_external, external=True)
+
+        self.assertEqual(watcher._pause_restore_volume, 5)
+        self.assertEqual(watcher._current_volume, 0)
+        self.assertEqual(watcher._pending, ["SetVolume"])
+        self.assertEqual(watcher._pending_volume_level, 0)
