@@ -403,10 +403,24 @@ operating system records.
     already saved (`GetUpperRadioList`, `GetCurrentRadioList`, `SetSelectRadio`,
     `GetGenreStations`, `SearchQuery`). A dockable panel still waits on output transport.
 
-    Order agreed for the mobile side, largest gain first: read-only browsing
+    Order agreed for the mobile side, largest gain first: ~~read-only browsing
     (`GetUpperRadioList`, `GetCurrentRadioList`), then search, then a browsing UI once the
-    structure is understood, and only then writing or removing presets. That is a bigger step
+    structure is understood~~, and only then writing or removing presets. That is a bigger step
     than further cosmetic work on the renderer.
+
+    **The read-only three-quarters of that order are done and hardware-validated 2026-08-28.**
+    `CatalogueActivity`, reached from `MainActivity`, walks the tree, pages through long lists
+    and searches, and plays a station through the relay. Driven on the physical M5 over adb:
+    root `Browse — 12 of 12`, `Local Radio — 30 of 90` needing **two** *Load more* taps before
+    the button went away, a search followed by *Up* landing back on the root rather than
+    stranding in the search tree, and audible playback from `Favorites 12 of 12`. That last
+    step is also a third independent confirmation that the relayed path reports
+    `play_status=stop` with an empty `title` while audio is really flowing.
+
+    **What remains under this item is the write side only**: `SetSavePreset`,
+    `SetRemovePreset` and `SetMovePreset`, none of them yet tried on hardware, so a station
+    found by browsing still cannot be kept. That is the same write-side probing as item 14,
+    and the browsing screen is the natural place to call it from.
 
     ~~**Open, small, and asked for while testing on 2026-08-19: the mobile radio screen has no
     stop button.**~~ **Wired up 2026-08-19 and refined from the 2026-08-20 measurements.**
@@ -546,7 +560,14 @@ operating system records.
     the phone only, and a stranger refused before the path is looked at, so an unknown path
     cannot be used to map the surface.
 
-    Left open here: the richer TuneIn catalogue/search UI from item 12.
+    ~~Left open here: the richer TuneIn catalogue/search UI from item 12.~~ **Shipped
+    2026-08-28** — see item 12 for what the screen does and what it was measured doing. The
+    first run on a phone also found a bug no unit test could: `parseXml` asked for
+    `disallow-doctype-decl` outside its `try`, Android's `DocumentBuilderFactory` does not
+    implement it, and the resulting `ParserConfigurationException` message was what the screen
+    displayed instead of a catalogue. The desktop JVM implements it, so 53 green tests over the
+    same parser said nothing. Hardening features are now requested one at a time and a refusal
+    is tolerated (PR #121).
 
     The LAN-scan half is done. It never went quiet, which is what this item used to claim: past
     `MAX_SCAN_HOSTS` (1024 usable, so anything wider than a /22) `subnetPlan` narrows to the /24
