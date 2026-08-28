@@ -537,10 +537,18 @@ class PlaybackWatcher:
             # Physical M5, 2026-08-28: 3 -> 0 -> 3 kept the exact same HTTP
             # request, helper PID, FFmpeg PID and advancing CLOCK. SetMute did
             # the opposite and closed the speaker's HTTP pull.
-            with self._volume_write_lock:
-                self._set_volume_and_wait(0)
+            try:
+                with self._volume_write_lock:
+                    self._set_volume_and_wait(0)
+                    with self._volume_lock:
+                        self._current_volume = 0
+            except (StreamError, WamApiError):
+                # The routed pause did not take. Clear the saved pause state so
+                # foobar can keep using paced PCM silence and later slider/pause
+                # commands are not mistaken for operations inside a live pause.
                 with self._volume_lock:
-                    self._current_volume = 0
+                    self._pause_restore_volume = None
+                raise
             return
 
         try:

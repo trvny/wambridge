@@ -161,7 +161,7 @@ class RejectedVolumeCacheTests(TestCase):
         self.assertEqual(watcher._pending, ["SetVolume"])
         self.assertEqual(watcher._pending_volume_level, 0)
 
-    def test_initial_pause_rejection_is_not_an_async_helper_failure(self) -> None:
+    def test_initial_pause_rejection_clears_pause_state_without_async_failure(self) -> None:
         watcher = self._watcher(volume=7)
         watcher._connection = ImmediateRejectingControlConnection(watcher)
 
@@ -169,7 +169,15 @@ class RejectedVolumeCacheTests(TestCase):
             watcher.set_pause_volume(True)
 
         self.assertEqual(watcher._error, "")
+        self.assertIsNone(watcher._pause_restore_volume)
         watcher.raise_if_failed()
+
+        # The routed pause failed, so a later slider write must go to the speaker
+        # instead of being swallowed as a paused-session restore target.
+        watcher._connection = SilentControlConnection()
+        watcher.set_volume(12)
+        self.assertEqual(watcher._current_volume, 12)
+        self.assertEqual(watcher._pending, ["SetVolume"])
 
     def test_external_rezero_is_cancelled_when_restore_owns_write_lane(self) -> None:
         watcher = self._watcher(volume=7)
