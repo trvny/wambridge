@@ -34,8 +34,8 @@ jobs:
         run: |
           from pathlib import Path
 
-          path = Path("foobar/foo_out_wam.cpp")
-          text = path.read_text(encoding="utf-8")
+          cpp = Path("foobar/foo_out_wam.cpp")
+          text = cpp.read_text(encoding="utf-8")
           symbol = "std::optional<bool> send_sleep_timer_over_helper(int seconds)"
           if symbol not in text:
               marker = "bool send_release_over_helper() {"
@@ -49,7 +49,23 @@ jobs:
 
           '''
               text = text.replace(marker, block + marker, 1)
-              path.write_text(text, encoding="utf-8")
+              cpp.write_text(text, encoding="utf-8")
+
+          header = Path("foobar/wam_control.h")
+          text = header.read_text(encoding="utf-8")
+          declaration = "std::optional<bool> send_sleep_timer_over_helper(int seconds);"
+          if declaration not in text:
+              marker = "bool send_pause_over_helper(bool paused);\n"
+              if marker not in text:
+                  raise SystemExit("pause helper declaration insertion point is missing")
+              block = '''
+          // Arm or cancel the M5 sleep timer over the active helper. nullopt means there
+          // is no helper, true means the helper accepted the request, false means its
+          // local control channel rejected or lost the request.
+          std::optional<bool> send_sleep_timer_over_helper(int seconds);
+          '''
+              text = text.replace(marker, marker + block, 1)
+              header.write_text(text, encoding="utf-8")
       - name: Assert both control paths survived
         shell: bash
         run: |
