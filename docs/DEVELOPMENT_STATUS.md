@@ -352,34 +352,45 @@ operating system records.
    says `Stop & mute`, which is exactly what the existing action does: it stops playback and
    mutes the speaker without claiming to enter network standby. The legacy helper action name
    remains `standby` for compatibility. A real on-demand sleep control stays separate as item 7.
-7. ~~**Offer the sleep timer as a menu command, not only as an automatic fallback.**~~
-   **Done and measured on the physical M5 2026-08-29, PR #128.** `Start sleep timer` reuses
-   `sleep_after_stop` as its delay and `Cancel sleep timer` sends zero. During PCM playback the
-   commands ride the active helper instead of opening a competing `55001` socket. A 30 s test
-   was armed while PCM was playing, followed by `Next` with 9 s remaining: the replacement
-   helper kept the same absolute deadline, started with `--sleep-after-stop 0` and no
-   `--clear-sleep-timer`, then foobar deliberately stopped just before the deadline. FFmpeg and
-   the helper both exited cleanly and neither respawned during the following 30 s. After firing,
-   `GetSleepTimer` returned `sleepoption=off`, `sleeptime=0`, confirming the M5 consumed and
-   self-cleared the timer. The explicit deadline is persisted in `foobar.ini`, so helper
-   replacement and a foobar restart do not reset it. The remaining caveat belongs to item 8:
-   the old automatic teardown timer still has the seek/replacement race because the helper does
-   not know why it is exiting. `GetNetworkStandByMode` remains only a separate, untested
-   firmware setting, not a second sleep command.
-8. **Move release onto the helper's control channel.** The component knows whether it is
-   replacing a helper (seek, format change) or ending a session; the helper does not, and
-   four separate review findings all reduce to that. A `release` command over the
-   `WAMBRIDGE CONTROL_PORT` channel from PR #47 would arm the sleep timer only on a real
-   stop, would survive an encoder that never exits, and would let a replacement skip the
-   teardown work it does not need. Two review findings name the same root concretely and
-   are deliberately deferred here rather than patched. The `55001` socket belongs to the
-   listener thread and its `with` block closes it when `_run` returns, so a session that
-   ends in failure reaches `release()` with nothing to send on and reports
-   `stop=unreachable` — the teardown that most needs to land is the one that cannot.
-   And `kActiveShutdownGraceMs` is a ceiling on a helper that may never get there at all:
-   if FFmpeg does not exit after its stdin closes, the HTTP handler stays blocked, the
-   drain never finishes, and the grace expires into a hard kill. Both need the release to
-   stop depending on the listener's lifetime, which is this item.
+7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** A related
+   setting turned up but does not change this item yet: `GetNetworkStandByMode` answers
+   `networkstandbymode=on` on `UIC`, the socket this component already holds open. What writing
+   it does is unknown, and the name suggests it governs the network *during* standby rather
+   than entering it, so treat it as a hypothesis with a safe test attached rather than a second
+   power control. `WAM_PROTOCOL.md` has the order for settling that. This
+   component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
+   only power lever the firmware answers a client with — yet the only way to reach it is
+   `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
+   speaker asleep in twenty minutes cannot say so from foobar. Command shape is measured and
+   in `WAM_PROTOCOL.md`: `("option","start","str")` plus `("sleeptime", <seconds>, "dec")`,
+   seconds, self-clearing once it fires. Two constraints it has to respect: a configured
+   session clears pending timers before offering a stream, so starting playback must not
+   silently wipe a timer set from the menu; and the speaker never says who armed a timer, so
+   clearing one always risks removing one set from the Samsung app.
+8. ~~**Move release onto the helper's control channel.**~~ **Done.** The component now
+   sends `release` (a real stop) or `discard` (replacing this helper for a seek or format
+   change) over the existing `WAMBRIDGE CONTROL_PORT` channel, from `~WamOutput()`,
+   `flush()` and `submit_chunk()`'s format-change branch respectively - before it starts
+   killing the helper, while the control socket is still open. `PlaybackWatcher.release()`
+   and the new `discard()` (release minus arming the sleep timer only) share one body,
+   idempotent under a lock so a concurrent call from the control channel's dispatch thread
+   and the helper's own unconditional exit-path fallback cannot both run the teardown.
+
+   Corrected while landing this: the fix does not make the helper survive an encoder that
+   never exits *unconditionally* - `kActiveShutdownGraceMs` (6 s) still ends in
+   `TerminateProcess` regardless. What changes is that a real stop no longer *waits on* the
+   encoder reaching that point before telling the speaker to stop: `release` reaches the
+   speaker immediately over the still-open control socket, decoupled from whether `_run`
+   or the FFmpeg pipe it reads from ever return.
+
+   `discard` closes the race `cancel_sleep_timer()` exists to patch after the fact (a
+   replacement helper clearing a timer the *old* helper's exit just armed) rather than
+   removing the need for it - a timer armed by an older build or the Samsung app itself is
+   still possible, so `cancel_sleep_timer()` / `--clear-sleep-timer` stay as defense in
+   depth. `discard` still runs the stop and the paused-volume restore, only the sleep timer
+   is skipped: `flush()` can run before the component has fully committed to ending the
+   process rather than replacing it, and skipping the stop entirely there would risk the
+   exact "still lit the next morning" failure `release()` exists to prevent.
 9. ~~**Tighten the window on a released speaker going dark.**~~ **Answered 2026-08-16.** A
    session ended `WAMBRIDGE STOPPED stop=sent sleep=off holding=0` at 20:57:15 and `GetMute`
    reported dark at 21:14:19: **17 min 4 s**, with no timer armed. The controlled comparison

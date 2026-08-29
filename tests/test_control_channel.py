@@ -34,7 +34,8 @@ class ControlChannelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.levels: list[int] = []
         self.paused: list[bool] = []
-        self.sleep_timers: list[int] = []
+        self.released = 0
+        self.discarded = 0
         self.applied = threading.Event()
 
         def record(level: int) -> None:
@@ -45,14 +46,19 @@ class ControlChannelTests(unittest.TestCase):
             self.paused.append(paused)
             self.applied.set()
 
-        def record_sleep_timer(seconds: int) -> None:
-            self.sleep_timers.append(seconds)
+        def record_release() -> None:
+            self.released += 1
+            self.applied.set()
+
+        def record_discard() -> None:
+            self.discarded += 1
             self.applied.set()
 
         self.channel = ControlChannel(
             record,
             set_paused=record_paused,
-            set_sleep_timer=record_sleep_timer,
+            set_release=record_release,
+            set_discard=record_discard,
         )
         self.channel.start()
         self.addCleanup(self.channel.close)
@@ -91,22 +97,44 @@ class ControlChannelTests(unittest.TestCase):
             self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.paused, [True, False])
 
-    def test_sleep_timer_uses_same_connection_and_acknowledges(self) -> None:
+    def test_release_and_discard_use_the_same_connection_without_ack_waits(self) -> None:
         with _connect(self.channel) as client:
-            self._send(client, "sleep 1200")
+            self._send(client, "release")
             self.assertTrue(self.applied.wait(timeout=2))
-            self.assertEqual(_recv_line(client), b"ok\n")
             self.applied.clear()
-            self._send(client, "sleep 0")
+            self._send(client, "discard")
             self.assertTrue(self.applied.wait(timeout=2))
-            self.assertEqual(_recv_line(client), b"ok\n")
-        self.assertEqual(self.sleep_timers, [1200, 0])
+        self.assertEqual(self.released, 1)
+        self.assertEqual(self.discarded, 1)
 
-    def test_sleep_timer_rejects_out_of_range_value(self) -> None:
-        with _connect(self.channel) as client:
-            client.sendall(b"sleep 86401\n")
-            self.assertEqual(_recv_line(client), b"error\n")
-        self.assertEqual(self.sleep_timers, [])
+    def test_release_and_discard_are_ignored_without_a_callback(self) -> None:
+        levels: list[int] = []
+        applied = threading.Event()
+
+        def record(level: int) -> None:
+            levels.append(level)
+            applied.set()
+
+        channel = ControlChannel(record)
+        channel.start()
+        self.addCleanup(channel.close)
+        with _connect(channel) as client:
+            client.sendall(b"release\n")
+            client.sendall(b"discard\n")
+            client.sendall(b"volume 4\n")
+            self.assertTrue(applied.wait(timeout=2))
+        self.assertEqual(levels, [4])
+
+    def test_failing_release_does_not_end_the_channel(self) -> None:
+        def explode() -> None:
+            raise RuntimeError("speaker said no")
+
+        channel = ControlChannel(lambda _level: None, set_release=explode)
+        channel.start()
+        self.addCleanup(channel.close)
+        with _connect(channel) as client:
+            client.sendall(b"release\n")
+            client.sendall(b"volume 3\n")
 
     def test_failing_pause_does_not_end_the_channel(self) -> None:
         def explode(_paused: bool) -> None:
@@ -135,7 +163,15 @@ class ControlChannelTests(unittest.TestCase):
 
     def test_ignores_a_malformed_command(self) -> None:
         with _connect(self.channel) as client:
-            for line in ("volume", "volume x", "pause now", "mute 1", ""):
+            for line in (
+                "volume",
+                "volume x",
+                "pause now",
+                "release now",
+                "discard now",
+                "mute 1",
+                "",
+            ):
                 self._send(client, line)
             self._send(client, "volume 2")
             self.assertTrue(self.applied.wait(timeout=2))

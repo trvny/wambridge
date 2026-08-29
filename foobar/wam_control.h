@@ -41,11 +41,20 @@ bool send_pause_over_helper(bool paused);
 // local control channel rejected or lost the request.
 std::optional<bool> send_sleep_timer_over_helper(int seconds);
 
-// Remember an explicit menu timer in the existing foobar INI so a helper
-// replacement or foobar restart does not mistake it for a teardown timer and
-// clear it on playback startup. Zero clears the remembered timer.
-void note_menu_sleep_timer(int seconds);
-bool menu_sleep_timer_active();
+// Tell the active helper this is a real stop, so its own release() (pause,
+// then conditionally arm the sleep timer) runs immediately over the control
+// channel rather than waiting for the helper's own exit path - which an
+// encoder that never exits could otherwise delay well past when the process
+// is already being torn down. Send this before killing the helper, while its
+// control socket is still open; best effort, like every other call here.
+bool send_release_over_helper();
+
+// Tell the active helper it is being replaced (a seek or format change), not
+// ended - the same release as above minus arming a sleep timer, since a
+// replacement is about to keep the speaker awake on its own and arming one
+// here is exactly the race cancel_sleep_timer() exists to clear after the
+// fact today.
+bool send_discard_over_helper();
 
 // Tell the output that the speaker is now at this raw step because something
 // other than the slider moved it.

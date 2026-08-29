@@ -41,13 +41,20 @@ class ControlChannel:
         set_volume: Callable[[int], None],
         *,
         set_paused: Callable[[bool], None] | None = None,
-        set_sleep_timer: Callable[[int], None] | None = None,
+        set_release: Callable[[], None] | None = None,
+        set_discard: Callable[[], None] | None = None,
         minimum_volume: int = 0,
         maximum_volume: int = 30,
     ) -> None:
         self._set_volume = set_volume
         self._set_paused = set_paused
-        self._set_sleep_timer = set_sleep_timer
+        # `release` is a real stop, sent by the component before it starts
+        # killing this helper - see PlaybackWatcher.release(). `discard` is a
+        # replacement (seek, format change) - see PlaybackWatcher.discard().
+        # Both are best-effort like `pause`/`resume`: the stream matters more
+        # than the command.
+        self._set_release = set_release
+        self._set_discard = set_discard
         self._minimum_volume = minimum_volume
         self._maximum_volume = maximum_volume
         # Loopback only. This accepts commands that move a speaker in someone's
@@ -162,6 +169,16 @@ class ControlChannel:
 
     def _dispatch_locked(self, line: str) -> str | None:
         command, _, argument = line.partition(" ")
+        if command in {"release", "discard"}:
+            callback = self._set_release if command == "release" else self._set_discard
+            if argument or callback is None:
+                LOGGER.warning("Ignoring malformed playback command %r", line)
+                return "error"
+            try:
+                callback()
+            except Exception:  # helper boundary: a failed command is not fatal
+                LOGGER.warning("Control %s failed", command, exc_info=True)
+            return None
         if command in {"pause", "resume"}:
             if argument or self._set_paused is None:
                 LOGGER.warning("Ignoring malformed playback command %r", line)
