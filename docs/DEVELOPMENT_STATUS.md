@@ -367,20 +367,30 @@ operating system records.
    session clears pending timers before offering a stream, so starting playback must not
    silently wipe a timer set from the menu; and the speaker never says who armed a timer, so
    clearing one always risks removing one set from the Samsung app.
-8. **Move release onto the helper's control channel.** The component knows whether it is
-   replacing a helper (seek, format change) or ending a session; the helper does not, and
-   four separate review findings all reduce to that. A `release` command over the
-   `WAMBRIDGE CONTROL_PORT` channel from PR #47 would arm the sleep timer only on a real
-   stop, would survive an encoder that never exits, and would let a replacement skip the
-   teardown work it does not need. Two review findings name the same root concretely and
-   are deliberately deferred here rather than patched. The `55001` socket belongs to the
-   listener thread and its `with` block closes it when `_run` returns, so a session that
-   ends in failure reaches `release()` with nothing to send on and reports
-   `stop=unreachable` — the teardown that most needs to land is the one that cannot.
-   And `kActiveShutdownGraceMs` is a ceiling on a helper that may never get there at all:
-   if FFmpeg does not exit after its stdin closes, the HTTP handler stays blocked, the
-   drain never finishes, and the grace expires into a hard kill. Both need the release to
-   stop depending on the listener's lifetime, which is this item.
+8. ~~**Move release onto the helper's control channel.**~~ **Done.** The component now
+   sends `release` (a real stop) or `discard` (replacing this helper for a seek or format
+   change) over the existing `WAMBRIDGE CONTROL_PORT` channel, from `~WamOutput()`,
+   `flush()` and `submit_chunk()`'s format-change branch respectively - before it starts
+   killing the helper, while the control socket is still open. `PlaybackWatcher.release()`
+   and the new `discard()` (release minus arming the sleep timer only) share one body,
+   idempotent under a lock so a concurrent call from the control channel's dispatch thread
+   and the helper's own unconditional exit-path fallback cannot both run the teardown.
+
+   Corrected while landing this: the fix does not make the helper survive an encoder that
+   never exits *unconditionally* - `kActiveShutdownGraceMs` (6 s) still ends in
+   `TerminateProcess` regardless. What changes is that a real stop no longer *waits on* the
+   encoder reaching that point before telling the speaker to stop: `release` reaches the
+   speaker immediately over the still-open control socket, decoupled from whether `_run`
+   or the FFmpeg pipe it reads from ever return.
+
+   `discard` closes the race `cancel_sleep_timer()` exists to patch after the fact (a
+   replacement helper clearing a timer the *old* helper's exit just armed) rather than
+   removing the need for it - a timer armed by an older build or the Samsung app itself is
+   still possible, so `cancel_sleep_timer()` / `--clear-sleep-timer` stay as defense in
+   depth. `discard` still runs the stop and the paused-volume restore, only the sleep timer
+   is skipped: `flush()` can run before the component has fully committed to ending the
+   process rather than replacing it, and skipping the stop entirely there would risk the
+   exact "still lit the next morning" failure `release()` exists to prevent.
 9. ~~**Tighten the window on a released speaker going dark.**~~ **Answered 2026-08-16.** A
    session ended `WAMBRIDGE STOPPED stop=sent sleep=off holding=0` at 20:57:15 and `GetMute`
    reported dark at 21:14:19: **17 min 4 s**, with no timer armed. The controlled comparison

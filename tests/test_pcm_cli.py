@@ -1,6 +1,6 @@
 import os
 from io import BytesIO, StringIO
-from threading import Event
+from threading import Event, Thread
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import call, patch
@@ -54,6 +54,7 @@ class FakePlaybackWatcher:
         self.volumes: list[int] = []
         self.pause_volumes: list[bool] = []
         self.released = False
+        self.discarded = False
         self.sleep_timer_cancellations = 0
         self.sleep_after_stop = kwargs.get("sleep_after_stop", 0)
         self.release_summary = "stop=sent sleep=off"
@@ -66,6 +67,10 @@ class FakePlaybackWatcher:
         self.release()
 
     def release(self) -> None:
+        self.released = True
+
+    def discard(self) -> None:
+        self.discarded = True
         self.released = True
 
     def cancel_sleep_timer(self) -> None:
@@ -922,6 +927,61 @@ class PcmCliTests(TestCase):
 
         watcher.release()
         watcher.release()
+
+        self.assertEqual(len(connection.sent), 1)
+
+    def test_discard_stops_and_restores_volume_but_never_arms_the_timer(self) -> None:
+        # The component's own reason for discard(): a replacement helper is
+        # coming and will keep the speaker awake on its own, so arming a
+        # timer here is exactly the race cancel_sleep_timer() has to clear
+        # after the fact today. The stop and the volume restore still have to
+        # run - skipping those too would leave the speaker lit if this turns
+        # out to be the last helper after all (flush() can run before the
+        # component has committed to shutdown vs. restart).
+        watcher, connection = self._connected_watcher(volume_state=7, sleep_after_stop=120)
+        watcher.arm()
+        watcher.set_pause_volume(True)
+
+        watcher.discard()
+
+        self.assertEqual(
+            connection.sent,
+            [
+                ("SetVolume", [("volume", 0, "dec")], True),
+                ("SetVolume", [("volume", 7, "dec")], True),
+                ("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False),
+            ],
+        )
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=discarded")
+
+    def test_discard_then_release_is_a_no_op(self) -> None:
+        # __exit__ always calls release() as the unconditional fallback for a
+        # helper nobody sent an explicit command to. Once discard() already
+        # ran, that fallback must not fire a second stop.
+        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+        watcher.arm()
+
+        watcher.discard()
+        watcher.release()
+
+        self.assertEqual(len(connection.sent), 1)
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=discarded")
+
+    def test_release_and_discard_race_only_one_teardown_runs(self) -> None:
+        # The control channel's dispatch thread can call release()/discard()
+        # concurrently with __exit__'s own fallback call to release(). Only
+        # one is allowed to pass the released check-then-set.
+        watcher, connection = self._connected_watcher()
+        watcher.arm()
+
+        threads = [
+            Thread(target=watcher.release),
+            Thread(target=watcher.discard),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
 
         self.assertEqual(len(connection.sent), 1)
 
