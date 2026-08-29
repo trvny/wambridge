@@ -66,6 +66,21 @@ jobs:
           '''
               text = text.replace(marker, marker + block, 1)
               header.write_text(text, encoding="utf-8")
+
+          pcm = Path("src/wambridge/pcm_cli.py")
+          text = pcm.read_text(encoding="utf-8")
+          menu_guard = '''        if self._menu_sleep_timer_active:
+              self.release_summary += " sleep=menu"
+              return
+          '''
+          if menu_guard not in text:
+              marker = '''            self.release_summary += " sleep=discarded"
+              return
+          '''
+              if marker not in text:
+                  raise SystemExit("discard sleep branch insertion point is missing")
+              text = text.replace(marker, marker + menu_guard, 1)
+              pcm.write_text(text, encoding="utf-8")
       - name: Assert both control paths survived
         shell: bash
         run: |
@@ -86,6 +101,8 @@ jobs:
           check 'send_sleep_timer_over_helper' foobar/foo_out_wam.cpp
           check 'send_sleep_timer_over_helper' foobar/wam_control.h
           check 'menu_sleep_timer_active' foobar/foo_out_wam.cpp
+          check '_menu_sleep_timer_active' src/wambridge/pcm_cli.py
+          check 'sleep=menu' src/wambridge/pcm_cli.py
           check 'set_release' src/wambridge/control_channel.py
           check 'set_discard' src/wambridge/control_channel.py
           check 'set_sleep_timer' src/wambridge/control_channel.py
