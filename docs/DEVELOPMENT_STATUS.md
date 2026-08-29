@@ -352,19 +352,20 @@ operating system records.
    says `Stop & mute`, which is exactly what the existing action does: it stops playback and
    mutes the speaker without claiming to enter network standby. The legacy helper action name
    remains `standby` for compatibility. A real on-demand sleep control stays separate as item 7.
-7. **Offer the sleep timer as a menu command, not only as an automatic fallback.**
-   **Candidate 2026-08-29, awaiting the physical M5 pass.** `Start sleep timer` reuses the
-   existing `sleep_after_stop` value as its delay, so there is still one duration setting;
-   `Cancel sleep timer` sends zero. During PCM playback both commands use the helper's existing
-   loopback control channel and persistent `55001` connection rather than opening a competing
-   speaker socket. An explicit menu timer stores only its absolute deadline in `foobar.ini`,
-   survives helper replacement/foobar restart, suppresses the automatic after-stop timer while
-   active and is not cleared by playback startup. The helper also knows when a menu timer owns
-   the deadline, so Stop cannot quietly replace it with a fresh `sleep_after_stop` countdown.
-   Cancelling restores the normal automatic-after-stop behaviour. The remaining caveat belongs
-   to item 8: the old automatic teardown timer still has the seek/replacement race because the
-   helper does not know why it is exiting. `GetNetworkStandByMode` remains only a separate,
-   untested firmware setting, not a second sleep command.
+7. ~~**Offer the sleep timer as a menu command, not only as an automatic fallback.**~~
+   **Done and measured on the physical M5 2026-08-29, PR #128.** `Start sleep timer` reuses
+   `sleep_after_stop` as its delay and `Cancel sleep timer` sends zero. During PCM playback the
+   commands ride the active helper instead of opening a competing `55001` socket. A 30 s test
+   was armed while PCM was playing, followed by `Next` with 9 s remaining: the replacement
+   helper kept the same absolute deadline, started with `--sleep-after-stop 0` and no
+   `--clear-sleep-timer`, then foobar deliberately stopped just before the deadline. FFmpeg and
+   the helper both exited cleanly and neither respawned during the following 30 s. After firing,
+   `GetSleepTimer` returned `sleepoption=off`, `sleeptime=0`, confirming the M5 consumed and
+   self-cleared the timer. The explicit deadline is persisted in `foobar.ini`, so helper
+   replacement and a foobar restart do not reset it. The remaining caveat belongs to item 8:
+   the old automatic teardown timer still has the seek/replacement race because the helper does
+   not know why it is exiting. `GetNetworkStandByMode` remains only a separate, untested
+   firmware setting, not a second sleep command.
 8. **Move release onto the helper's control channel.** The component knows whether it is
    replacing a helper (seek, format change) or ending a session; the helper does not, and
    four separate review findings all reduce to that. A `release` command over the
