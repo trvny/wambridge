@@ -43,6 +43,9 @@ class FoobarMenuSourceTests(TestCase):
         self.assertIn("class SleepTimerStopCallback", source)
         self.assertIn("if (control->is_playing()) control->stop();", source)
         self.assertIn("sleep_timer_coordinator().arm(*deadline);", source)
+        self.assertIn("m_generation.fetch_add(1);", source)
+        self.assertIn("if (m_generation->load() != m_token) return;", source)
+        self.assertIn("SleepTimerStopCallback>(&m_generation, token)", source)
 
     def test_control_action_logs_use_narrow_strings(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")

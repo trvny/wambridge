@@ -246,7 +246,10 @@ SOCKET g_controlSocket = INVALID_SOCKET;
 // Distinguish "nothing is playing" from the short startup/teardown window in
 // which a helper exists but its loopback control socket does not. Falling back
 // to wambridge-control in the latter case would open a competing 55001 socket.
-std::atomic<bool> g_helperActive{false};
+std::atomic<bool>& helper_active() {
+    static std::atomic<bool> active{false};
+    return active;
+}
 
 // Read by the menu dispatcher through wam_control.h, which is a different
 // translation unit and has no access to the output's settings.
@@ -309,7 +312,7 @@ bool send_control_over_helper(const std::string& command) {
 std::optional<bool> send_control_with_reply_over_helper(const std::string& command) {
     std::lock_guard lock(g_controlMutex);
     if (g_controlSocket == INVALID_SOCKET) {
-        return g_helperActive.load()
+        return helper_active().load()
             ? std::optional<bool>{false}
             : std::nullopt;
     }
@@ -1350,7 +1353,7 @@ private:
             m_childStdin = stdinWrite;
             m_childStdout = stdoutRead;
         }
-        g_helperActive.store(true);
+        helper_active().store(true);
 
         // A helper process exists from here on, so from here on it is charged.
         note_start_attempt();
@@ -1737,7 +1740,7 @@ private:
             close_handle(m_childThread);
             close_handle(m_childProcess);
         }
-        g_helperActive.store(false);
+        helper_active().store(false);
         m_playing.store(false);
         m_childReachedPlaying.store(false);
 

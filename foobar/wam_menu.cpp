@@ -351,10 +351,23 @@ constexpr long long kSleepTimerStopLeadSeconds = 2;
 
 class SleepTimerStopCallback : public main_thread_callback {
 public:
+    SleepTimerStopCallback(
+        const std::atomic<unsigned long long>* generation,
+        unsigned long long token
+    ) : m_generation(generation), m_token(token) {}
+
     void callback_run() override {
+        // Cancel or re-arm can happen after the worker queued this callback but
+        // before foobar's main thread gets to run it. Only the generation that
+        // actually reached its deadline is allowed to stop playback.
+        if (m_generation->load() != m_token) return;
         static_api_ptr_t<playback_control> control;
         if (control->is_playing()) control->stop();
     }
+
+private:
+    const std::atomic<unsigned long long>* m_generation;
+    const unsigned long long m_token;
 };
 
 class SleepTimerCoordinator {
@@ -373,11 +386,9 @@ public:
     void arm(long long deadline) {
         {
             std::lock_guard lock(m_mutex);
-            if (deadline > 0) {
-                m_deadline = deadline;
-            } else {
-                m_deadline.reset();
-            }
+            m_generation.fetch_add(1);
+            m_deadline.reset();
+            if (deadline > 0) m_deadline = deadline;
         }
         m_cv.notify_all();
     }
@@ -401,10 +412,11 @@ private:
                 })) {
                 continue;
             }
+            const unsigned long long token = m_generation.load();
             m_deadline.reset();
             lock.unlock();
             main_thread_callback_manager::get()->add_callback(
-                new service_impl_t<SleepTimerStopCallback>()
+                new service_impl_t<SleepTimerStopCallback>(&m_generation, token)
             );
             lock.lock();
         }
@@ -413,6 +425,7 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::optional<long long> m_deadline;
+    std::atomic<unsigned long long> m_generation{0};
     bool m_shutdown = false;
     std::thread m_worker;
 };
