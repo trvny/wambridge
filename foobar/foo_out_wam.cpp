@@ -13,6 +13,7 @@
 #include "wam_settings.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -242,6 +243,10 @@ Settings load_settings() {
 // rather than atomic: connecting, sending and closing must not interleave.
 std::mutex g_controlMutex;
 SOCKET g_controlSocket = INVALID_SOCKET;
+// Distinguish "nothing is playing" from the short startup/teardown window in
+// which a helper exists but its loopback control socket does not. Falling back
+// to wambridge-control in the latter case would open a competing 55001 socket.
+std::atomic<bool> g_helperActive{false};
 
 // Read by the menu dispatcher through wam_control.h, which is a different
 // translation unit and has no access to the output's settings.
@@ -303,7 +308,11 @@ bool send_control_over_helper(const std::string& command) {
 
 std::optional<bool> send_control_with_reply_over_helper(const std::string& command) {
     std::lock_guard lock(g_controlMutex);
-    if (g_controlSocket == INVALID_SOCKET) return std::nullopt;
+    if (g_controlSocket == INVALID_SOCKET) {
+        return g_helperActive.load()
+            ? std::optional<bool>{false}
+            : std::nullopt;
+    }
     const int sent = send(
         g_controlSocket, command.c_str(), static_cast<int>(command.size()), 0
     );
@@ -312,21 +321,29 @@ std::optional<bool> send_control_with_reply_over_helper(const std::string& comma
         return std::optional<bool>{false};
     }
 
-    std::array<char, 16> reply{};
-    const int received = recv(
-        g_controlSocket,
-        reply.data(),
-        static_cast<int>(reply.size() - 1),
-        0
-    );
-    if (received <= 0) {
+    std::string text;
+    text.reserve(16);
+    std::array<char, 16> chunk{};
+    while (text.size() < 64 && text.find('\n') == std::string::npos) {
+        const int received = recv(
+            g_controlSocket,
+            chunk.data(),
+            static_cast<int>(chunk.size()),
+            0
+        );
+        if (received <= 0) {
+            close_control_socket_locked();
+            return std::optional<bool>{false};
+        }
+        text.append(chunk.data(), static_cast<size_t>(received));
+    }
+    const auto newline = text.find('\n');
+    if (newline == std::string::npos) {
         close_control_socket_locked();
         return std::optional<bool>{false};
     }
-    std::string text(reply.data(), static_cast<size_t>(received));
-    while (!text.empty() && (text.back() == '\r' || text.back() == '\n')) {
-        text.pop_back();
-    }
+    text.resize(newline);
+    if (!text.empty() && text.back() == '\r') text.pop_back();
     return std::optional<bool>{text == "ok"};
 }
 
@@ -1333,6 +1350,7 @@ private:
             m_childStdin = stdinWrite;
             m_childStdout = stdoutRead;
         }
+        g_helperActive.store(true);
 
         // A helper process exists from here on, so from here on it is charged.
         note_start_attempt();
@@ -1719,6 +1737,7 @@ private:
             close_handle(m_childThread);
             close_handle(m_childProcess);
         }
+        g_helperActive.store(false);
         m_playing.store(false);
         m_childReachedPlaying.store(false);
 

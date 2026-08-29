@@ -459,6 +459,9 @@ class FoobarSourceTests(TestCase):
         self.assertIn('command += L" --sleep-after-stop " +', output)
         self.assertIn('command += L" --clear-sleep-timer";', output)
         self.assertIn("wam::menu_sleep_timer_active()", output)
+        self.assertIn("std::atomic<bool> g_helperActive{false};", output)
+        self.assertIn("return g_helperActive.load()", output)
+        self.assertIn("while (text.size() < 64 && text.find('\\n') == std::string::npos)", output)
         self.assertIn(
             "if (m_sleepTimerArmed.load() && !menuSleepTimerActive) {",
             output,

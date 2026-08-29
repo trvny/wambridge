@@ -20,6 +20,16 @@ def _connect(channel: ControlChannel, *, token: str | None = None) -> socket.soc
     return client
 
 
+def _recv_line(client: socket.socket) -> bytes:
+    data = bytearray()
+    while not data.endswith(b"\n"):
+        chunk = client.recv(16)
+        if not chunk:
+            break
+        data.extend(chunk)
+    return bytes(data)
+
+
 class ControlChannelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.levels: list[int] = []
@@ -85,17 +95,17 @@ class ControlChannelTests(unittest.TestCase):
         with _connect(self.channel) as client:
             self._send(client, "sleep 1200")
             self.assertTrue(self.applied.wait(timeout=2))
-            self.assertEqual(client.recv(16), b"ok\n")
+            self.assertEqual(_recv_line(client), b"ok\n")
             self.applied.clear()
             self._send(client, "sleep 0")
             self.assertTrue(self.applied.wait(timeout=2))
-            self.assertEqual(client.recv(16), b"ok\n")
+            self.assertEqual(_recv_line(client), b"ok\n")
         self.assertEqual(self.sleep_timers, [1200, 0])
 
     def test_sleep_timer_rejects_out_of_range_value(self) -> None:
         with _connect(self.channel) as client:
             client.sendall(b"sleep 86401\n")
-            self.assertEqual(client.recv(16), b"error\n")
+            self.assertEqual(_recv_line(client), b"error\n")
         self.assertEqual(self.sleep_timers, [])
 
     def test_failing_pause_does_not_end_the_channel(self) -> None:
