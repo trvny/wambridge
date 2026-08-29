@@ -74,12 +74,10 @@ jobs:
               return
           '''
           if menu_guard not in text:
-              marker = '''            self.release_summary += " sleep=discarded"
-              return
-          '''
+              marker = "        if self._sleep_after_stop <= 0:\n"
               if marker not in text:
-                  raise SystemExit("discard sleep branch insertion point is missing")
-              text = text.replace(marker, marker + menu_guard, 1)
+                  raise SystemExit("automatic sleep branch insertion point is missing")
+              text = text.replace(marker, menu_guard + marker, 1)
               pcm.write_text(text, encoding="utf-8")
       - name: Assert both control paths survived
         shell: bash
