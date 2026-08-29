@@ -1,0 +1,59 @@
+name: Finish sleep timer merge
+
+on:
+  push:
+    branches: [feat/foobar-sleep-timer]
+    paths: [.github/workflows/finish-sleep-timer-merge.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    if: github.repository == 'trvny/wambridge'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/foobar-sleep-timer
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          python-version: "3.14"
+      - name: Merge current main conservatively
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git config user.name 'gptomek[bot]'
+          git config user.email '314538226+gptomek[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff -X theirs origin/main
+          test -z "$(git diff --name-only --diff-filter=U)"
+      - name: Assert both control paths survived
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'send_release_over_helper' foobar/foo_out_wam.cpp
+          grep -q 'send_discard_over_helper' foobar/foo_out_wam.cpp
+          grep -q 'send_sleep_timer_over_helper' foobar/foo_out_wam.cpp
+          grep -q 'menu_sleep_timer_active' foobar/foo_out_wam.cpp
+          grep -q 'set_release' src/wambridge/control_channel.py
+          grep -q 'set_discard' src/wambridge/control_channel.py
+          grep -q 'set_sleep_timer' src/wambridge/control_channel.py
+          grep -q 'def discard' src/wambridge/pcm_cli.py
+          grep -q 'Start sleep timer' docs/FOOBAR_PLUGIN.md
+      - name: Test merged Python paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --locked
+          uv run ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
+          uv run python -m unittest discover -s tests -v
+      - name: Commit merge and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/finish-sleep-timer-merge.yml
+          git add -A
+          git commit -m 'Merge main into foobar sleep timer'
+          git push origin HEAD:feat/foobar-sleep-timer
