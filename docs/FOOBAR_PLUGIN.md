@@ -177,7 +177,9 @@ deadline as internal state in `foobar.ini`, so a seek/helper replacement or foob
 does not clear it or restart its countdown. While it remains live, replacement helpers run
 with the automatic after-stop timer suppressed and skip the normal pending-timer clear. Stop
 also leaves that deadline alone. Cancelling the menu timer restores the ordinary automatic
-after-stop behaviour. The M5 clears a fired timer itself.
+after-stop behaviour. The M5 clears a fired timer itself. The firmware exposes no timer
+owner, so `Cancel sleep timer` necessarily cancels whichever pending M5 timer exists,
+including one armed from the Samsung app.
 
 In normal use a timer is not needed at all. Since the stream path tells the speaker the stream
 is over, a released speaker reaches its own idle standby unaided — measured at 17 min 4 s. The
