@@ -33,15 +33,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'send_release_over_helper' foobar/foo_out_wam.cpp
-          grep -q 'send_discard_over_helper' foobar/foo_out_wam.cpp
-          grep -q 'send_sleep_timer_over_helper' foobar/foo_out_wam.cpp
-          grep -q 'menu_sleep_timer_active' foobar/foo_out_wam.cpp
-          grep -q 'set_release' src/wambridge/control_channel.py
-          grep -q 'set_discard' src/wambridge/control_channel.py
-          grep -q 'set_sleep_timer' src/wambridge/control_channel.py
-          grep -q 'def discard' src/wambridge/pcm_cli.py
-          grep -q 'Start sleep timer' docs/FOOBAR_PLUGIN.md
+          missing=0
+          check() {
+            local pattern="$1" file="$2"
+            if grep -q "$pattern" "$file"; then
+              echo "ok: $pattern in $file"
+            else
+              echo "MISSING: $pattern in $file"
+              missing=1
+            fi
+          }
+          check 'send_release_over_helper' foobar/foo_out_wam.cpp
+          check 'send_discard_over_helper' foobar/foo_out_wam.cpp
+          check 'send_sleep_timer_over_helper' foobar/foo_out_wam.cpp
+          check 'menu_sleep_timer_active' foobar/foo_out_wam.cpp
+          check 'set_release' src/wambridge/control_channel.py
+          check 'set_discard' src/wambridge/control_channel.py
+          check 'set_sleep_timer' src/wambridge/control_channel.py
+          check 'def discard' src/wambridge/pcm_cli.py
+          check 'Start sleep timer' docs/FOOBAR_PLUGIN.md
+          exit "$missing"
       - name: Test merged Python paths
         shell: bash
         run: |
