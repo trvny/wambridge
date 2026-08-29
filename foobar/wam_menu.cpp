@@ -329,15 +329,97 @@ bool write_menu_sleep_deadline(int seconds) {
     ) != 0;
 }
 
-bool menu_sleep_timer_active_impl() {
+std::optional<long long> menu_sleep_deadline_impl() {
     const auto raw = ini_value(kMenuSleepDeadlineKey.data(), L"0", config_path());
     wchar_t* end = nullptr;
     const long long deadline = std::wcstoll(raw.c_str(), &end, 10);
     if (end == raw.c_str() || *end != L'\0' || deadline <= epoch_seconds_now()) {
         if (deadline != 0) write_menu_sleep_deadline(0);
-        return false;
+        return std::nullopt;
     }
-    return true;
+    return deadline;
+}
+
+// Stop foobar just before the speaker's own timer fires. If the M5 is allowed
+// to end the HTTP pull first, foobar sees the helper disappear as a failed
+// output and immediately rebuilds it, waking the speaker back up. Two seconds
+// leaves room for the deliberate output teardown while keeping the requested
+// sleep time effectively unchanged. The persisted deadline re-arms this worker
+// after a foobar restart when the next WAM output session asks whether a menu
+// timer is active.
+constexpr long long kSleepTimerStopLeadSeconds = 2;
+
+class SleepTimerStopCallback : public main_thread_callback {
+public:
+    void callback_run() override {
+        static_api_ptr_t<playback_control> control;
+        if (control->is_playing()) control->stop();
+    }
+};
+
+class SleepTimerCoordinator {
+public:
+    SleepTimerCoordinator() : m_worker(&SleepTimerCoordinator::worker_loop, this) {}
+
+    ~SleepTimerCoordinator() {
+        {
+            std::lock_guard lock(m_mutex);
+            m_shutdown = true;
+        }
+        m_cv.notify_all();
+        if (m_worker.joinable()) m_worker.join();
+    }
+
+    void arm(long long deadline) {
+        {
+            std::lock_guard lock(m_mutex);
+            if (deadline > 0) {
+                m_deadline = deadline;
+            } else {
+                m_deadline.reset();
+            }
+        }
+        m_cv.notify_all();
+    }
+
+private:
+    void worker_loop() {
+        std::unique_lock lock(m_mutex);
+        while (!m_shutdown) {
+            if (!m_deadline.has_value()) {
+                m_cv.wait(lock, [this] { return m_shutdown || m_deadline.has_value(); });
+                continue;
+            }
+            const long long deadline = *m_deadline;
+            const long long stopAt = (std::max)(0LL, deadline - kSleepTimerStopLeadSeconds);
+            const auto target = std::chrono::system_clock::time_point{
+                std::chrono::seconds(stopAt)
+            };
+            if (m_cv.wait_until(lock, target, [this, deadline] {
+                    return m_shutdown || !m_deadline.has_value() ||
+                        *m_deadline != deadline;
+                })) {
+                continue;
+            }
+            m_deadline.reset();
+            lock.unlock();
+            main_thread_callback_manager::get()->add_callback(
+                new service_impl_t<SleepTimerStopCallback>()
+            );
+            lock.lock();
+        }
+    }
+
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    std::optional<long long> m_deadline;
+    bool m_shutdown = false;
+    std::thread m_worker;
+};
+
+SleepTimerCoordinator& sleep_timer_coordinator() {
+    static SleepTimerCoordinator coordinator;
+    return coordinator;
 }
 
 std::string compact_output(std::string output) {
@@ -870,12 +952,21 @@ void note_menu_sleep_timer(int seconds) {
             kComponentName,
             static_cast<unsigned>(GetLastError())
         );
+        return;
+    }
+    if (seconds > 0) {
+        sleep_timer_coordinator().arm(epoch_seconds_now() + seconds);
+    } else {
+        sleep_timer_coordinator().arm(0);
     }
 }
 
 bool menu_sleep_timer_active() {
     std::lock_guard lock(sleep_timer_state_mutex());
-    return menu_sleep_timer_active_impl();
+    const auto deadline = menu_sleep_deadline_impl();
+    if (!deadline.has_value()) return false;
+    sleep_timer_coordinator().arm(*deadline);
+    return true;
 }
 
 void request_volume_step(int step) {

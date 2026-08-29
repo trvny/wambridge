@@ -89,7 +89,8 @@ class FakePlaybackWatcher:
     def set_pause_volume(self, paused: bool) -> None:
         self.pause_volumes.append(paused)
 
-    def set_sleep_timer(self, _seconds: int) -> None:
+    @staticmethod
+    def set_sleep_timer(_seconds: int) -> None:
         """Satisfy the real watcher contract; this fake records no timer state."""
         return None
 

@@ -36,6 +36,14 @@ class FoobarMenuSourceTests(TestCase):
         self.assertIn("wam::note_menu_sleep_timer", source)
         self.assertIn('L"menu_sleep_timer_deadline"', source)
 
+    def test_sleep_timer_stops_foobar_before_speaker_deadline(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("kSleepTimerStopLeadSeconds = 2", source)
+        self.assertIn("class SleepTimerStopCallback", source)
+        self.assertIn("if (control->is_playing()) control->stop();", source)
+        self.assertIn("sleep_timer_coordinator().arm(*deadline);", source)
+
     def test_control_action_logs_use_narrow_strings(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 

@@ -181,6 +181,12 @@ after-stop behaviour. The M5 clears a fired timer itself. The firmware exposes n
 owner, so `Cancel sleep timer` necessarily cancels whichever pending M5 timer exists,
 including one armed from the Samsung app.
 
+Two seconds before an explicit menu timer reaches its deadline, the component deliberately
+stops foobar playback. If the M5 fires first, it closes the HTTP pull and foobar interprets the
+helper exit as an output failure, immediately starting a replacement that wakes the speaker
+back up. The small lead turns that edge into an ordinary intentional stop while leaving the M5
+timer itself armed to enter standby at the requested deadline.
+
 In normal use a timer is not needed at all. Since the stream path tells the speaker the stream
 is over, a released speaker reaches its own idle standby unaided — measured at 17 min 4 s. The
 timer is worth arming when an exact deadline is wanted or something might not let go.
