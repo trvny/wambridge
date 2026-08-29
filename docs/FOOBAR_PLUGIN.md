@@ -13,7 +13,7 @@ Current implementation and remaining control-surface work for `foo_out_wam`.
   with foobar2000 dark-mode theming.
 - `Playback -> WAM Bridge` submenu containing:
   - Emergency stop,
-  - Standby,
+  - Stop & mute,
   - Volume up,
   - Volume down,
   - Volume to safe level.

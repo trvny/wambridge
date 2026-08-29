@@ -103,8 +103,8 @@ constexpr std::array<MenuItem, 5> kMenuItems = {{
     },
     {
         kStandbyGuid,
-        "Standby",
-        "Stop foobar and leave the Samsung WAM speaker muted for standby.",
+        "Stop & mute",
+        "Stop foobar and mute the Samsung WAM speaker without powering it down.",
         L"standby",
         true,
     },

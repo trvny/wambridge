@@ -16,7 +16,7 @@ class FoobarMenuSourceTests(TestCase):
         self.assertNotIn('"WAM Bridge: Emergency stop"', source)
         for label in (
             "Emergency stop",
-            "Standby",
+            "Stop & mute",
             "Volume up",
             "Volume down",
             "Volume to safe level",

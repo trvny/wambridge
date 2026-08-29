@@ -67,7 +67,7 @@ The installed component adds:
 
 ```text
 Playback -> WAM Bridge -> Emergency stop
-Playback -> WAM Bridge -> Standby
+Playback -> WAM Bridge -> Stop & mute
 Playback -> WAM Bridge -> Volume up
 Playback -> WAM Bridge -> Volume down
 Playback -> WAM Bridge -> Volume to safe level

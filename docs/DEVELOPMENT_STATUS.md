@@ -348,10 +348,10 @@ operating system records.
 5. ~~**Stop the helper respawn storm.**~~ **Merged and measured 2026-08-19**, PR #55. The
    backoff is charged at the spawn and refunded by `PLAYING`; see the section above for the two
    placements that failed first and why. Nothing is left open here.
-6. Rename or rewire the misnamed standby menu item; see `FOOBAR_PLUGIN.md`. Standby now
-   reports `holding=<count>` for connections still attached to the speaker, but it still
-   sends no power command, so the name remains wrong until it arms a sleep timer. The stream
-   path already has one: `sleep_after_stop` in the INI, seconds, `0` by default.
+6. ~~**Rename the misnamed standby menu item.**~~ **Done 2026-08-29.** The foobar menu now
+   says `Stop & mute`, which is exactly what the existing action does: it stops playback and
+   mutes the speaker without claiming to enter network standby. The legacy helper action name
+   remains `standby` for compatibility. A real on-demand sleep control stays separate as item 7.
 7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** A related
    setting turned up but does not change this item yet: `GetNetworkStandByMode` answers
    `networkstandbymode=on` on `UIC`, the socket this component already holds open. What writing

@@ -49,7 +49,7 @@ class DocsMatchCodeTests(TestCase):
 
     def test_the_menu_actions_the_status_file_advertises_exist(self) -> None:
         menu = read(MENU)
-        for label in ("Emergency stop", "Standby", "Volume up", "Volume down"):
+        for label in ("Emergency stop", "Stop & mute", "Volume up", "Volume down"):
             self.assertIn(f'"{label}"', menu)
 
     def test_struck_items_are_not_quietly_reopened(self) -> None:
