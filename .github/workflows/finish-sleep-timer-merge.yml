@@ -69,10 +69,11 @@ jobs:
 
           pcm = Path("src/wambridge/pcm_cli.py")
           text = pcm.read_text(encoding="utf-8")
-          menu_guard = '''        if self._menu_sleep_timer_active:
-              self.release_summary += " sleep=menu"
-              return
-          '''
+          menu_guard = (
+              "        if self._menu_sleep_timer_active:\n"
+              "            self.release_summary += \" sleep=menu\"\n"
+              "            return\n"
+          )
           if menu_guard not in text:
               marker = "        if self._sleep_after_stop <= 0:\n"
               if marker not in text:
