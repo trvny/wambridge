@@ -26,7 +26,10 @@ constexpr char kComponentName[] = "WAM Bridge Output";
 constexpr int kDefaultSafeVolume = 3;
 constexpr int kMaximumRawVolume = 30;
 constexpr int kMaximumLegacyVolume = 100;
+constexpr int kMaximumSleepTimerSeconds = 86400;
 constexpr size_t kMaximumLoggedOutput = 2000;
+constexpr wchar_t kMenuSleepDeadlineKey[] = L"menu_sleep_timer_deadline";
+std::mutex g_sleepTimerStateMutex;
 
 // Used only as a stable address inside this component module.
 // {FC099CF9-0DA5-4F52-A5DD-F8DF35EA6C55}
@@ -77,6 +80,22 @@ constexpr GUID kVolumeDownGuid = {
     {0xae, 0x39, 0xd8, 0x70, 0x0c, 0x35, 0xa3, 0x4b},
 };
 
+// {B47F4E2B-191F-4A4F-88D8-6099B3DCB107}
+constexpr GUID kStartSleepTimerGuid = {
+    0xb47f4e2b,
+    0x191f,
+    0x4a4f,
+    {0x88, 0xd8, 0x60, 0x99, 0xb3, 0xdc, 0xb1, 0x07},
+};
+
+// {8B1F4832-EA06-44D5-9211-CA9938FD029F}
+constexpr GUID kCancelSleepTimerGuid = {
+    0x8b1f4832,
+    0xea06,
+    0x44d5,
+    {0x92, 0x11, 0xca, 0x99, 0x38, 0xfd, 0x02, 0x9f},
+};
+
 // {EEBBAA34-04C3-47EE-8908-B7F952E302F0}
 constexpr GUID kSafeVolumeGuid = {
     0xeebbaa34,
@@ -93,7 +112,7 @@ struct MenuItem {
     bool stopsFoobar;
 };
 
-constexpr std::array<MenuItem, 5> kMenuItems = {{
+constexpr std::array<MenuItem, 7> kMenuItems = {{
     {
         kEmergencyStopGuid,
         "Emergency stop",
@@ -107,6 +126,20 @@ constexpr std::array<MenuItem, 5> kMenuItems = {{
         "Stop foobar and mute the Samsung WAM speaker without powering it down.",
         L"standby",
         true,
+    },
+    {
+        kStartSleepTimerGuid,
+        "Start sleep timer",
+        "Arm the M5 sleep timer using the configured sleep_after_stop delay.",
+        L"start-sleep-timer",
+        false,
+    },
+    {
+        kCancelSleepTimerGuid,
+        "Cancel sleep timer",
+        "Cancel a pending M5 sleep timer.",
+        L"cancel-sleep-timer",
+        false,
     },
     {
         kVolumeUpGuid,
@@ -259,6 +292,49 @@ int configured_safe_volume() {
     return static_cast<int>(std::min<long>(parsed, kMaximumRawVolume));
 }
 
+int configured_sleep_after_stop() {
+    auto raw = environment_value(L"WAMBRIDGE_SLEEP_AFTER_STOP");
+    if (raw.empty()) raw = ini_value(L"sleep_after_stop", L"0", config_path());
+
+    wchar_t* end = nullptr;
+    const long parsed = std::wcstol(raw.c_str(), &end, 10);
+    if (end == raw.c_str() || *end != L'\0' || parsed < 0 ||
+        parsed > kMaximumSleepTimerSeconds) {
+        return 0;
+    }
+    return static_cast<int>(parsed);
+}
+
+long long epoch_seconds_now() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+}
+
+bool write_menu_sleep_deadline(int seconds) {
+    const long long deadline = seconds > 0
+        ? epoch_seconds_now() + seconds
+        : 0;
+    const auto value = std::to_wstring(deadline);
+    return WritePrivateProfileStringW(
+        L"wambridge",
+        kMenuSleepDeadlineKey,
+        value.c_str(),
+        config_path().c_str()
+    ) != 0;
+}
+
+bool menu_sleep_timer_active_impl() {
+    const auto raw = ini_value(kMenuSleepDeadlineKey, L"0", config_path());
+    wchar_t* end = nullptr;
+    const long long deadline = std::wcstoll(raw.c_str(), &end, 10);
+    if (end == raw.c_str() || *end != L'\0' || deadline <= epoch_seconds_now()) {
+        if (deadline != 0) write_menu_sleep_deadline(0);
+        return false;
+    }
+    return true;
+}
+
 std::string compact_output(std::string output) {
     for (char& character : output) {
         if (character == '\r' || character == '\n' || character == '\t') {
@@ -284,6 +360,7 @@ constexpr auto kVolumeSendInterval = std::chrono::milliseconds(250);
 struct ControlAction {
     std::wstring name;
     std::optional<int> level;
+    std::optional<int> seconds;
 };
 
 std::string action_label(const std::wstring& action) {
@@ -316,6 +393,20 @@ public:
         m_cv.notify_one();
         const auto label = action_label(action);
         console::printf("%s: queued %s", kComponentName, label.c_str());
+    }
+
+    void enqueue_sleep_timer(int seconds) {
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_shutdown) return;
+            m_queue.push_back({L"sleep-timer", std::nullopt, seconds});
+        }
+        m_cv.notify_one();
+        console::printf(
+            "%s: queued sleep-timer seconds=%u",
+            kComponentName,
+            static_cast<unsigned>(seconds)
+        );
     }
 
     // Replaces any level that has not been sent yet. Deliberately silent: one
@@ -359,6 +450,10 @@ private:
             command += L" --level ";
             command += std::to_wstring(*action.level);
         }
+        if (action.seconds.has_value()) {
+            command += L" --seconds ";
+            command += std::to_wstring(*action.seconds);
+        }
         return command;
     }
 
@@ -370,6 +465,9 @@ private:
         const auto compact = compact_output(output);
         const auto label = action_label(action.name);
         if (exitCode == 0) {
+            if (action.seconds.has_value()) {
+                wam::note_menu_sleep_timer(*action.seconds);
+            }
             if (compact.empty()) {
                 console::printf(
                     "%s: %s completed",
@@ -412,6 +510,25 @@ private:
         // Spawning a process to open a second one is what made this whole
         // approach unsafe during playback, so it is now the fallback for when
         // nothing is playing rather than the mechanism.
+        if (action.seconds.has_value()) {
+            const auto routed = wam::send_sleep_timer_over_helper(*action.seconds);
+            if (routed.has_value()) {
+                if (*routed) {
+                    wam::note_menu_sleep_timer(*action.seconds);
+                    console::printf(
+                        "%s: sleep-timer completed over active helper: seconds=%u",
+                        kComponentName,
+                        static_cast<unsigned>(*action.seconds)
+                    );
+                } else {
+                    console::printf(
+                        "%s: sleep-timer failed on the active helper",
+                        kComponentName
+                    );
+                }
+                return;
+            }
+        }
         if (action.level.has_value() &&
             wam::send_volume_over_helper(*action.level)) {
             return;
@@ -630,7 +747,7 @@ private:
             if (step == m_lastSentVolume) continue;
             m_lastSentVolume = step;
             m_lastVolumeSent = now;
-            out = ControlAction{L"set-volume", step};
+            out = ControlAction{L"set-volume", step, std::nullopt};
             return true;
         }
     }
@@ -693,6 +810,22 @@ public:
     ) override {
         if (index >= kMenuItems.size()) return;
         const auto& item = kMenuItems[index];
+        if (std::wcscmp(item.action, L"start-sleep-timer") == 0) {
+            const int seconds = configured_sleep_after_stop();
+            if (seconds <= 0) {
+                console::printf(
+                    "%s: sleep timer is disabled; set sleep_after_stop in WAM Bridge preferences",
+                    kComponentName
+                );
+                return;
+            }
+            control_dispatcher().enqueue_sleep_timer(seconds);
+            return;
+        }
+        if (std::wcscmp(item.action, L"cancel-sleep-timer") == 0) {
+            control_dispatcher().enqueue_sleep_timer(0);
+            return;
+        }
         if (item.stopsFoobar) {
             static_api_ptr_t<playback_control> control;
             control->stop();
@@ -723,6 +856,22 @@ mainmenu_commands_factory_t<WamMenuCommands> g_wamMenuCommands;
 }  // namespace
 
 namespace wam {
+
+void note_menu_sleep_timer(int seconds) {
+    std::lock_guard lock(g_sleepTimerStateMutex);
+    if (!write_menu_sleep_deadline(seconds)) {
+        console::printf(
+            "%s: could not remember sleep timer deadline (Windows error %u)",
+            kComponentName,
+            static_cast<unsigned>(GetLastError())
+        );
+    }
+}
+
+bool menu_sleep_timer_active() {
+    std::lock_guard lock(g_sleepTimerStateMutex);
+    return menu_sleep_timer_active_impl();
+}
 
 void request_volume_step(int step) {
     control_dispatcher().request_volume(

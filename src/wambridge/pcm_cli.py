@@ -268,6 +268,7 @@ class PlaybackWatcher:
         self._client_uuid = client_uuid.casefold()
         self._port = port
         self._sleep_after_stop = sleep_after_stop
+        self._menu_sleep_timer_active = False
         self._clear_sleep_timer = clear_sleep_timer
         self._released = False
         # Carries the sleep field from the start. A session whose __enter__
@@ -414,6 +415,9 @@ class PlaybackWatcher:
         if rejection:
             LOGGER.warning("%s while releasing the speaker", rejection)
 
+        if self._menu_sleep_timer_active:
+            self.release_summary += " sleep=menu"
+            return
         if self._sleep_after_stop <= 0:
             self.release_summary += " sleep=off"
             return
@@ -537,6 +541,25 @@ class PlaybackWatcher:
                     if self._current_volume == level:
                         self._current_volume = None
                 raise
+
+    def set_sleep_timer(self, seconds: int) -> None:
+        """Arm or cancel an explicit menu timer on the persistent connection.
+
+        While that timer is armed it owns the deadline. ``release()`` must not
+        replace it with ``sleep_after_stop`` merely because playback ended.
+        Cancelling it restores the normal automatic-after-stop behaviour.
+        """
+        self._send_command(
+            method=_SLEEP_COMMAND,
+            arguments=sleep_timer_arguments(seconds),
+        )
+        rejection = self.wait_for_response(
+            _SLEEP_COMMAND,
+            timeout=_STOP_ACK_TIMEOUT,
+        )
+        if rejection:
+            raise WamApiError(rejection)
+        self._menu_sleep_timer_active = seconds > 0
 
     def set_pause_volume(self, paused: bool) -> None:
         """Silence pause with raw volume 0 while preserving the live HTTP stream."""
@@ -1149,6 +1172,7 @@ def run(
             with ControlChannel(
                 watcher.set_volume,
                 set_paused=watcher.set_pause_volume,
+                set_sleep_timer=watcher.set_sleep_timer,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

@@ -17,11 +17,24 @@ class FoobarMenuSourceTests(TestCase):
         for label in (
             "Emergency stop",
             "Stop & mute",
+            "Start sleep timer",
+            "Cancel sleep timer",
             "Volume up",
             "Volume down",
             "Volume to safe level",
         ):
             self.assertIn(f'"{label}"', source)
+
+
+    def test_sleep_timer_reuses_config_and_routes_through_active_helper(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn('L"WAMBRIDGE_SLEEP_AFTER_STOP"', source)
+        self.assertIn('L"sleep_after_stop"', source)
+        self.assertIn('L" --seconds "', source)
+        self.assertIn("wam::send_sleep_timer_over_helper", source)
+        self.assertIn("wam::note_menu_sleep_timer", source)
+        self.assertIn('L"menu_sleep_timer_deadline"', source)
 
     def test_control_action_logs_use_narrow_strings(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
@@ -52,7 +65,7 @@ class FoobarMenuSourceTests(TestCase):
         source = SOURCE.read_text(encoding="utf-8")
 
         queue_branch = source.index("out = std::move(m_queue.front());")
-        volume_branch = source.index("out = ControlAction{L\"set-volume\", step};")
+        volume_branch = source.index("out = ControlAction{L\"set-volume\", step, std::nullopt};")
         self.assertLess(queue_branch, volume_branch)
 
     def test_volume_requests_are_clamped_to_the_measured_range(self) -> None:

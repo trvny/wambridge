@@ -352,21 +352,19 @@ operating system records.
    says `Stop & mute`, which is exactly what the existing action does: it stops playback and
    mutes the speaker without claiming to enter network standby. The legacy helper action name
    remains `standby` for compatibility. A real on-demand sleep control stays separate as item 7.
-7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** A related
-   setting turned up but does not change this item yet: `GetNetworkStandByMode` answers
-   `networkstandbymode=on` on `UIC`, the socket this component already holds open. What writing
-   it does is unknown, and the name suggests it governs the network *during* standby rather
-   than entering it, so treat it as a hypothesis with a safe test attached rather than a second
-   power control. `WAM_PROTOCOL.md` has the order for settling that. This
-   component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
-   only power lever the firmware answers a client with — yet the only way to reach it is
-   `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
-   speaker asleep in twenty minutes cannot say so from foobar. Command shape is measured and
-   in `WAM_PROTOCOL.md`: `("option","start","str")` plus `("sleeptime", <seconds>, "dec")`,
-   seconds, self-clearing once it fires. Two constraints it has to respect: a configured
-   session clears pending timers before offering a stream, so starting playback must not
-   silently wipe a timer set from the menu; and the speaker never says who armed a timer, so
-   clearing one always risks removing one set from the Samsung app.
+7. **Offer the sleep timer as a menu command, not only as an automatic fallback.**
+   **Candidate 2026-08-29, awaiting the physical M5 pass.** `Start sleep timer` reuses the
+   existing `sleep_after_stop` value as its delay, so there is still one duration setting;
+   `Cancel sleep timer` sends zero. During PCM playback both commands use the helper's existing
+   loopback control channel and persistent `55001` connection rather than opening a competing
+   speaker socket. An explicit menu timer stores only its absolute deadline in `foobar.ini`,
+   survives helper replacement/foobar restart, suppresses the automatic after-stop timer while
+   active and is not cleared by playback startup. The helper also knows when a menu timer owns
+   the deadline, so Stop cannot quietly replace it with a fresh `sleep_after_stop` countdown.
+   Cancelling restores the normal automatic-after-stop behaviour. The remaining caveat belongs
+   to item 8: the old automatic teardown timer still has the seek/replacement race because the
+   helper does not know why it is exiting. `GetNetworkStandByMode` remains only a separate,
+   untested firmware setting, not a second sleep command.
 8. **Move release onto the helper's control channel.** The component knows whether it is
    replacing a helper (seek, format change) or ending a session; the helper does not, and
    four separate review findings all reduce to that. A `release` command over the

@@ -68,13 +68,17 @@ The installed component adds:
 ```text
 Playback -> WAM Bridge -> Emergency stop
 Playback -> WAM Bridge -> Stop & mute
+Playback -> WAM Bridge -> Start sleep timer
+Playback -> WAM Bridge -> Cancel sleep timer
 Playback -> WAM Bridge -> Volume up
 Playback -> WAM Bridge -> Volume down
 Playback -> WAM Bridge -> Volume to safe level
 ```
 
 Commands run through a serialized bundled control helper and report completion or errors in
-the foobar console.
+the foobar console. `Start sleep timer` uses the existing `sleep_after_stop` preference as its
+delay; when playback is active it is routed through the running PCM helper instead of opening a
+second control connection. `Cancel sleep timer` clears the pending timer.
 
 ## Current output behavior
 

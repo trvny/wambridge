@@ -24,6 +24,7 @@ class ControlChannelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.levels: list[int] = []
         self.paused: list[bool] = []
+        self.sleep_timers: list[int] = []
         self.applied = threading.Event()
 
         def record(level: int) -> None:
@@ -34,7 +35,15 @@ class ControlChannelTests(unittest.TestCase):
             self.paused.append(paused)
             self.applied.set()
 
-        self.channel = ControlChannel(record, set_paused=record_paused)
+        def record_sleep_timer(seconds: int) -> None:
+            self.sleep_timers.append(seconds)
+            self.applied.set()
+
+        self.channel = ControlChannel(
+            record,
+            set_paused=record_paused,
+            set_sleep_timer=record_sleep_timer,
+        )
         self.channel.start()
         self.addCleanup(self.channel.close)
 
@@ -71,6 +80,23 @@ class ControlChannelTests(unittest.TestCase):
             self._send(client, "resume")
             self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.paused, [True, False])
+
+    def test_sleep_timer_uses_same_connection_and_acknowledges(self) -> None:
+        with _connect(self.channel) as client:
+            self._send(client, "sleep 1200")
+            self.assertTrue(self.applied.wait(timeout=2))
+            self.assertEqual(client.recv(16), b"ok\n")
+            self.applied.clear()
+            self._send(client, "sleep 0")
+            self.assertTrue(self.applied.wait(timeout=2))
+            self.assertEqual(client.recv(16), b"ok\n")
+        self.assertEqual(self.sleep_timers, [1200, 0])
+
+    def test_sleep_timer_rejects_out_of_range_value(self) -> None:
+        with _connect(self.channel) as client:
+            client.sendall(b"sleep 86401\n")
+            self.assertEqual(client.recv(16), b"error\n")
+        self.assertEqual(self.sleep_timers, [])
 
     def test_failing_pause_does_not_end_the_channel(self) -> None:
         def explode(_paused: bool) -> None:

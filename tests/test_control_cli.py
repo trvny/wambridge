@@ -14,6 +14,8 @@ from wambridge.control_cli import (
     run,
     set_exact_volume,
     set_safe_volume,
+    set_sleep_timer_action,
+    sleep_seconds,
     standby,
     wait_until_released,
 )
@@ -26,6 +28,12 @@ class ControlParserTests(TestCase):
         self.assertEqual(raw_volume("30"), 30)
         with self.assertRaisesRegex(argparse.ArgumentTypeError, "between 0 and 30"):
             raw_volume("31")
+
+    def test_parses_sleep_timer_seconds(self) -> None:
+        self.assertEqual(sleep_seconds("0"), 0)
+        self.assertEqual(sleep_seconds("1200"), 1200)
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "between 0 and 86400"):
+            sleep_seconds("86401")
 
 
 class TargetResolutionTests(TestCase):
@@ -58,6 +66,40 @@ class TargetResolutionTests(TestCase):
             local_addresses=None,
             scan=True,
         )
+
+
+class SleepTimerControlTests(TestCase):
+    @patch("wambridge.control_cli.set_sleep_timer")
+    def test_arms_sleep_timer(self, timer_mock) -> None:
+        lines = set_sleep_timer_action(
+            Target("10.0.0.118", 55001),
+            1200,
+            retries=1,
+            retry_delay=0,
+        )
+
+        timer_mock.assert_called_once_with(
+            "10.0.0.118", 1200, port=55001, timeout=3.0
+        )
+        self.assertEqual(
+            lines,
+            ["action=sleep-timer", "seconds=1200", "state=armed"],
+        )
+
+    @patch("wambridge.control_cli.set_sleep_timer")
+    def test_zero_cancels_sleep_timer(self, timer_mock) -> None:
+        lines = set_sleep_timer_action(
+            Target("10.0.0.118", 55001),
+            0,
+            retries=1,
+            retry_delay=0,
+        )
+
+        timer_mock.assert_called_once_with(
+            "10.0.0.118", 0, port=55001, timeout=3.0
+        )
+        self.assertIn("state=off", lines)
+
 
 
 class EmergencyControlTests(TestCase):

@@ -24,12 +24,14 @@ from .connections import (
 )
 from .profiles import ProfileError, ProfileStore, resolve_device
 from .samsung import (
+    MAX_SLEEP_TIMER_SECONDS,
     WamApiError,
     WamStatus,
     get_mute,
     get_status,
     get_volume,
     set_mute,
+    set_sleep_timer,
     set_volume,
     stop_playback,
 )
@@ -64,6 +66,13 @@ class Verification:
 raw_volume = bounded_int("volume", minimum=RAW_MIN_VOLUME, maximum=RAW_MAX_VOLUME)
 """Parse the raw 0..30 volume scale measured on the physical M5."""
 
+sleep_seconds = bounded_int(
+    "sleep timer seconds",
+    minimum=0,
+    maximum=MAX_SLEEP_TIMER_SECONDS,
+)
+"""Parse the measured SetSleepTimer range; zero cancels a pending timer."""
+
 positive_int = bounded_int("retries", minimum=1)
 """Parse a positive retry count."""
 
@@ -87,12 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
             "volume-down",
             "safe-volume",
             "set-volume",
+            "sleep-timer",
         ),
     )
     parser.add_argument(
         "--level",
         type=raw_volume,
         help="Raw 0..30 level for set-volume",
+    )
+    parser.add_argument(
+        "--seconds",
+        type=sleep_seconds,
+        help="Seconds for sleep-timer; zero cancels a pending timer",
     )
     add_target_arguments(parser, device_help="Saved device alias; defaults to M5")
     parser.add_argument(
@@ -381,6 +396,29 @@ def set_exact_volume(
     return [f"action={action}", f"volume={level}"]
 
 
+def set_sleep_timer_action(
+    target: Target,
+    seconds: int,
+    *,
+    retries: int,
+    retry_delay: float,
+) -> list[str]:
+    """Arm or cancel the speaker sleep timer without touching playback state."""
+    success, error = _attempt(
+        f"set sleep timer {seconds}",
+        lambda: set_sleep_timer(target.ip, seconds, port=target.port, timeout=3.0),
+        retries=retries,
+        retry_delay=retry_delay,
+    )
+    if not success:
+        raise ControlError(f"Could not set sleep timer: {error}")
+    return [
+        "action=sleep-timer",
+        f"seconds={seconds}",
+        f"state={'off' if seconds == 0 else 'armed'}",
+    ]
+
+
 def set_safe_volume(
     target: Target,
     safe_volume: int,
@@ -438,6 +476,15 @@ def run(args: argparse.Namespace) -> list[str]:
             target,
             args.level,
             action="set-volume",
+            retries=args.retries,
+            retry_delay=args.retry_delay,
+        )
+    if args.action == "sleep-timer":
+        if args.seconds is None:
+            raise ControlError("sleep-timer requires --seconds")
+        return prefix + set_sleep_timer_action(
+            target,
+            args.seconds,
             retries=args.retries,
             retry_delay=args.retry_delay,
         )

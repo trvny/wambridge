@@ -14,6 +14,8 @@ Current implementation and remaining control-surface work for `foo_out_wam`.
 - `Playback -> WAM Bridge` submenu containing:
   - Emergency stop,
   - Stop & mute,
+  - Start sleep timer,
+  - Cancel sleep timer,
   - Volume up,
   - Volume down,
   - Volume to safe level.
@@ -79,11 +81,11 @@ Optional keys and overrides:
   helper of a playback session may start at, `0..30`, default `3`, `0` disables. Not a
   volume limit — the slider governs everything after the start. See the section below for
   why the slider needs this and a configured `volume` does not,
-- `sleep_after_stop` or `WAMBRIDGE_SLEEP_AFTER_STOP`, seconds of sleep timer armed once a
-  stream ends, `0..86400`, default `0` (off). `SetSleepTimer` is the only power lever this
-  firmware answers, and it stays opt-in because powering the speaker down is the listener's
-  decision — the speaker does go dark on its own once every program has let go, so this is a
-  fallback rather than the mechanism. See the prose below for what it does not cover,
+- `sleep_after_stop` or `WAMBRIDGE_SLEEP_AFTER_STOP`, `0..86400`, default `0` (off). The same
+  number is the single duration source for two opt-in paths: the automatic timer armed when a
+  stream ends, and `Playback -> WAM Bridge -> Start sleep timer`. `Cancel sleep timer` sends
+  zero. `SetSleepTimer` is the only power lever this firmware answers, while ordinary released
+  playback still reaches standby on its own. See the prose below for teardown caveats,
 - `diagnostics=1` or `WAMBRIDGE_DIAGNOSTICS=1` for the per-second `CLOCK` line in the
   console (`target`, `offered`, `submitted`, `played`, `queued`, `write`, `buffered`,
   `free`, `capacity`, flags). Off by default. One line a second for the first 240 of each
@@ -164,15 +166,24 @@ would make `holding=0` mean "nobody checked", which is the failure this reading 
 prevent. A killed session's sockets are untouched by any of this — their owner is gone, so
 its PID cannot match.
 
-`sleep_after_stop` arms `SetSleepTimer` once the stream ends, in seconds, `0` and off by
-default. It is the only lever this firmware answers *on demand*, and it is opt-in because
-powering the speaker down is the listener's decision.
+`sleep_after_stop` is the one configured duration for the speaker timer, in seconds, `0` and
+off by default. It is used automatically once a stream ends and by the explicit `Start sleep
+timer` menu command; `Cancel sleep timer` sends zero. While a PCM helper is active, the menu
+command rides its existing loopback control channel and persistent `55001` connection, so it
+does not create the competing socket that previously destabilised playback.
 
-In normal use it is not needed at all. Since the stream path tells the speaker the stream is
-over, a released speaker reaches its own idle standby unaided — measured at 17 min 4 s. The
-timer is worth arming when something might not let go, not as the way the speaker goes dark.
+An explicit menu timer owns its original deadline. The component stores only that absolute
+deadline as internal state in `foobar.ini`, so a seek/helper replacement or foobar restart
+does not clear it or restart its countdown. While it remains live, replacement helpers run
+with the automatic after-stop timer suppressed and skip the normal pending-timer clear. Stop
+also leaves that deadline alone. Cancelling the menu timer restores the ordinary automatic
+after-stop behaviour. The M5 clears a fired timer itself.
 
-It is **not finished**, and the gap is in the seek path. A seek restarts the helper
+In normal use a timer is not needed at all. Since the stream path tells the speaker the stream
+is over, a released speaker reaches its own idle standby unaided — measured at 17 min 4 s. The
+timer is worth arming when an exact deadline is wanted or something might not let go.
+
+The **automatic after-stop path is still not finished**, and the gap is in the seek path. A seek restarts the helper
 mid-session, so the departing helper arms a timer that the stream replacing it never asked
 for. The replacement clears any pending timer before offering its stream, which closes the
 common case but is a race, not a guarantee: it only gets there after discovery, probing and
@@ -247,13 +258,11 @@ Emergency stop and standby stop foobar before invoking the control helper. Comma
 serialized so button presses cannot launch overlapping control processes. Physical volume
 commands operate in raw M5 steps.
 
-Standby is misnamed. It stops and mutes, which leaves the speaker lit and fully powered.
-The state a user recognises as the speaker sleeping now arrives on its own: since PR #48 the
-stream path tells the speaker the stream is over, and a released speaker goes dark after its
-own idle interval - measured at 17 min 4 s. `SetSleepTimer`, exposed as `sleep_after_stop`,
-reaches that state *on demand* and is a fallback rather than the mechanism. Renaming this menu
-item or pointing it at the same timer is still open work. See the standby section of
-`docs/WAM_PROTOCOL.md`.
+The old `Standby` label was misleading and is now `Stop & mute`: that action stops playback
+and mutes the speaker but does not claim to enter network standby. The state a user recognises
+as sleeping still arrives on its own after release, measured at 17 min 4 s, or on demand via
+`SetSleepTimer`. The separate Start/Cancel sleep-timer menu commands use the configured
+`sleep_after_stop` duration. See the standby section of `docs/WAM_PROTOCOL.md`.
 
 Left alone the speaker reaches standby by itself in under 17 minutes (measured 2026-08-16),
 so the menu item is a convenience, not the only route. Earlier notes in this repo claimed the

@@ -301,6 +301,30 @@ bool send_control_over_helper(const std::string& command) {
     return true;
 }
 
+std::optional<bool> send_control_with_reply_over_helper(const std::string& command) {
+    std::lock_guard lock(g_controlMutex);
+    if (g_controlSocket == INVALID_SOCKET) return std::nullopt;
+    const int sent = send(
+        g_controlSocket, command.c_str(), static_cast<int>(command.size()), 0
+    );
+    if (sent != static_cast<int>(command.size())) {
+        close_control_socket_locked();
+        return false;
+    }
+
+    char reply[16]{};
+    const int received = recv(g_controlSocket, reply, sizeof(reply) - 1, 0);
+    if (received <= 0) {
+        close_control_socket_locked();
+        return false;
+    }
+    std::string text(reply, reply + received);
+    while (!text.empty() && (text.back() == '\r' || text.back() == '\n')) {
+        text.pop_back();
+    }
+    return text == "ok";
+}
+
 // Connect to a loopback listener the helper announced, hand over its token and
 // keep the socket. Returns quietly on failure: a slider that cannot reach the
 // helper falls back to the control process, which is what it did before.
@@ -324,13 +348,21 @@ bool open_control_socket(unsigned short port, const std::string& token) {
 
     // A blocked send must not hold the slider thread: the level is already
     // stale by the time anything is that slow.
-    DWORD timeout = 1000;
+    DWORD sendTimeout = 1000;
     setsockopt(
         handle,
         SOL_SOCKET,
         SO_SNDTIMEO,
-        reinterpret_cast<const char*>(&timeout),
-        sizeof(timeout)
+        reinterpret_cast<const char*>(&sendTimeout),
+        sizeof(sendTimeout)
+    );
+    DWORD receiveTimeout = 1500;
+    setsockopt(
+        handle,
+        SOL_SOCKET,
+        SO_RCVTIMEO,
+        reinterpret_cast<const char*>(&receiveTimeout),
+        sizeof(receiveTimeout)
     );
 
     const std::string greeting = token + "\n";
@@ -970,9 +1002,13 @@ private:
         // "the feature is off" from "nobody said", and the two need different
         // behaviour: the second still has to clear a timer an earlier helper
         // armed under a setting that has since changed.
+        const bool menuSleepTimerActive = wam::menu_sleep_timer_active();
+        const int sleepAfterStopSeconds = menuSleepTimerActive
+            ? 0
+            : m_settings.sleepAfterStopSeconds;
         command += L" --sleep-after-stop " +
-            std::to_wstring(m_settings.sleepAfterStopSeconds);
-        if (m_sleepTimerArmed.load()) {
+            std::to_wstring(sleepAfterStopSeconds);
+        if (m_sleepTimerArmed.load() && !menuSleepTimerActive) {
             command += L" --clear-sleep-timer";
         }
         // Three rules, in the order that makes them agree.
@@ -1771,6 +1807,12 @@ bool send_volume_over_helper(int step) {
 
 bool send_pause_over_helper(bool paused) {
     return send_control_over_helper(paused ? "pause\n" : "resume\n");
+}
+
+std::optional<bool> send_sleep_timer_over_helper(int seconds) {
+    return send_control_with_reply_over_helper(
+        "sleep " + std::to_string(seconds) + "\n"
+    );
 }
 
 void note_speaker_step(int step) {

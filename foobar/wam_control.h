@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 // Narrow bridge from the output adapter to the control-helper dispatcher.
 // Everything in wam_menu.cpp lives in an anonymous namespace, so routing the
 // volume slider to the speaker needs this one declaration rather than an
@@ -33,6 +35,17 @@ bool send_volume_over_helper(int step);
 // writes raw speaker volume 0 and restores the previous level while the output
 // continues feeding paced silence. False leaves the PCM pause fallback intact.
 bool send_pause_over_helper(bool paused);
+
+// Arm or cancel the M5 sleep timer over the active helper. nullopt means there
+// is no helper, true means the helper accepted the request, false means its
+// local control channel rejected or lost the request.
+std::optional<bool> send_sleep_timer_over_helper(int seconds);
+
+// Remember an explicit menu timer in the existing foobar INI so a helper
+// replacement or foobar restart does not mistake it for a teardown timer and
+// clear it on playback startup. Zero clears the remembered timer.
+void note_menu_sleep_timer(int seconds);
+bool menu_sleep_timer_active();
 
 // Tell the output that the speaker is now at this raw step because something
 // other than the slider moved it.

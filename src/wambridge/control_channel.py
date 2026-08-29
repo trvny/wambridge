@@ -22,6 +22,8 @@ import socket
 import threading
 from collections.abc import Callable
 
+from .samsung import MAX_SLEEP_TIMER_SECONDS
+
 LOGGER = logging.getLogger(__name__)
 
 MAX_COMMAND_BYTES = 256
@@ -39,11 +41,13 @@ class ControlChannel:
         set_volume: Callable[[int], None],
         *,
         set_paused: Callable[[bool], None] | None = None,
+        set_sleep_timer: Callable[[int], None] | None = None,
         minimum_volume: int = 0,
         maximum_volume: int = 30,
     ) -> None:
         self._set_volume = set_volume
         self._set_paused = set_paused
+        self._set_sleep_timer = set_sleep_timer
         self._minimum_volume = minimum_volume
         self._maximum_volume = maximum_volume
         # Loopback only. This accepts commands that move a speaker in someone's
@@ -173,6 +177,24 @@ class ControlChannel:
             except Exception:  # helper boundary: a failed command is not fatal
                 LOGGER.warning("Control %s failed", command, exc_info=True)
             return None
+        if command == "sleep":
+            if self._set_sleep_timer is None:
+                LOGGER.warning("Ignoring unavailable sleep command %r", line)
+                return "error"
+            try:
+                seconds = int(argument)
+            except ValueError:
+                LOGGER.warning("Ignoring sleep command with argument %r", argument)
+                return "error"
+            if not 0 <= seconds <= MAX_SLEEP_TIMER_SECONDS:
+                LOGGER.warning("Ignoring out-of-range sleep timer %s", seconds)
+                return "error"
+            try:
+                self._set_sleep_timer(seconds)
+            except Exception:
+                LOGGER.warning("Control sleep %s failed", seconds, exc_info=True)
+                return "error"
+            return "ok"
         if command != "volume":
             LOGGER.warning("Ignoring unknown control command %r", command)
             return
