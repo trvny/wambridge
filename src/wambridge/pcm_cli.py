@@ -270,6 +270,11 @@ class PlaybackWatcher:
         self._sleep_after_stop = sleep_after_stop
         self._clear_sleep_timer = clear_sleep_timer
         self._released = False
+        # Guards the check-then-set on _released. Single-threaded until the
+        # control channel's dispatch thread could call release()/discard()
+        # concurrently with __exit__'s own call - both must not pass the
+        # `if self._released` check in the same instant.
+        self._release_lock = threading.Lock()
         # Carries the sleep field from the start. A session whose __enter__
         # raises never reaches release(), and this default is what the teardown
         # line prints - so without it that one path reports a shorter line than
@@ -354,9 +359,30 @@ class PlaybackWatcher:
         gone away must not turn a stop into a second failure. What happened is
         recorded in ``release_summary`` for the protocol line instead.
         """
-        if self._released:
-            return
-        self._released = True
+        self._release(arm_sleep_timer=True)
+
+    def discard(self) -> None:
+        """Release the speaker without arming a sleep timer.
+
+        For the component replacing this helper (a seek or format change),
+        not for ending the listening session. The stop and the paused-volume
+        restore still run - the old session really is over from the
+        speaker's side until the replacement helper starts, and skipping
+        them risks the exact "still lit the next morning" failure
+        ``release()`` exists to prevent, since ``flush()`` can run this
+        before the component has fully decided the process is ending rather
+        than being replaced. Only the sleep timer is what a replacement must
+        not arm: it would put the speaker to sleep mid-track, which is
+        exactly what ``cancel_sleep_timer()`` exists to race against today.
+        """
+        self._release(arm_sleep_timer=False)
+
+    def _release(self, *, arm_sleep_timer: bool) -> None:
+        """Shared body of ``release()`` and ``discard()`` - see their docstrings."""
+        with self._release_lock:
+            if self._released:
+                return
+            self._released = True
         # A stop, track change or foobar shutdown does not have to deliver a
         # matching resume callback. Restore the raw volume we replaced with 0 for pause
         # while the persistent 55001 connection is still alive.
@@ -414,6 +440,15 @@ class PlaybackWatcher:
         if rejection:
             LOGGER.warning("%s while releasing the speaker", rejection)
 
+        if not arm_sleep_timer:
+            # discard(): a replacement is coming, and it will keep the speaker
+            # awake on its own - arming here is exactly the race
+            # cancel_sleep_timer() exists to clear after the fact.
+            # Not "sleep=skipped" - _unarmed_sleep_field already gives that
+            # string a different meaning (configured but nothing to arm
+            # after), and it would collide here with a genuine "stop=sent".
+            self.release_summary += " sleep=discarded"
+            return
         if self._sleep_after_stop <= 0:
             self.release_summary += " sleep=off"
             return
@@ -1149,6 +1184,8 @@ def run(
             with ControlChannel(
                 watcher.set_volume,
                 set_paused=watcher.set_pause_volume,
+                set_release=watcher.release,
+                set_discard=watcher.discard,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

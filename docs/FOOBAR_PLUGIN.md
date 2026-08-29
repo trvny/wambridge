@@ -233,6 +233,16 @@ the slider on behalf of a helper being killed. And the reported step must not ex
 `volume_max`, because the inverse mapping clamps to that ceiling, so syncing a higher level
 would write the ceiling back and quietly turn the speaker *down*.
 
+The same `CONTROL_PORT` connection also carries `volume <n>`, `pause`/`resume` and, since the
+release/discard work, two more one-word commands: `release` (a real stop - the component sends
+this before it starts killing the helper, so `PlaybackWatcher.release()` runs immediately over
+the connection already open rather than waiting on the helper's own exit, which an encoder that
+never exits could otherwise delay) and `discard` (a replacement helper is about to take over,
+e.g. a seek or format change - the same release minus arming a sleep timer, since the
+replacement will keep the speaker awake on its own). All five are best effort: a failed or
+unknown command is logged and the connection stays open, because the stream matters more than
+any one of them.
+
 **The mapping was never the problem.** Measured by ear on the M5 on 2026-08-15, slider onto
 `0..10`: `1` inaudible, `2` barely there, `3` a little more, `4` clearly louder, `5`
 distinct, `6` enough to cut through conversation, `7` comfortable listening. No cliff

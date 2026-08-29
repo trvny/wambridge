@@ -366,6 +366,15 @@ public:
     }
 
     ~WamOutput() {
+        // First, and before m_mutex: this is a real stop, and the control
+        // socket is still open here - stop_child() below closes it. Sending
+        // now tells the helper's release() to run immediately rather than
+        // waiting on its own exit path, which an encoder that never exits
+        // could delay well past the point this destructor has already
+        // decided to tear everything down. Best effort: if the channel never
+        // connected, the helper's own unconditional release()-on-exit is
+        // still the fallback this does not replace.
+        wam::send_release_over_helper();
         {
             std::lock_guard lock(m_mutex);
             m_shutdown = true;
@@ -455,6 +464,10 @@ public:
         throw_if_failed_locked();
         if (m_paused.load()) return 0;
 
+        // Send only after the lock releases below - see the m_mutex note on
+        // flush()'s wam::send_discard_over_helper() call.
+        bool formatChanged = false;
+
         const unsigned sampleRate = chunk.get_sample_rate();
         const unsigned channels = chunk.get_channels();
         if (sampleRate != m_sampleRate || channels != m_channels) {
@@ -477,6 +490,7 @@ public:
             m_playing.store(false);
             m_childStopping.store(true);
             cancel_child();
+            formatChanged = true;
         }
 
         refresh_playback_clock_locked(std::chrono::steady_clock::now());
@@ -501,6 +515,13 @@ public:
         }
 
         lock.unlock();
+        // Outside m_mutex: send_control_over_helper blocks on a 1 s socket
+        // send under g_controlMutex, and m_mutex gates the decoder thread,
+        // update_v2 and the worker. cancel_child() already ran above, inside
+        // the lock - it only touches stdin/sync IO, never the control
+        // socket, so sending after the unlock is still to the helper being
+        // replaced, not to whatever takes its place.
+        if (formatChanged) wam::send_discard_over_helper();
         m_cv.notify_all();
         return takenFrames;
     }
@@ -567,6 +588,11 @@ public:
     }
 
     void flush() override {
+        // Before the lock: send_control_over_helper blocks on a 1 s socket
+        // send under g_controlMutex, and m_mutex below gates the decoder
+        // thread, update_v2 and the worker - the same constraint documented
+        // on submit_chunk()'s format-change branch.
+        wam::send_discard_over_helper();
         {
             std::lock_guard lock(m_mutex);
             m_queue.clear();
@@ -1771,6 +1797,14 @@ bool send_volume_over_helper(int step) {
 
 bool send_pause_over_helper(bool paused) {
     return send_control_over_helper(paused ? "pause\n" : "resume\n");
+}
+
+bool send_release_over_helper() {
+    return send_control_over_helper("release\n");
+}
+
+bool send_discard_over_helper() {
+    return send_control_over_helper("discard\n");
 }
 
 void note_speaker_step(int step) {
