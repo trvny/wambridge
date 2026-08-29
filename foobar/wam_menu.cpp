@@ -367,7 +367,7 @@ public:
 
 private:
     const std::atomic<unsigned long long>* m_generation;
-    const unsigned long long m_token;
+    unsigned long long m_token;
 };
 
 class SleepTimerCoordinator {
