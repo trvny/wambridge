@@ -309,20 +309,25 @@ std::optional<bool> send_control_with_reply_over_helper(const std::string& comma
     );
     if (sent != static_cast<int>(command.size())) {
         close_control_socket_locked();
-        return false;
+        return std::optional<bool>{false};
     }
 
-    char reply[16]{};
-    const int received = recv(g_controlSocket, reply, sizeof(reply) - 1, 0);
+    std::array<char, 16> reply{};
+    const int received = recv(
+        g_controlSocket,
+        reply.data(),
+        static_cast<int>(reply.size() - 1),
+        0
+    );
     if (received <= 0) {
         close_control_socket_locked();
-        return false;
+        return std::optional<bool>{false};
     }
-    std::string text(reply, reply + received);
+    std::string text(reply.data(), static_cast<size_t>(received));
     while (!text.empty() && (text.back() == '\r' || text.back() == '\n')) {
         text.pop_back();
     }
-    return text == "ok";
+    return std::optional<bool>{text == "ok"};
 }
 
 // Connect to a loopback listener the helper announced, hand over its token and

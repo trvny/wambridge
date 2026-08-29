@@ -17,6 +17,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -28,8 +29,12 @@ constexpr int kMaximumRawVolume = 30;
 constexpr int kMaximumLegacyVolume = 100;
 constexpr int kMaximumSleepTimerSeconds = 86400;
 constexpr size_t kMaximumLoggedOutput = 2000;
-constexpr wchar_t kMenuSleepDeadlineKey[] = L"menu_sleep_timer_deadline";
-std::mutex g_sleepTimerStateMutex;
+constexpr std::wstring_view kMenuSleepDeadlineKey{L"menu_sleep_timer_deadline"};
+
+std::mutex& sleep_timer_state_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
 
 // Used only as a stable address inside this component module.
 // {FC099CF9-0DA5-4F52-A5DD-F8DF35EA6C55}
@@ -318,14 +323,14 @@ bool write_menu_sleep_deadline(int seconds) {
     const auto value = std::to_wstring(deadline);
     return WritePrivateProfileStringW(
         L"wambridge",
-        kMenuSleepDeadlineKey,
+        kMenuSleepDeadlineKey.data(),
         value.c_str(),
         config_path().c_str()
     ) != 0;
 }
 
 bool menu_sleep_timer_active_impl() {
-    const auto raw = ini_value(kMenuSleepDeadlineKey, L"0", config_path());
+    const auto raw = ini_value(kMenuSleepDeadlineKey.data(), L"0", config_path());
     wchar_t* end = nullptr;
     const long long deadline = std::wcstoll(raw.c_str(), &end, 10);
     if (end == raw.c_str() || *end != L'\0' || deadline <= epoch_seconds_now()) {
@@ -858,7 +863,7 @@ mainmenu_commands_factory_t<WamMenuCommands> g_wamMenuCommands;
 namespace wam {
 
 void note_menu_sleep_timer(int seconds) {
-    std::lock_guard lock(g_sleepTimerStateMutex);
+    std::lock_guard lock(sleep_timer_state_mutex());
     if (!write_menu_sleep_deadline(seconds)) {
         console::printf(
             "%s: could not remember sleep timer deadline (Windows error %u)",
@@ -869,7 +874,7 @@ void note_menu_sleep_timer(int seconds) {
 }
 
 bool menu_sleep_timer_active() {
-    std::lock_guard lock(g_sleepTimerStateMutex);
+    std::lock_guard lock(sleep_timer_state_mutex());
     return menu_sleep_timer_active_impl();
 }
 
