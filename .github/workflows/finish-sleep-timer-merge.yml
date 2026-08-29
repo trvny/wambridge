@@ -29,6 +29,27 @@ jobs:
           git config user.email '314538226+gptomek[bot]@users.noreply.github.com'
           git merge --no-commit --no-ff -X theirs origin/main
           test -z "$(git diff --name-only --diff-filter=U)"
+      - name: Reconcile overlapping sleep control helper
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("foobar/foo_out_wam.cpp")
+          text = path.read_text(encoding="utf-8")
+          symbol = "std::optional<bool> send_sleep_timer_over_helper(int seconds)"
+          if symbol not in text:
+              marker = "bool send_release_over_helper() {"
+              if marker not in text:
+                  raise SystemExit("release helper insertion point is missing")
+              block = '''std::optional<bool> send_sleep_timer_over_helper(int seconds) {
+              return send_control_with_reply_over_helper(
+                  "sleep " + std::to_string(seconds) + "\\n"
+              );
+          }
+
+          '''
+              text = text.replace(marker, block + marker, 1)
+              path.write_text(text, encoding="utf-8")
       - name: Assert both control paths survived
         shell: bash
         run: |
@@ -45,7 +66,9 @@ jobs:
           }
           check 'send_release_over_helper' foobar/foo_out_wam.cpp
           check 'send_discard_over_helper' foobar/foo_out_wam.cpp
+          check 'send_control_with_reply_over_helper' foobar/foo_out_wam.cpp
           check 'send_sleep_timer_over_helper' foobar/foo_out_wam.cpp
+          check 'send_sleep_timer_over_helper' foobar/wam_control.h
           check 'menu_sleep_timer_active' foobar/foo_out_wam.cpp
           check 'set_release' src/wambridge/control_channel.py
           check 'set_discard' src/wambridge/control_channel.py
