@@ -8,7 +8,8 @@ the M5 through local HTTP and `SetUrlPlayback`.
 The component is merged on `main` and validated on the physical M5. PR #21 passed the full
 normal-speed track and transition checklist on 2026-08-02; later measurements kept FLAC as
 the default, validated WAV transport, and reduced the default extra host buffer to zero.
-Support outside the measured M5/WAM550-551 envelope remains experimental.
+Support outside the measured physical M5 (`SPK-WAM550`) remains experimental. WAM551 is
+an intended M5-family target, but is not yet hardware-validated.
 
 ## Requirements
 

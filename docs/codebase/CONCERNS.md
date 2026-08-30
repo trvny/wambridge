@@ -7,7 +7,7 @@
 | high | Dead `SetUrlPlayback` target can wedge recovery commands until power-cycle | `samsung.py`, `SamsungWamChannel.kt` | user-visible hard failure | preserve reachability guard on every URL-offer path |
 | high | Physical firmware is stateful and timing-sensitive; extra 55001 clients/CPM bursts change behavior | `docs/WAM_PROTOCOL.md`, `AGENTS.md` | regressions can look nondeterministic | keep one connection where possible and validate transport changes on M5 |
 | medium | Large transport/lifecycle state machines concentrate responsibility | `pcm_cli.py`, `foo_out_wam.cpp`, `UpnpRenderer.kt` | risky edits and race regressions | change narrowly and pin every observed failure with tests |
-| medium | Compatibility evidence is one M5 firmware/model | `README.md`, `docs/WAM_PROTOCOL.md` | behavior on other WAM units is unknown | stay M5/WAM550-551-first; generalize only after measurements on additional hardware |
+| medium | Compatibility evidence is one physical M5 (`SPK-WAM550`) | `README.md`, `docs/WAM_PROTOCOL.md` | behavior on WAM551 and other WAM units is unknown | stay physical-M5/WAM550-first; generalize only after measurements on additional hardware |
 | medium | Documentation can contradict newer measured history | `foobar/README.md` vs root/status docs | wrong next-step decisions | treat newest measured status as authoritative and extend drift tests |
 
 ## 2) Technical Debt
@@ -28,7 +28,7 @@ The product is latency-sensitive rather than throughput-scaled. The dominant del
 Recent 90-day churn is highest in `README.md`, `docs/DEVELOPMENT_STATUS.md`, `docs/WAM_PROTOCOL.md`, `foobar/foo_out_wam.cpp`, `tests/test_foobar_source.py`, `src/wambridge/samsung.py`, `src/wambridge/pcm_cli.py`, and Android service/activity files. Safe changes should read the latest status/protocol notes first, preserve measured comments, and run unit/source-contract tests before hardware work.
 
 ## 6) Resolved Project Decisions
-1. M5/WAM550-551 is the compatibility target now. Generalize to other Samsung WAM models later, after measured hardware evidence rather than speculative compatibility layers.
+1. The physical M5 (`SPK-WAM550`) is the compatibility target now. WAM551 and other Samsung WAM models come later, after measured hardware evidence rather than speculative compatibility layers.
 2. Prefer the current stable Python baseline instead of preserving Python 3.13 compatibility for its own sake. As of this map, CI already runs Python 3.14; package and Ruff metadata should follow that baseline in a focused config change.
 3. `foobar/README.md` is living documentation and should describe the current merged/validated state, not remain a historical PR #21 snapshot.
 
