@@ -22,6 +22,8 @@ import socket
 import threading
 from collections.abc import Callable
 
+from .samsung import MAX_SLEEP_TIMER_SECONDS
+
 LOGGER = logging.getLogger(__name__)
 
 MAX_COMMAND_BYTES = 256
@@ -41,6 +43,7 @@ class ControlChannel:
         set_paused: Callable[[bool], None] | None = None,
         set_release: Callable[[], None] | None = None,
         set_discard: Callable[[], None] | None = None,
+        set_sleep_timer: Callable[[int], None] | None = None,
         minimum_volume: int = 0,
         maximum_volume: int = 30,
     ) -> None:
@@ -53,6 +56,7 @@ class ControlChannel:
         # than the command.
         self._set_release = set_release
         self._set_discard = set_discard
+        self._set_sleep_timer = set_sleep_timer
         self._minimum_volume = minimum_volume
         self._maximum_volume = maximum_volume
         # Loopback only. This accepts commands that move a speaker in someone's
@@ -192,23 +196,42 @@ class ControlChannel:
             except Exception:  # helper boundary: a failed command is not fatal
                 LOGGER.warning("Control %s failed", command, exc_info=True)
             return None
+        if command == "sleep":
+            if self._set_sleep_timer is None:
+                LOGGER.warning("Ignoring unavailable sleep command %r", line)
+                return "error"
+            try:
+                seconds = int(argument)
+            except ValueError:
+                LOGGER.warning("Ignoring sleep command with argument %r", argument)
+                return "error"
+            if not 0 <= seconds <= MAX_SLEEP_TIMER_SECONDS:
+                LOGGER.warning("Ignoring out-of-range sleep timer %s", seconds)
+                return "error"
+            try:
+                self._set_sleep_timer(seconds)
+            except Exception:
+                LOGGER.warning("Control sleep %s failed", seconds, exc_info=True)
+                return "error"
+            return "ok"
         if command != "volume":
             LOGGER.warning("Ignoring unknown control command %r", command)
-            return
+            return None
         try:
             level = int(argument)
         except ValueError:
             LOGGER.warning("Ignoring volume command with argument %r", argument)
-            return
+            return None
         if not self._minimum_volume <= level <= self._maximum_volume:
             LOGGER.warning("Ignoring out-of-range volume %s", level)
-            return
+            return None
         try:
             self._set_volume(level)
         except Exception:  # helper boundary: a failed command is not fatal
             # The stream matters more than the command. A rejected SetVolume
             # must not take playback down with it.
             LOGGER.warning("Control volume %s failed", level, exc_info=True)
+        return None
 
 
 def _shutdown_quietly(client: socket.socket) -> None:

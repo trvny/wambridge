@@ -29,15 +29,19 @@ volume=4
 ; at 0-167 ms. Higher values add queue and therefore almost the same amount of delay.
 ;buffer_extra=1000
 
-; Seconds of sleep timer armed once a stream ends, 0..86400, default 0 (off).
+; Sleep-timer seconds, 0..86400, default 0 (off). This is the one duration
+; used both after a stream ends and by Playback -> WAM Bridge -> Start sleep timer.
+; Cancel sleep timer sends 0 without changing this preference.
 ; A fallback, not the mechanism. The M5 does go dark on its own once every
 ; program talking to it has let go, and the helper now tells the speaker the
 ; stream is over for exactly that reason. What this firmware has no control
 ; over is that idle power-down - GetPowerSaving and GetAutoPowerDown do not
 ; exist - so SetSleepTimer is the only thing it answers if releasing is not
 ; enough on its own.
-; The timer clears itself once it fires, and is cleared again when the next
-; stream starts - but only within the same playback session, because nothing
+; A timer explicitly started from the foobar menu keeps its original deadline across
+; helper replacements and foobar restarts and is not cleared by playback startup.
+; The automatic after-stop timer is cleared again when the next stream starts - but only
+; within the same playback session, because nothing
 ; records across a foobar restart that one was ever armed. So arming a long
 ; timer, then setting this back to 0 and restarting foobar, leaves exactly one
 ; armed timer to fire once. Off by default, because powering the speaker down

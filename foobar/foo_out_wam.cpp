@@ -13,6 +13,7 @@
 #include "wam_settings.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -242,6 +243,13 @@ Settings load_settings() {
 // rather than atomic: connecting, sending and closing must not interleave.
 std::mutex g_controlMutex;
 SOCKET g_controlSocket = INVALID_SOCKET;
+// Distinguish "nothing is playing" from the short startup/teardown window in
+// which a helper exists but its loopback control socket does not. Falling back
+// to wambridge-control in the latter case would open a competing 55001 socket.
+std::atomic<bool>& helper_active() {
+    static std::atomic<bool> active{false};
+    return active;
+}
 
 // Read by the menu dispatcher through wam_control.h, which is a different
 // translation unit and has no access to the output's settings.
@@ -301,6 +309,47 @@ bool send_control_over_helper(const std::string& command) {
     return true;
 }
 
+std::optional<bool> send_control_with_reply_over_helper(const std::string& command) {
+    std::lock_guard lock(g_controlMutex);
+    if (g_controlSocket == INVALID_SOCKET) {
+        return helper_active().load()
+            ? std::optional<bool>{false}
+            : std::nullopt;
+    }
+    const int sent = send(
+        g_controlSocket, command.c_str(), static_cast<int>(command.size()), 0
+    );
+    if (sent != static_cast<int>(command.size())) {
+        close_control_socket_locked();
+        return std::optional<bool>{false};
+    }
+
+    std::string text;
+    text.reserve(16);
+    std::array<char, 16> chunk{};
+    while (text.size() < 64 && text.find('\n') == std::string::npos) {
+        const int received = recv(
+            g_controlSocket,
+            chunk.data(),
+            static_cast<int>(chunk.size()),
+            0
+        );
+        if (received <= 0) {
+            close_control_socket_locked();
+            return std::optional<bool>{false};
+        }
+        text.append(chunk.data(), static_cast<size_t>(received));
+    }
+    const auto newline = text.find('\n');
+    if (newline == std::string::npos) {
+        close_control_socket_locked();
+        return std::optional<bool>{false};
+    }
+    text.resize(newline);
+    if (!text.empty() && text.back() == '\r') text.pop_back();
+    return std::optional<bool>{text == "ok"};
+}
+
 // Connect to a loopback listener the helper announced, hand over its token and
 // keep the socket. Returns quietly on failure: a slider that cannot reach the
 // helper falls back to the control process, which is what it did before.
@@ -324,13 +373,21 @@ bool open_control_socket(unsigned short port, const std::string& token) {
 
     // A blocked send must not hold the slider thread: the level is already
     // stale by the time anything is that slow.
-    DWORD timeout = 1000;
+    DWORD sendTimeout = 1000;
     setsockopt(
         handle,
         SOL_SOCKET,
         SO_SNDTIMEO,
-        reinterpret_cast<const char*>(&timeout),
-        sizeof(timeout)
+        reinterpret_cast<const char*>(&sendTimeout),
+        sizeof(sendTimeout)
+    );
+    DWORD receiveTimeout = 1500;
+    setsockopt(
+        handle,
+        SOL_SOCKET,
+        SO_RCVTIMEO,
+        reinterpret_cast<const char*>(&receiveTimeout),
+        sizeof(receiveTimeout)
     );
 
     const std::string greeting = token + "\n";
@@ -996,9 +1053,13 @@ private:
         // "the feature is off" from "nobody said", and the two need different
         // behaviour: the second still has to clear a timer an earlier helper
         // armed under a setting that has since changed.
+        const bool menuSleepTimerActive = wam::menu_sleep_timer_active();
         command += L" --sleep-after-stop " +
             std::to_wstring(m_settings.sleepAfterStopSeconds);
-        if (m_sleepTimerArmed.load()) {
+        if (menuSleepTimerActive) {
+            command += L" --menu-sleep-timer-active";
+        }
+        if (m_sleepTimerArmed.load() && !menuSleepTimerActive) {
             command += L" --clear-sleep-timer";
         }
         // Three rules, in the order that makes them agree.
@@ -1318,6 +1379,7 @@ private:
             m_childStdin = stdinWrite;
             m_childStdout = stdoutRead;
         }
+        helper_active().store(true);
 
         // A helper process exists from here on, so from here on it is charged.
         note_start_attempt();
@@ -1704,6 +1766,7 @@ private:
             close_handle(m_childThread);
             close_handle(m_childProcess);
         }
+        helper_active().store(false);
         m_playing.store(false);
         m_childReachedPlaying.store(false);
 
@@ -1797,6 +1860,12 @@ bool send_volume_over_helper(int step) {
 
 bool send_pause_over_helper(bool paused) {
     return send_control_over_helper(paused ? "pause\n" : "resume\n");
+}
+
+std::optional<bool> send_sleep_timer_over_helper(int seconds) {
+    return send_control_with_reply_over_helper(
+        "sleep " + std::to_string(seconds) + "\n"
+    );
 }
 
 bool send_release_over_helper() {

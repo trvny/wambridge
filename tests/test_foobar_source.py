@@ -382,7 +382,15 @@ class FoobarSourceTests(TestCase):
         self.assertIn("m_pauseVolumeRequested.store(controlSent);", source)
         self.assertIn("sendSilence = m_flushing || m_paused.load();", source)
         self.assertIn("if (hadPauseVolumeRequest && !controlSent) m_restart = true;", source)
-        self.assertNotIn("SO_RCVTIMEO", source)
+        self.assertIn("SO_RCVTIMEO", source)
+        self.assertIn(
+            'return send_control_over_helper(paused ? "pause\\n" : "resume\\n");',
+            source,
+        )
+        self.assertIn(
+            'return send_control_with_reply_over_helper(',
+            source,
+        )
         self.assertIn('send_control_over_helper(paused ? "pause\\n" : "resume\\n")', source)
 
     def test_force_play_is_a_transient_drain_request(self) -> None:
@@ -450,7 +458,14 @@ class FoobarSourceTests(TestCase):
         self.assertIn('L"WAMBRIDGE_SLEEP_AFTER_STOP"', settings)
         self.assertIn('command += L" --sleep-after-stop " +', output)
         self.assertIn('command += L" --clear-sleep-timer";', output)
-        self.assertIn("if (m_sleepTimerArmed.load()) {", output)
+        self.assertIn("wam::menu_sleep_timer_active()", output)
+        self.assertIn("std::atomic<bool>& helper_active()", output)
+        self.assertIn("return helper_active().load()", output)
+        self.assertIn("while (text.size() < 64 && text.find('\\n') == std::string::npos)", output)
+        self.assertIn(
+            "if (m_sleepTimerArmed.load() && !menuSleepTimerActive) {",
+            output,
+        )
         self.assertIn("m_sleepTimerArmed.store(true);", output)
         self.assertIn("kMaximumSleepAfterStopSeconds", settings)
         self.assertIn('report_invalid(report, L"sleep_after_stop"', settings)

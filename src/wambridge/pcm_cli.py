@@ -143,6 +143,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--menu-sleep-timer-active",
+        action="store_true",
+        help=(
+            "Preserve an explicit menu-owned timer already accepted by the "
+            "speaker while retaining --sleep-after-stop for later release"
+        ),
+    )
+    parser.add_argument(
         "--clear-sleep-timer",
         action="store_true",
         help=(
@@ -262,12 +270,14 @@ class PlaybackWatcher:
         *,
         port: int,
         sleep_after_stop: int = 0,
+        menu_sleep_timer_active: bool = False,
         clear_sleep_timer: bool = False,
     ) -> None:
         self._speaker_ip = speaker_ip
         self._client_uuid = client_uuid.casefold()
         self._port = port
         self._sleep_after_stop = sleep_after_stop
+        self._menu_sleep_timer_active = menu_sleep_timer_active
         self._clear_sleep_timer = clear_sleep_timer
         self._released = False
         # Guards the check-then-set on _released. Single-threaded until the
@@ -449,6 +459,9 @@ class PlaybackWatcher:
             # after), and it would collide here with a genuine "stop=sent".
             self.release_summary += " sleep=discarded"
             return
+        if self._menu_sleep_timer_active:
+            self.release_summary += " sleep=menu"
+            return
         if self._sleep_after_stop <= 0:
             self.release_summary += " sleep=off"
             return
@@ -572,6 +585,25 @@ class PlaybackWatcher:
                     if self._current_volume == level:
                         self._current_volume = None
                 raise
+
+    def set_sleep_timer(self, seconds: int) -> None:
+        """Arm or cancel an explicit menu timer on the persistent connection.
+
+        While that timer is armed it owns the deadline. ``release()`` must not
+        replace it with ``sleep_after_stop`` merely because playback ended.
+        Cancelling it restores the normal automatic-after-stop behaviour.
+        """
+        self._send_command(
+            method=_SLEEP_COMMAND,
+            arguments=sleep_timer_arguments(seconds),
+        )
+        rejection = self.wait_for_response(
+            _SLEEP_COMMAND,
+            timeout=_STOP_ACK_TIMEOUT,
+        )
+        if rejection:
+            raise WamApiError(rejection)
+        self._menu_sleep_timer_active = seconds > 0
 
     def set_pause_volume(self, paused: bool) -> None:
         """Silence pause with raw volume 0 while preserving the live HTTP stream."""
@@ -1124,6 +1156,7 @@ def run(
             client_uuid,
             port=speaker_port,
             sleep_after_stop=args.sleep_after_stop,
+            menu_sleep_timer_active=args.menu_sleep_timer_active,
             clear_sleep_timer=args.clear_sleep_timer,
         )
         with watcher:
@@ -1186,6 +1219,7 @@ def run(
                 set_paused=watcher.set_pause_volume,
                 set_release=watcher.release,
                 set_discard=watcher.discard,
+                set_sleep_timer=watcher.set_sleep_timer,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

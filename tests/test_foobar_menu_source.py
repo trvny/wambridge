@@ -3,6 +3,9 @@ from unittest import TestCase
 
 
 SOURCE = Path(__file__).parents[1] / "foobar" / "wam_menu.cpp"
+OUTPUT_SOURCE = Path(__file__).parents[1] / "foobar" / "foo_out_wam.cpp"
+CONTROL_HEADER = Path(__file__).parents[1] / "foobar" / "wam_control.h"
+PCM_SOURCE = Path(__file__).parents[1] / "src" / "wambridge" / "pcm_cli.py"
 
 
 class FoobarMenuSourceTests(TestCase):
@@ -17,11 +20,69 @@ class FoobarMenuSourceTests(TestCase):
         for label in (
             "Emergency stop",
             "Stop & mute",
+            "Start sleep timer",
+            "Cancel sleep timer",
             "Volume up",
             "Volume down",
             "Volume to safe level",
         ):
             self.assertIn(f'"{label}"', source)
+
+    def test_sleep_timer_reuses_config_and_routes_through_active_helper(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        control_header = CONTROL_HEADER.read_text(encoding="utf-8")
+        pcm_source = PCM_SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn('L"WAMBRIDGE_SLEEP_AFTER_STOP"', source)
+        self.assertIn('L"sleep_after_stop"', source)
+        self.assertIn('L" --seconds "', source)
+        self.assertIn("wam::send_sleep_timer_over_helper", source)
+        self.assertIn("wam::note_menu_sleep_timer", source)
+        self.assertIn("void note_menu_sleep_timer(int seconds);", control_header)
+        self.assertIn('L"menu_sleep_timer_deadline"', source)
+        self.assertIn("set_sleep_timer=watcher.set_sleep_timer", pcm_source)
+
+    def test_replacement_helper_keeps_config_separate_from_menu_timer(self) -> None:
+        output_source = OUTPUT_SOURCE.read_text(encoding="utf-8")
+        control_header = CONTROL_HEADER.read_text(encoding="utf-8")
+        pcm_source = PCM_SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "std::to_wstring(m_settings.sleepAfterStopSeconds)",
+            output_source,
+        )
+        self.assertIn('command += L" --menu-sleep-timer-active";', output_source)
+        self.assertNotIn(
+            "const int sleepAfterStopSeconds = menuSleepTimerActive",
+            output_source,
+        )
+        self.assertIn("bool menu_sleep_timer_active();", control_header)
+        self.assertIn('"--menu-sleep-timer-active"', pcm_source)
+        self.assertIn(
+            "menu_sleep_timer_active=args.menu_sleep_timer_active",
+            pcm_source,
+        )
+
+    def test_sleep_timer_stops_foobar_before_speaker_deadline(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("kSleepTimerStopLeadSeconds = 2", source)
+        self.assertIn("class SleepTimerStopCallback", source)
+        self.assertIn("if (control->is_playing()) control->stop();", source)
+        self.assertIn("sleep_timer_coordinator().arm(*deadline);", source)
+        self.assertIn("m_generation.fetch_add(1);", source)
+        self.assertIn("if (m_generation->load() != m_token) return;", source)
+        self.assertIn("SleepTimerStopCallback>(&m_generation, token)", source)
+
+    def test_sleep_timer_coordinator_survives_persistence_failure(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        start = source.index("void note_menu_sleep_timer(int seconds)")
+        end = source.index("bool menu_sleep_timer_active()", start)
+        body = source[start:end]
+        failure = body.index("if (!write_menu_sleep_deadline(seconds))")
+        arm = body.index("sleep_timer_coordinator().arm", failure)
+
+        self.assertNotIn("return;", body[failure:arm])
 
     def test_control_action_logs_use_narrow_strings(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
@@ -52,7 +113,7 @@ class FoobarMenuSourceTests(TestCase):
         source = SOURCE.read_text(encoding="utf-8")
 
         queue_branch = source.index("out = std::move(m_queue.front());")
-        volume_branch = source.index("out = ControlAction{L\"set-volume\", step};")
+        volume_branch = source.index("out = ControlAction{L\"set-volume\", step, std::nullopt};")
         self.assertLess(queue_branch, volume_branch)
 
     def test_volume_requests_are_clamped_to_the_measured_range(self) -> None:

@@ -94,6 +94,11 @@ class FakePlaybackWatcher:
     def set_pause_volume(self, paused: bool) -> None:
         self.pause_volumes.append(paused)
 
+    @staticmethod
+    def set_sleep_timer(_seconds: int) -> None:
+        """Satisfy the real watcher contract; this fake records no timer state."""
+        return None
+
     def wait_for_start(self, *, timeout: float) -> None:
         self.waited = True
 
@@ -645,6 +650,7 @@ class PcmCliTests(TestCase):
         self,
         *,
         sleep_after_stop: int = 0,
+        menu_sleep_timer_active: bool = False,
         clear_sleep_timer: bool = False,
         rejection: str | None = None,
         rejection_method: str = "SetPlaybackControl",
@@ -658,6 +664,7 @@ class PcmCliTests(TestCase):
             CLIENT_UUID,
             port=55001,
             sleep_after_stop=sleep_after_stop,
+            menu_sleep_timer_active=menu_sleep_timer_active,
             clear_sleep_timer=clear_sleep_timer,
         )
         connection = FakeControlConnection(
@@ -878,6 +885,71 @@ class PcmCliTests(TestCase):
             [("SetPlaybackControl", [("playbackcontrol", "pause", "str")], False)],
         )
         self.assertEqual(watcher.release_summary, "stop=sent sleep=off")
+
+    def test_control_channel_sleep_timer_uses_persistent_connection(self) -> None:
+        watcher, connection = self._connected_watcher()
+
+        watcher.set_sleep_timer(1200)
+
+        self.assertEqual(
+            connection.sent[-1],
+            (
+                "SetSleepTimer",
+                [("option", "start", "str"), ("sleeptime", 1200, "dec")],
+                False,
+            ),
+        )
+
+    def test_menu_sleep_timer_keeps_its_deadline_on_release(self) -> None:
+        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+        watcher.arm()
+
+        watcher.set_sleep_timer(600)
+        watcher.release()
+
+        sleep_commands = [item for item in connection.sent if item[0] == "SetSleepTimer"]
+        self.assertEqual(len(sleep_commands), 1)
+        self.assertEqual(sleep_commands[0][1][-1], ("sleeptime", 600, "dec"))
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=menu")
+
+    def test_cancelling_menu_timer_restores_after_stop_timer(self) -> None:
+        watcher, connection = self._connected_watcher(sleep_after_stop=120)
+        watcher.arm()
+
+        watcher.set_sleep_timer(600)
+        watcher.set_sleep_timer(0)
+        watcher.release()
+
+        sleep_commands = [item for item in connection.sent if item[0] == "SetSleepTimer"]
+        self.assertEqual(
+            [item[1][-1] for item in sleep_commands],
+            [
+                ("sleeptime", 600, "dec"),
+                ("sleeptime", 0, "dec"),
+                ("sleeptime", 120, "dec"),
+            ],
+        )
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=120s")
+
+    def test_replacement_menu_timer_cancel_restores_after_stop_timer(self) -> None:
+        watcher, connection = self._connected_watcher(
+            sleep_after_stop=120,
+            menu_sleep_timer_active=True,
+        )
+        watcher.arm()
+
+        watcher.set_sleep_timer(0)
+        watcher.release()
+
+        sleep_commands = [item for item in connection.sent if item[0] == "SetSleepTimer"]
+        self.assertEqual(
+            [item[1][-1] for item in sleep_commands],
+            [
+                ("sleeptime", 0, "dec"),
+                ("sleeptime", 120, "dec"),
+            ],
+        )
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=120s")
 
     def test_release_arms_the_sleep_timer_only_when_asked(self) -> None:
         watcher, connection = self._connected_watcher(sleep_after_stop=120)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 // Narrow bridge from the output adapter to the control-helper dispatcher.
 // Everything in wam_menu.cpp lives in an anonymous namespace, so routing the
 // volume slider to the speaker needs this one declaration rather than an
@@ -33,6 +35,20 @@ bool send_volume_over_helper(int step);
 // writes raw speaker volume 0 and restores the previous level while the output
 // continues feeding paced silence. False leaves the PCM pause fallback intact.
 bool send_pause_over_helper(bool paused);
+
+// Arm or cancel the M5 sleep timer over the active helper. nullopt means there
+// is no helper, true means the helper accepted the request, false means its
+// local control channel rejected or lost the request.
+std::optional<bool> send_sleep_timer_over_helper(int seconds);
+
+// Record a menu-owned timer after the speaker accepts it. Zero clears menu
+// ownership and lets the configured after-stop timer take over again.
+void note_menu_sleep_timer(int seconds);
+
+// Report whether a persisted menu-owned sleep deadline is still active. The
+// output uses this only to mark replacement helpers as inheriting menu timer
+// ownership while still passing the configured after-stop duration separately.
+bool menu_sleep_timer_active();
 
 // Tell the active helper this is a real stop, so its own release() (pause,
 // then conditionally arm the sleep timer) runs immediately over the control
