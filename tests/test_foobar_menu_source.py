@@ -4,6 +4,7 @@ from unittest import TestCase
 
 SOURCE = Path(__file__).parents[1] / "foobar" / "wam_menu.cpp"
 OUTPUT_SOURCE = Path(__file__).parents[1] / "foobar" / "foo_out_wam.cpp"
+CONTROL_HEADER = Path(__file__).parents[1] / "foobar" / "wam_control.h"
 PCM_SOURCE = Path(__file__).parents[1] / "src" / "wambridge" / "pcm_cli.py"
 
 
@@ -41,6 +42,7 @@ class FoobarMenuSourceTests(TestCase):
 
     def test_replacement_helper_keeps_config_separate_from_menu_timer(self) -> None:
         output_source = OUTPUT_SOURCE.read_text(encoding="utf-8")
+        control_header = CONTROL_HEADER.read_text(encoding="utf-8")
         pcm_source = PCM_SOURCE.read_text(encoding="utf-8")
 
         self.assertIn(
@@ -52,6 +54,7 @@ class FoobarMenuSourceTests(TestCase):
             "const int sleepAfterStopSeconds = menuSleepTimerActive",
             output_source,
         )
+        self.assertIn("bool menu_sleep_timer_active();", control_header)
         self.assertIn('"--menu-sleep-timer-active"', pcm_source)
         self.assertIn(
             "menu_sleep_timer_active=args.menu_sleep_timer_active",
