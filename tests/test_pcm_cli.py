@@ -1,5 +1,6 @@
 import os
 from io import BytesIO, StringIO
+from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest import TestCase
@@ -192,6 +193,18 @@ class PcmCliTests(TestCase):
         )
         released_patcher.start()
         self.addCleanup(released_patcher.stop)
+        # A watcher constructed directly below (not through the FakePlaybackWatcher
+        # patch above) calls the real arm()/_release(), which write and remove a
+        # lease file - point that at a throwaway directory instead of the real
+        # machine-wide one, and clean it up even if a test leaves a file behind.
+        self._lease_dir = TemporaryDirectory()
+        self.addCleanup(self._lease_dir.cleanup)
+        leases_patcher = patch.dict(
+            "os.environ",
+            {"WAMBRIDGE_LEASES": self._lease_dir.name},
+        )
+        leases_patcher.start()
+        self.addCleanup(leases_patcher.stop)
 
     def _args(self, *extra: str):
         return build_parser().parse_args(

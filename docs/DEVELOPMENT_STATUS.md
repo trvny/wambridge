@@ -593,7 +593,19 @@ operating system records.
       countdown only starts once every program has let go (`WAM_PROTOCOL.md`, measured
       2026-08-16: 33 minutes still lit after a session that sent no release, against 17
       minutes to dark after one that did). Recovery is one command, `emergency-stop` or
-      `standby`; nothing sends it today because the side that would is gone.
+      `standby`; nothing sent it because the side that would is gone.
+
+      **Coded and unit-tested 2026-08-30, not yet hardware-validated.** `arm()` now
+      writes a small lease file (`src/wambridge/lease.py`) naming the speaker and this
+      process's pid before offering the stream; `_release()` removes it on any normal
+      teardown. Every new PCM session, right after its own `probe()` succeeds, sweeps
+      that lease directory for files whose pid is no longer running and sends `standby`
+      for each - so recovery no longer depends on anyone noticing a speaker that never
+      idles, only on some *later* wambridge session eventually starting. A lease
+      `standby` cannot yet confirm (the M5 wedged, say) is left in place for the next
+      sweep rather than discarded. Still needed: kill `wambridge-pcm.exe` outright on
+      the physical M5, confirm the speaker is left lit, then start a fresh session and
+      confirm that one puts it to standby before its own playback begins.
     - *The phone walked out of Wi-Fi.* Same end state, plus a second wrong one: nothing in
       `RadioService` watches for the network going away, so the foreground notification goes
       on claiming playback that stopped minutes ago, and coming back into range recovers

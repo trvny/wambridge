@@ -23,8 +23,10 @@ from .cli_common import (
 )
 from .connections import wait_until_released
 from .control_channel import ControlChannel
+from .control_cli import DEFAULT_RETRIES, DEFAULT_RETRY_DELAY, ControlError, Target, standby
 from .discovery import local_ip_for
 from .identity import load_client_uuid
+from .lease import Lease, find_stale_leases, remove_lease, write_lease
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import (
@@ -298,6 +300,10 @@ class PlaybackWatcher:
         self._stop = threading.Event()
         self._error = ""
         self._thread: threading.Thread | None = None
+        # Written once arm() sends the playback command, removed once _release()
+        # tears the session down. A process killed in between leaves the file
+        # behind for the next session's stale-lease sweep to find - see lease.py.
+        self._lease: Lease | None = None
         self._connection: WamEventConnection | None = None
         self._connection_lock = threading.Lock()
         self._pending: list[str] = []
@@ -393,6 +399,9 @@ class PlaybackWatcher:
             if self._released:
                 return
             self._released = True
+        if self._lease is not None:
+            remove_lease(self._lease)
+            self._lease = None
         # A stop, track change or foobar shutdown does not have to deliver a
         # matching resume callback. Restore the raw volume we replaced with 0 for pause
         # while the persistent 55001 connection is still alive.
@@ -532,6 +541,7 @@ class PlaybackWatcher:
     def arm(self) -> None:
         """Accept playback events only after this attempt sends its command."""
         self._armed.set()
+        self._lease = write_lease(self._speaker_ip, self._port)
 
     def mark_stream_active(self) -> None:
         """Mark that the speaker requested this attempt's local HTTP stream."""
@@ -1084,6 +1094,40 @@ def _stopped_line(
     )
 
 
+def _recover_abandoned_speakers() -> None:
+    """Send ``standby`` for any speaker a crashed prior session left holding.
+
+    A PC that loses power, or a helper killed outright, runs no cleanup of
+    its own - the lease it wrote in ``arm()`` is exactly what survives that,
+    and this is the other side of it: every new PCM session checks for one
+    before starting its own, so recovery does not depend on anyone noticing
+    a speaker that never idles. Best effort throughout - a lease this cannot
+    recover today is still gone from the next sweep's list only once
+    ``standby`` actually confirms it.
+    """
+    for lease in find_stale_leases():
+        try:
+            standby(
+                Target(lease.speaker_ip, lease.speaker_port),
+                retries=DEFAULT_RETRIES,
+                retry_delay=DEFAULT_RETRY_DELAY,
+            )
+        except ControlError as error:
+            LOGGER.warning(
+                "Could not recover speaker %s from a crashed session (pid %s): %s",
+                lease.speaker_ip,
+                lease.pid,
+                error,
+            )
+            continue
+        LOGGER.info(
+            "Recovered speaker %s, abandoned by a crashed session (pid %s)",
+            lease.speaker_ip,
+            lease.pid,
+        )
+        remove_lease(lease)
+
+
 def run(
     args: argparse.Namespace,
     *,
@@ -1097,6 +1141,7 @@ def run(
     speaker_ip, speaker_port = select_speaker(args, store)
     client_uuid = load_client_uuid()
     response = probe(speaker_ip, port=speaker_port)
+    _recover_abandoned_speakers()
     LOGGER.info(
         "Speaker %s replied with %s",
         speaker_ip,

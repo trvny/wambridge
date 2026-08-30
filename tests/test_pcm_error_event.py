@@ -1,3 +1,5 @@
+import os
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -6,6 +8,19 @@ from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent
 
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
+
+_lease_dir = TemporaryDirectory()
+
+
+def setUpModule() -> None:
+    # arm() below writes a real lease file - point it at a throwaway directory
+    # rather than the machine-wide default every other wambridge session reads.
+    os.environ["WAMBRIDGE_LEASES"] = _lease_dir.name
+
+
+def tearDownModule() -> None:
+    os.environ.pop("WAMBRIDGE_LEASES", None)
+    _lease_dir.cleanup()
 
 
 class PlaybackWatcherErrorTests(TestCase):
