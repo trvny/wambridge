@@ -3,6 +3,7 @@ from unittest import TestCase
 
 
 SOURCE = Path(__file__).parents[1] / "foobar" / "wam_menu.cpp"
+PCM_SOURCE = Path(__file__).parents[1] / "src" / "wambridge" / "pcm_cli.py"
 
 
 class FoobarMenuSourceTests(TestCase):
@@ -25,9 +26,9 @@ class FoobarMenuSourceTests(TestCase):
         ):
             self.assertIn(f'"{label}"', source)
 
-
     def test_sleep_timer_reuses_config_and_routes_through_active_helper(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
+        pcm_source = PCM_SOURCE.read_text(encoding="utf-8")
 
         self.assertIn('L"WAMBRIDGE_SLEEP_AFTER_STOP"', source)
         self.assertIn('L"sleep_after_stop"', source)
@@ -35,6 +36,7 @@ class FoobarMenuSourceTests(TestCase):
         self.assertIn("wam::send_sleep_timer_over_helper", source)
         self.assertIn("wam::note_menu_sleep_timer", source)
         self.assertIn('L"menu_sleep_timer_deadline"', source)
+        self.assertIn("set_sleep_timer=watcher.set_sleep_timer", pcm_source)
 
     def test_sleep_timer_stops_foobar_before_speaker_deadline(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
