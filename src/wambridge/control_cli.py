@@ -287,14 +287,25 @@ def standby(
     the abandoned ``SetUrlPlayback`` session this exists to end may still be
     held, so raise instead of reporting a mute-only pass as recovered.
     """
+    def _confirmed_stop() -> None:
+        # stop_playback tolerates a reply for a different method (an
+        # unrelated broadcast sharing this response slot) by returning it
+        # with matched=False rather than raising - deliberately, since
+        # treating that as a rejection previously aborted playback that was
+        # working fine (test_response_matching.py). Standby's own stop needs
+        # the opposite lean: an unmatched reply has not actually confirmed
+        # the stop, so _attempt should retry rather than record it as done
+        # (found in review).
+        response = stop_playback(target.ip, standby=True, port=target.port, timeout=3.0)
+        if not response.matched:
+            raise WamApiError(
+                f"Stop reply did not match the command sent "
+                f"(got {response.method or 'no method'})"
+            )
+
     stop_result = _attempt(
         "standby stop",
-        lambda: stop_playback(
-            target.ip,
-            standby=True,
-            port=target.port,
-            timeout=3.0,
-        ),
+        _confirmed_stop,
         retries=retries,
         retry_delay=retry_delay,
     )
