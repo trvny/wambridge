@@ -1054,11 +1054,11 @@ private:
         // behaviour: the second still has to clear a timer an earlier helper
         // armed under a setting that has since changed.
         const bool menuSleepTimerActive = wam::menu_sleep_timer_active();
-        const int sleepAfterStopSeconds = menuSleepTimerActive
-            ? 0
-            : m_settings.sleepAfterStopSeconds;
         command += L" --sleep-after-stop " +
-            std::to_wstring(sleepAfterStopSeconds);
+            std::to_wstring(m_settings.sleepAfterStopSeconds);
+        if (menuSleepTimerActive) {
+            command += L" --menu-sleep-timer-active";
+        }
         if (m_sleepTimerArmed.load() && !menuSleepTimerActive) {
             command += L" --clear-sleep-timer";
         }

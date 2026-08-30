@@ -143,6 +143,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--menu-sleep-timer-active",
+        action="store_true",
+        help=(
+            "Preserve an explicit menu-owned timer already accepted by the "
+            "speaker while retaining --sleep-after-stop for later release"
+        ),
+    )
+    parser.add_argument(
         "--clear-sleep-timer",
         action="store_true",
         help=(
@@ -262,13 +270,14 @@ class PlaybackWatcher:
         *,
         port: int,
         sleep_after_stop: int = 0,
+        menu_sleep_timer_active: bool = False,
         clear_sleep_timer: bool = False,
     ) -> None:
         self._speaker_ip = speaker_ip
         self._client_uuid = client_uuid.casefold()
         self._port = port
         self._sleep_after_stop = sleep_after_stop
-        self._menu_sleep_timer_active = False
+        self._menu_sleep_timer_active = menu_sleep_timer_active
         self._clear_sleep_timer = clear_sleep_timer
         self._released = False
         # Guards the check-then-set on _released. Single-threaded until the
@@ -1147,6 +1156,7 @@ def run(
             client_uuid,
             port=speaker_port,
             sleep_after_stop=args.sleep_after_stop,
+            menu_sleep_timer_active=args.menu_sleep_timer_active,
             clear_sleep_timer=args.clear_sleep_timer,
         )
         with watcher:
