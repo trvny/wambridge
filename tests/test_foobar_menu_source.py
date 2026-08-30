@@ -1,7 +1,6 @@
 from pathlib import Path
 from unittest import TestCase
 
-
 SOURCE = Path(__file__).parents[1] / "foobar" / "wam_menu.cpp"
 OUTPUT_SOURCE = Path(__file__).parents[1] / "foobar" / "foo_out_wam.cpp"
 CONTROL_HEADER = Path(__file__).parents[1] / "foobar" / "wam_control.h"

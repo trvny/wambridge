@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from wambridge.identity import IDENTITY_VERSION, default_identity_path, load_client_uuid
 
-
 HOME = "/tmp/home"
 
 

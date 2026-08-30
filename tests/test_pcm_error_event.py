@@ -5,7 +5,6 @@ from wambridge.pcm_cli import PlaybackWatcher
 from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent
 
-
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
 
 

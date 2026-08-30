@@ -44,9 +44,11 @@ class SleepTimerArgumentTests(TestCase):
 
     def test_rejects_a_sleep_timer_that_is_not_whole_seconds(self) -> None:
         for value in (-1, 1.5, True, "60"):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, "whole number of seconds"):
-                    sleep_timer_arguments(value)
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ValueError, "whole number of seconds"),
+            ):
+                sleep_timer_arguments(value)
 
     def test_rejects_a_sleep_timer_longer_than_the_component_accepts(self) -> None:
         # Unbounded, a mistyped value reaches the speaker as a plausible

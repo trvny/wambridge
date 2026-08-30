@@ -2,7 +2,6 @@ import re
 from pathlib import Path
 from unittest import TestCase
 
-
 SOURCE = Path(__file__).parents[1] / "foobar" / "foo_out_wam.cpp"
 SETTINGS_SOURCE = SOURCE.parent / "wam_settings.cpp"
 SETTINGS_HEADER = SOURCE.parent / "wam_settings.h"

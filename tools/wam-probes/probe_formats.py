@@ -9,11 +9,12 @@ Glosnosci nie ruszamy.
 
 from __future__ import annotations
 
+import contextlib
 import http.server
+import os
 import socketserver
 import threading
 import time
-import os
 from pathlib import Path
 
 import probe_share as ps
@@ -66,10 +67,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             )
         self.end_headers()
         if body:
-            try:
+            # glosnik zerwal - normalne przy odrzuceniu formatu
+            with contextlib.suppress(OSError):
                 self.wfile.write(chunk)
-            except OSError:
-                pass  # glosnik zerwal - normalne przy odrzuceniu formatu
 
     def do_GET(self) -> None:
         self._serve(True)

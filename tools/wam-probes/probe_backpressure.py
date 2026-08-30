@@ -15,10 +15,11 @@ Glosnosci nie ruszamy.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import socketserver
 import threading
 import time
-import os
 from pathlib import Path
 
 import probe_share as ps
@@ -79,10 +80,8 @@ class Handler(socketserver.BaseRequestHandler):
                       f"{bps/1024:6.1f} kB/s  ({bps/REALTIME_BPS:.2f}x realtime)",
                       flush=True)
                 last_report = now
-        try:
+        with contextlib.suppress(OSError):
             sock.close()
-        except OSError:
-            pass
 
 
 def main() -> None:

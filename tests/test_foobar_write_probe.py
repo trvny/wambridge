@@ -1,7 +1,6 @@
 from pathlib import Path
 from unittest import TestCase
 
-
 ROOT = Path(__file__).parents[1]
 PROJECT = ROOT / "foobar" / "foo_out_wam.vcxproj"
 PROBE = ROOT / "foobar" / "wam_write_probe.h"

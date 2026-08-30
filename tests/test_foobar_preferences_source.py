@@ -1,7 +1,6 @@
 from pathlib import Path
 from unittest import TestCase
 
-
 ROOT = Path(__file__).parents[1]
 PREFERENCES = ROOT / "foobar" / "wam_preferences.cpp"
 SETTINGS = ROOT / "foobar" / "wam_settings.cpp"

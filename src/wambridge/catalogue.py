@@ -37,12 +37,12 @@ import time
 from dataclasses import dataclass
 from xml.etree import ElementTree
 
-from .stations import is_tunein_station_id
 from .samsung import (
     DEFAULT_PORT,
     WamApiError,
     request,
 )
+from .stations import is_tunein_station_id
 
 LOGGER = logging.getLogger("wambridge")
 

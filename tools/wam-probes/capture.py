@@ -6,8 +6,8 @@ i natychmiast sciaga glosnosc, jesli przekroczy CEILING.
 
 from __future__ import annotations
 
-import re
 import os
+import re
 import socket
 import sys
 import time
