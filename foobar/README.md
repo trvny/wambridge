@@ -5,9 +5,11 @@
 foobar's decoded `f32le` PCM to the bundled helper, encodes FLAC and offers the stream to
 the M5 through local HTTP and `SetUrlPlayback`.
 
-The component produces audible output on the physical M5 but remains experimental. The
-fixed-anchor PR #21 candidate still requires a complete normal-speed track and transition
-check before merge.
+The component is merged on `main` and validated on the physical M5. PR #21 passed the full
+normal-speed track and transition checklist on 2026-08-02; later measurements kept FLAC as
+the default, validated WAV transport, and reduced the default extra host buffer to zero.
+Support outside the measured physical M5 (`SPK-WAM550`) remains experimental. WAM551 is
+an intended M5-family target, but is not yet hardware-validated.
 
 ## Requirements
 
@@ -85,7 +87,7 @@ second control connection. `Cancel sleep timer` clears the pending timer.
 - One helper session owns one PCM stream.
 - The first speaker HTTP request owns FFmpeg; duplicate requests are refused.
 - PCM queued locally, in the pipe write and submitted to the helper is included in output
-  capacity and latency on PR #21.
+  capacity and latency.
 - Pause keeps the stream alive with paced silence and shifts the host clock anchor.
 - Seek, stop and format change restart the helper so stale PCM cannot enter the next stream.
 - Helper logs and protocol errors are mirrored to the foobar console.
@@ -102,12 +104,12 @@ Foobar's position is separate. Two measured failures were:
 - resetting the real-time anchor to each pipe-write catch-up let foobar advance at about
   94x and open later tracks immediately.
 
-The current candidate starts one cumulative clock at `WAMBRIDGE AUDIO_STARTED`, shifts it
-only for pause and caps played frames by submitted frames. URL/PCM does not abort because a
-matching `StartPlaybackEvent` is absent; the event listener remains active for diagnostics.
+The merged output starts one cumulative clock at `WAMBRIDGE AUDIO_STARTED`, shifts it only
+for pause and caps played frames by submitted frames. URL/PCM does not abort because a matching
+`StartPlaybackEvent` is absent; the event listener remains active for diagnostics.
 
-`AUDIO_STARTED` is a transport anchor, not proof of audible sound. Hardware acceptance is
-still required.
+`AUDIO_STARTED` is a transport anchor, not proof of audible sound. New timing or transport
+changes still require physical M5 validation.
 
 ## Expected helper markers
 
