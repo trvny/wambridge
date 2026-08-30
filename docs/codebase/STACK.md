@@ -4,7 +4,7 @@
 
 | Area | Value | Evidence |
 |---|---|---|
-| Core | Python 3.14 operational baseline, stdlib-only production package; metadata still says >=3.13 pending alignment | `pyproject.toml`, `.github/workflows/build.yml`, `src/wambridge/` |
+| Core | Python >=3.14 operational and package baseline, stdlib-only production package | `pyproject.toml`, `.github/workflows/build.yml`, `src/wambridge/` |
 | Desktop adapter | C++17 x64 Windows DLL for foobar2000 | `foobar/foo_out_wam.vcxproj` |
 | Mobile adapter | Android app, Kotlin sources, AGP 9.3.2, Java 17 bytecode target | `mobile/build.gradle.kts`, `mobile/app/build.gradle.kts` |
 | Packaging | setuptools + uv; PyInstaller for Windows helpers | `pyproject.toml`, `.github/workflows/build.yml` |

@@ -41,7 +41,7 @@ class FakePcmServer:
 
 
 class FakePlaybackWatcher:
-    instances: list["FakePlaybackWatcher"] = []
+    instances: list[FakePlaybackWatcher] = []
     forced_rejection: str | None = None
 
     def __init__(self, *_args, **kwargs) -> None:
