@@ -47,6 +47,16 @@ class FoobarMenuSourceTests(TestCase):
         self.assertIn("if (m_generation->load() != m_token) return;", source)
         self.assertIn("SleepTimerStopCallback>(&m_generation, token)", source)
 
+    def test_sleep_timer_coordinator_survives_persistence_failure(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        start = source.index("void note_menu_sleep_timer(int seconds)")
+        end = source.index("bool menu_sleep_timer_active()", start)
+        body = source[start:end]
+        failure = body.index("if (!write_menu_sleep_deadline(seconds))")
+        arm = body.index("sleep_timer_coordinator().arm", failure)
+
+        self.assertNotIn("return;", body[failure:arm])
+
     def test_control_action_logs_use_narrow_strings(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
 
