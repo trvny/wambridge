@@ -34,6 +34,7 @@ class ControlChannelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.levels: list[int] = []
         self.paused: list[bool] = []
+        self.sleep_timers: list[int] = []
         self.released = 0
         self.discarded = 0
         self.applied = threading.Event()
@@ -44,6 +45,10 @@ class ControlChannelTests(unittest.TestCase):
 
         def record_paused(paused: bool) -> None:
             self.paused.append(paused)
+            self.applied.set()
+
+        def record_sleep_timer(seconds: int) -> None:
+            self.sleep_timers.append(seconds)
             self.applied.set()
 
         def record_release() -> None:
@@ -59,6 +64,7 @@ class ControlChannelTests(unittest.TestCase):
             set_paused=record_paused,
             set_release=record_release,
             set_discard=record_discard,
+            set_sleep_timer=record_sleep_timer,
         )
         self.channel.start()
         self.addCleanup(self.channel.close)
@@ -96,6 +102,16 @@ class ControlChannelTests(unittest.TestCase):
             self._send(client, "resume")
             self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.paused, [True, False])
+
+    def test_sleep_timer_uses_the_same_connection_and_replies(self) -> None:
+        with _connect(self.channel) as client:
+            self._send(client, "sleep 30")
+            self.assertTrue(self.applied.wait(timeout=2))
+            self.assertEqual(_recv_line(client), b"ok\n")
+            self._send(client, "sleep 0")
+            self.assertTrue(self.applied.wait(timeout=2))
+            self.assertEqual(_recv_line(client), b"ok\n")
+        self.assertEqual(self.sleep_timers, [30, 0])
 
     def test_release_and_discard_use_the_same_connection_without_ack_waits(self) -> None:
         with _connect(self.channel) as client:
@@ -208,7 +224,6 @@ class ControlChannelTests(unittest.TestCase):
             self._send(second, "volume 8")
             self.assertTrue(self.applied.wait(timeout=2))
         self.assertEqual(self.levels, [3, 8])
-
 
     def test_close_waits_for_in_flight_pause(self) -> None:
         entered = threading.Event()
