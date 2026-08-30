@@ -1,0 +1,73 @@
+name: Finish sleep timer persistence
+
+on:
+  push:
+    branches: [feat/foobar-sleep-timer]
+    paths: [.github/workflows/finish-sleep-timer-persistence.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.repository == 'trvny/wambridge'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/foobar-sleep-timer
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          python-version: "3.14"
+      - name: Keep live coordinator independent of persistence
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("foobar/wam_menu.cpp")
+          text = path.read_text(encoding="utf-8")
+          old = '''        console::printf(
+              "%s: could not remember sleep timer deadline (Windows error %u)",
+              kComponentName,
+              static_cast<unsigned>(GetLastError())
+          );
+          return;
+      }
+          if (seconds > 0) {
+          sleep_timer_coordinator().arm(epoch_seconds_now() + seconds);
+      } else {
+          sleep_timer_coordinator().arm(0);
+      }
+          '''
+          new = '''        console::printf(
+              "%s: could not remember sleep timer deadline (Windows error %u)",
+              kComponentName,
+              static_cast<unsigned>(GetLastError())
+          );
+      }
+          if (seconds > 0) {
+          sleep_timer_coordinator().arm(epoch_seconds_now() + seconds);
+      } else {
+          sleep_timer_coordinator().arm(0);
+      }
+          '''
+          if old not in text:
+              raise SystemExit("target persistence block not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+      - name: Test Python and source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --locked
+          uv run ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
+          uv run python -m unittest discover -s tests -v
+      - name: Commit fix and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'gptomek[bot]'
+          git config user.email '314538226+gptomek[bot]@users.noreply.github.com'
+          git rm .github/workflows/finish-sleep-timer-persistence.yml
+          git add foobar/wam_menu.cpp
+          git commit -m 'fix(foobar): keep live sleep timer after persistence failure'
+          git push origin HEAD:feat/foobar-sleep-timer
