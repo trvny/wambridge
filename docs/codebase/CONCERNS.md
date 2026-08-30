@@ -11,7 +11,7 @@
 | medium | Documentation can contradict newer measured history | `foobar/README.md` vs root/status docs | wrong next-step decisions | treat newest measured status as authoritative and extend drift tests |
 
 ## 2) Technical Debt
-Finite DLNA/share playback is proven but remains a separate experimental path rather than the default transport. TuneIn preset write operations are still deliberately unproven on hardware. Python package/Ruff metadata still declares a 3.13 baseline while CI and the project direction use 3.14. Ruff config selects `I` and `SIM`, but the main CI Ruff command explicitly selects only `E,F,B,UP`.
+Finite DLNA/share playback is proven but remains a separate experimental path rather than the default transport. TuneIn preset write operations are still deliberately unproven on hardware. Ruff config selects `I` and `SIM`, but the main CI Ruff command explicitly selects only `E,F,B,UP`.
 
 ## 3) Security Concerns
 
@@ -29,7 +29,7 @@ Recent 90-day churn is highest in `README.md`, `docs/DEVELOPMENT_STATUS.md`, `do
 
 ## 6) Resolved Project Decisions
 1. The physical M5 (`SPK-WAM550`) is the compatibility target now. WAM551 and other Samsung WAM models come later, after measured hardware evidence rather than speculative compatibility layers.
-2. Prefer the current stable Python baseline instead of preserving Python 3.13 compatibility for its own sake. As of this map, CI already runs Python 3.14; package and Ruff metadata should follow that baseline in a focused config change.
+2. Python 3.14 is the current supported baseline across package metadata, Ruff and CI; older Python compatibility is not a project goal.
 3. `foobar/README.md` is living documentation and should describe the current merged/validated state, not remain a historical PR #21 snapshot.
 
 ## 7) Evidence

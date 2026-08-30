@@ -7,7 +7,7 @@ name = "trvny-wambridge"
 version = "0.0.5"
 description = "Local Wi-Fi audio bridge for Samsung Wireless Audio Multiroom speakers"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = { text = "ISC" }
 authors = [{ name = "trvny" }]
 dependencies = []
@@ -30,7 +30,7 @@ wambridge = ["station_packs.json"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -14,7 +14,7 @@ Windows-first bridge for streaming audio over Wi-Fi to Samsung Wireless Audio Mu
    FFmpeg transcoding + Samsung's `SetUrlPlayback` API (speaker TCP port `55001`), remote
    control, radio stations, TuneIn presets. Console scripts: `wambridge` (main, maps to
    `wambridge.radio_cli:main`), `wambridge-control`, `wambridge-events`, `wambridge-pcm`,
-   `wambridge-share`. Zero runtime dependencies; stdlib only. Python >= 3.13.
+   `wambridge-share`. Zero runtime dependencies; stdlib only. Python >= 3.14.
 2. **foobar2000 output component** (`foobar/`): C++17 DLL (`foo_out_wam`) for foobar2000
    2.x x64, built with MSBuild against the foobar2000 SDK. Pipes decoded `f32le` PCM into
    the bundled `wambridge-pcm` helper (PyInstaller onedir build of
@@ -43,7 +43,7 @@ uv run wambridge-control --help                           # smoke checks used by
 uv run wambridge-events --help
 ```
 
-Ruff config is in `pyproject.toml`: line-length 100, target py313, lint select
+Ruff config is in `pyproject.toml`: line-length 100, target py314, lint select
 `E,F,I,UP,B,SIM` (CI itself checks only `E,F,B,UP`, but keep code clean for the full
 configured set). Tests are stdlib `unittest`, plain function/`TestCase` style, all
 offline — no speaker or network needed. There is no pytest config; use the unittest

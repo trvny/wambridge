@@ -89,7 +89,7 @@ Configuration, known limitations and the physical checklist are documented in
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.14+
 - FFmpeg available in `PATH`
 - computer and speaker reachable in the same LAN
 - Windows 10/11 and foobar2000 2.x x64 for the native output component
