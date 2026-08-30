@@ -22,16 +22,24 @@ from wambridge.wam_events import WamEvent
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
 
 _lease_dir = TemporaryDirectory()
+_previous_lease_env: str | None = None
 
 
 def setUpModule() -> None:
     # arm() below writes a real lease file - point it at a throwaway directory
     # rather than the machine-wide default every other wambridge session reads.
+    # Save whatever was there rather than assuming absent, so a test runner
+    # that already set this for its own reasons gets it back afterward.
+    global _previous_lease_env
+    _previous_lease_env = os.environ.get("WAMBRIDGE_LEASES")
     os.environ["WAMBRIDGE_LEASES"] = _lease_dir.name
 
 
 def tearDownModule() -> None:
-    os.environ.pop("WAMBRIDGE_LEASES", None)
+    if _previous_lease_env is None:
+        os.environ.pop("WAMBRIDGE_LEASES", None)
+    else:
+        os.environ["WAMBRIDGE_LEASES"] = _previous_lease_env
     _lease_dir.cleanup()
 
 

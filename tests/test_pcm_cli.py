@@ -1085,6 +1085,10 @@ class PcmCliTests(TestCase):
         watcher.release()
 
         self.assertEqual(watcher.release_summary, "stop=rejected sleep=120s")
+        # A rejected stop does not establish that the speaker is clear - the
+        # lease has to survive for a later sweep to retry recovery, or an
+        # abandoned session loses its only record.
+        self.assertIsNotNone(watcher._lease)
 
     def test_an_offer_the_speaker_never_took_up_is_not_released(self) -> None:
         # The matched rejection is the rare way to own nothing; this firmware
@@ -1126,6 +1130,30 @@ class PcmCliTests(TestCase):
         watcher.release()
 
         self.assertEqual(watcher.release_summary, "stop=unreachable sleep=off")
+        # An unreachable speaker may still be holding the abandoned session -
+        # removing the only recovery record here would be exactly backwards.
+        self.assertIsNotNone(watcher._lease)
+
+    def test_release_removes_the_lease_once_the_stop_is_confirmed(self) -> None:
+        watcher, _connection = self._connected_watcher()
+        watcher.arm()
+
+        watcher.release()
+
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=off")
+        self.assertIsNone(watcher._lease)
+
+    def test_an_unarmed_release_removes_the_lease(self) -> None:
+        # arm() itself is what writes the lease; release() before it ever runs
+        # (__enter__ raising, say) has nothing to remove, but a release after
+        # arm() with nothing offered still owns no session to recover.
+        watcher, _connection = self._connected_watcher(stream_active=False)
+        watcher.arm()
+
+        watcher.release()
+
+        self.assertEqual(watcher.release_summary, "stop=skipped sleep=off")
+        self.assertIsNone(watcher._lease)
 
     def test_a_pending_sleep_timer_is_cleared_before_the_next_stream(self) -> None:
         watcher, connection = self._connected_watcher(

@@ -26,7 +26,7 @@ from .control_channel import ControlChannel
 from .control_cli import DEFAULT_RETRIES, DEFAULT_RETRY_DELAY, ControlError, Target, standby
 from .discovery import local_ip_for
 from .identity import load_client_uuid
-from .lease import Lease, find_stale_leases, remove_lease, write_lease
+from .lease import Lease, claim_lease, find_stale_leases, remove_lease, write_lease
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import (
@@ -399,9 +399,22 @@ class PlaybackWatcher:
             if self._released:
                 return
             self._released = True
-        if self._lease is not None:
-            remove_lease(self._lease)
-            self._lease = None
+        try:
+            self._release_locked(arm_sleep_timer=arm_sleep_timer)
+        finally:
+            # Only once the outcome is known, and only when it says the
+            # speaker is actually clear. "stop=unreachable"/"stop=rejected"
+            # mean the abandoned SetUrlPlayback session may still be held -
+            # removing the lease there would tell the next session's sweep
+            # there is nothing left to recover, which is exactly backwards.
+            if self._lease is not None and not self.release_summary.startswith(
+                ("stop=unreachable", "stop=rejected")
+            ):
+                remove_lease(self._lease)
+                self._lease = None
+
+    def _release_locked(self, *, arm_sleep_timer: bool) -> None:
+        """Body of ``_release`` proper, run once ``_released`` is claimed."""
         # A stop, track change or foobar shutdown does not have to deliver a
         # matching resume callback. Restore the raw volume we replaced with 0 for pause
         # while the persistent 55001 connection is still alive.
@@ -1101,31 +1114,48 @@ def _recover_abandoned_speakers() -> None:
     its own - the lease it wrote in ``arm()`` is exactly what survives that,
     and this is the other side of it: every new PCM session checks for one
     before starting its own, so recovery does not depend on anyone noticing
-    a speaker that never idles. Best effort throughout - a lease this cannot
-    recover today is still gone from the next sweep's list only once
-    ``standby`` actually confirms it.
+    a speaker that never idles. Runs on a background thread (see its call
+    site in ``run()``) so an unreachable stale speaker's retries and timeouts
+    never delay the session actually being started.
+
+    ``require_stop_confirmed=True`` matters here specifically: an
+    interactive ``standby`` treats a confirmed mute as success even if the
+    stop itself failed, which is right for a human clearing a speaker they
+    can see. Automated recovery has no one to notice a wrong call - the
+    abandoned ``SetUrlPlayback`` session must be confirmed stopped, or the
+    lease has to survive to be tried again.
+
+    Claiming before calling ``standby`` (see ``claim_lease``) is what keeps
+    two sessions started close together from both recovering the same
+    speaker at once - the claim is left in place, not undone, on failure,
+    which doubles as backoff until the next sweep's claim-age check allows a
+    retry.
     """
     for lease in find_stale_leases():
+        claimed = claim_lease(lease)
+        if claimed is None:
+            continue  # lost the race to another sweep, or already resolved
         try:
             standby(
-                Target(lease.speaker_ip, lease.speaker_port),
+                Target(claimed.speaker_ip, claimed.speaker_port),
                 retries=DEFAULT_RETRIES,
                 retry_delay=DEFAULT_RETRY_DELAY,
+                require_stop_confirmed=True,
             )
         except ControlError as error:
             LOGGER.warning(
                 "Could not recover speaker %s from a crashed session (pid %s): %s",
-                lease.speaker_ip,
-                lease.pid,
+                claimed.speaker_ip,
+                claimed.pid,
                 error,
             )
             continue
         LOGGER.info(
             "Recovered speaker %s, abandoned by a crashed session (pid %s)",
-            lease.speaker_ip,
-            lease.pid,
+            claimed.speaker_ip,
+            claimed.pid,
         )
-        remove_lease(lease)
+        remove_lease(claimed)
 
 
 def run(
@@ -1141,7 +1171,15 @@ def run(
     speaker_ip, speaker_port = select_speaker(args, store)
     client_uuid = load_client_uuid()
     response = probe(speaker_ip, port=speaker_port)
-    _recover_abandoned_speakers()
+    # Backgrounded: a stale lease naming an unreachable speaker retries and
+    # times out on its own schedule (up to ~30 s, see RECOVERY_CLAIM_TIMEOUT_S
+    # in lease.py), and none of that may delay the session this call is
+    # actually here to start.
+    threading.Thread(
+        target=_recover_abandoned_speakers,
+        name="wambridge-abandoned-speaker-sweep",
+        daemon=True,
+    ).start()
     LOGGER.info(
         "Speaker %s replied with %s",
         speaker_ip,

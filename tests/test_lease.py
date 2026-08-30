@@ -6,13 +6,16 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from wambridge.lease import (
+    RECOVERY_CLAIM_TIMEOUT_S,
     Lease,
+    claim_lease,
     default_lease_dir,
     find_stale_leases,
     is_pid_alive,
@@ -121,6 +124,16 @@ class WriteAndRemoveLeaseTests(unittest.TestCase):
 
         remove_lease(lease)  # must not raise
 
+    def test_write_lease_leaves_no_temporary_file_behind(self) -> None:
+        # The atomic publish (write to a temp name, then os.replace) is what
+        # keeps a concurrent find_stale_leases from ever reading a half
+        # written file - confirm the temp name doesn't linger afterward.
+        write_lease("10.0.0.118", 55001, directory=self.directory)
+
+        names = [p.name for p in self.directory.iterdir()]
+        self.assertEqual(len(names), 1)
+        self.assertFalse(names[0].startswith(".tmp-"))
+
 
 class IsPidAliveTests(unittest.TestCase):
     def test_current_process_is_alive(self) -> None:
@@ -131,6 +144,44 @@ class IsPidAliveTests(unittest.TestCase):
         # waiting on it is what actually proves is_pid_alive tells the two
         # states apart, on whichever platform this runs on.
         self.assertFalse(is_pid_alive(_finished_pid()))
+
+
+class ClaimLeaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.directory = Path(self._tmp.name)
+
+    def test_claim_renames_to_recovering(self) -> None:
+        lease = write_lease("10.0.0.118", 55001, directory=self.directory)
+
+        claimed = claim_lease(lease)
+
+        self.assertIsNotNone(claimed)
+        assert claimed is not None  # narrow for the type checker
+        self.assertEqual(claimed.path.name, f"{lease.pid}.json.recovering")
+        self.assertFalse(lease.path.exists())
+        self.assertTrue(claimed.path.exists())
+
+    def test_claim_is_idempotent_and_refreshes_the_claim_time(self) -> None:
+        lease = write_lease("10.0.0.118", 55001, directory=self.directory)
+        claimed = claim_lease(lease)
+        assert claimed is not None
+        old_mtime = claimed.path.stat().st_mtime
+        os.utime(claimed.path, (old_mtime - 120, old_mtime - 120))
+
+        reclaimed = claim_lease(claimed)
+
+        self.assertIsNotNone(reclaimed)
+        assert reclaimed is not None
+        self.assertEqual(reclaimed.path, claimed.path)
+        self.assertGreater(reclaimed.path.stat().st_mtime, old_mtime - 120)
+
+    def test_claiming_a_vanished_lease_returns_none(self) -> None:
+        lease = write_lease("10.0.0.118", 55001, directory=self.directory)
+        lease.path.unlink()
+
+        self.assertIsNone(claim_lease(lease))
 
 
 class FindStaleLeasesTests(unittest.TestCase):
@@ -178,6 +229,31 @@ class FindStaleLeasesTests(unittest.TestCase):
 
         self.assertEqual(stale, [])
         self.assertFalse(broken.exists())
+
+    def _recovering_lease(self, *, age_seconds: float) -> Path:
+        dead_pid = _finished_pid()
+        path = self.directory / f"{dead_pid}.json.recovering"
+        path.write_text(
+            json.dumps(
+                {"version": 1, "pid": dead_pid, "speaker_ip": "10.0.0.118", "speaker_port": 55001}
+            ),
+            encoding="utf-8",
+        )
+        stamp = time.time() - age_seconds
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_a_freshly_claimed_lease_is_not_returned(self) -> None:
+        self._recovering_lease(age_seconds=1)
+
+        self.assertEqual(find_stale_leases(directory=self.directory), [])
+
+    def test_a_claim_older_than_the_timeout_is_returned(self) -> None:
+        path = self._recovering_lease(age_seconds=RECOVERY_CLAIM_TIMEOUT_S + 1)
+
+        stale = find_stale_leases(directory=self.directory)
+
+        self.assertEqual([lease.path for lease in stale], [path])
 
 
 if __name__ == "__main__":

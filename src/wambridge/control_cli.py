@@ -261,6 +261,7 @@ def standby(
     retry_delay: float,
     release_timeout: float = STANDBY_RELEASE_TIMEOUT,
     release_poll: float = STANDBY_RELEASE_POLL,
+    require_stop_confirmed: bool = False,
 ) -> list[str]:
     """Stop playback, mute, and confirm nothing is still attached.
 
@@ -277,6 +278,14 @@ def standby(
     and once it does the speaker goes dark on its own: measured 2026-08-16 at
     17 min 4 s, against 33 minutes and still lit after a session that sent no
     release. This reading proves only that nothing here is holding on.
+
+    By default a confirmed mute is enough even if every stop attempt failed -
+    the interactive command's whole point is "leave nothing attached", and a
+    speaker already stopped by something else still needs muting. Automated
+    recovery of a lease with no other side to ask needs the stricter
+    contract ``require_stop_confirmed`` opts into: without a confirmed stop,
+    the abandoned ``SetUrlPlayback`` session this exists to end may still be
+    held, so raise instead of reporting a mute-only pass as recovered.
     """
     stop_result = _attempt(
         "standby stop",
@@ -312,6 +321,11 @@ def standby(
             "Standby could not be verified. The M5 control port may be wedged; "
             f"power-cycle the speaker. Last detail: "
             f"{verification.detail or mute_result[1] or stop_result[1]}"
+        )
+    if require_stop_confirmed and not stop_result[0]:
+        raise ControlError(
+            "Standby's stop command was never confirmed, so the abandoned "
+            f"playback session may still be held. Last detail: {stop_result[1]}"
         )
     held = wait_until_released(
         target.ip,

@@ -22,9 +22,10 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 LOGGER = logging.getLogger(__name__)
@@ -64,13 +65,19 @@ def write_lease(
     Named by pid: a crashed process's file survives it for the sweep to find,
     and a fresh process that happens to reuse the same pid overwrites its
     predecessor's file rather than piling up beside it.
+
+    Written to a temporary file and published with an atomic rename, so a
+    concurrent sweep's ``find_stale_leases`` never observes a half-written
+    file - it either sees the complete previous lease or the complete new
+    one, never a torn read it would otherwise delete as unreadable.
     """
 
     target_dir = Path(directory) if directory is not None else default_lease_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
     pid = os.getpid()
     path = target_dir / f"{pid}.json"
-    path.write_text(
+    tmp_path = target_dir / f".tmp-{pid}-{secrets.token_hex(4)}"
+    tmp_path.write_text(
         json.dumps(
             {
                 "version": LEASE_VERSION,
@@ -83,11 +90,12 @@ def write_lease(
         ),
         encoding="utf-8",
     )
+    os.replace(tmp_path, path)
     return Lease(path=path, pid=pid, speaker_ip=speaker_ip, speaker_port=speaker_port)
 
 
 def remove_lease(lease: Lease) -> None:
-    """Best-effort cleanup on a clean exit.
+    """Best-effort cleanup on a clean exit, or once recovery is confirmed.
 
     A file that fails to delete here just means the next sweep finds a lease
     for a pid that has already exited - indistinguishable from the crash this
@@ -98,6 +106,48 @@ def remove_lease(lease: Lease) -> None:
         lease.path.unlink()
     except OSError as error:
         LOGGER.warning("Could not remove lease %s: %s", lease.path, error)
+
+
+RECOVERY_CLAIM_TIMEOUT_S = 60
+"""How long a claimed lease may sit unresolved before another sweep retries it.
+
+Generous headroom over ``standby(require_stop_confirmed=True)``'s bounded
+worst case (three retries of a 3 s stop, then a 3 s mute, then a 2 s
+verification - well under 30 s), so this only reclaims a claim whose own
+recovering process has genuinely stopped attempting it, whether that is a
+failed attempt (deliberately left claimed - see ``claim_lease``) or that
+process dying mid-recovery, the same class of event this whole module exists
+to survive.
+"""
+
+
+def claim_lease(lease: Lease) -> Lease | None:
+    """Mark a lease as being recovered, so a concurrent sweep leaves it alone.
+
+    Renames the file to a ``.recovering`` suffix (idempotent - claiming an
+    already-``.recovering`` lease just refreshes its claim time) and stamps
+    the current time on it. The rename is atomic, so at most one caller ever
+    gets a non-``None`` result back for a given lease - a second sweep racing
+    for the same stale file loses here instead of running ``standby`` against
+    the same speaker at the same time.
+
+    A failed recovery attempt does not call ``unclaim`` - there isn't one.
+    It simply leaves the file claimed, which doubles as backoff: nothing
+    reclaims it until ``RECOVERY_CLAIM_TIMEOUT_S`` has passed.
+
+    Returns ``None`` if the file is already gone (removed by its own process
+    after all, or claimed by another sweep between the scan and this call).
+    """
+
+    base_name = lease.path.name.removesuffix(".recovering")
+    claimed_path = lease.path.with_name(base_name + ".recovering")
+    try:
+        if lease.path != claimed_path:
+            os.replace(lease.path, claimed_path)
+        os.utime(claimed_path, None)
+    except OSError:
+        return None
+    return replace(lease, path=claimed_path)
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -120,23 +170,52 @@ def _is_pid_alive_windows(pid: int) -> bool:
     from ctypes import wintypes
 
     process_query_limited_information = 0x1000
+    error_access_denied = 5
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     open_process = kernel32.OpenProcess
     open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     open_process.restype = wintypes.HANDLE
     handle = open_process(process_query_limited_information, False, pid)
     if not handle:
-        return False
+        # A denied handle still means a process exists to deny it for - the
+        # POSIX branch above treats its own permission error the same way.
+        # Foobar and its helper can run as different users on a shared
+        # machine, and reading that case as "dead" would send standby to a
+        # speaker another session is still legitimately using.
+        return ctypes.get_last_error() == error_access_denied
     kernel32.CloseHandle(handle)
     return True
+
+
+def _parse_lease(entry: Path) -> Lease | None:
+    """Read one lease file, deleting and returning ``None`` if it is unreadable.
+
+    Unreadable here means garbage, not absent: it names no speaker to
+    recover, and leaving it behind would only fail the same way on every
+    future sweep.
+    """
+
+    try:
+        payload = json.loads(entry.read_text(encoding="utf-8"))
+        pid = int(payload["pid"])
+        speaker_ip = str(payload["speaker_ip"])
+        speaker_port = int(payload["speaker_port"])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        LOGGER.warning("Removing unreadable lease %s: %s", entry, error)
+        with contextlib.suppress(OSError):
+            entry.unlink()
+        return None
+    return Lease(path=entry, pid=pid, speaker_ip=speaker_ip, speaker_port=speaker_port)
 
 
 def find_stale_leases(*, directory: Path | None = None) -> list[Lease]:
     """Return leases whose owning process is no longer running.
 
-    A lease file that cannot be parsed is removed rather than reported: it
-    names no speaker to recover, and leaving it behind would only fail the
-    same way on every future sweep.
+    Also returns ``.recovering`` leases claimed longer ago than
+    ``RECOVERY_CLAIM_TIMEOUT_S`` - the embedded pid there is always dead
+    (a stale lease's original owner, by construction), so age since the
+    claim is what actually distinguishes an abandoned claim from one still
+    in progress.
     """
 
     target_dir = Path(directory) if directory is not None else default_lease_dir()
@@ -146,18 +225,18 @@ def find_stale_leases(*, directory: Path | None = None) -> list[Lease]:
     except OSError:
         return stale
     for entry in entries:
+        lease = _parse_lease(entry)
+        if lease is not None and not is_pid_alive(lease.pid):
+            stale.append(lease)
+    now = time.time()
+    for entry in sorted(target_dir.glob("*.json.recovering")):
         try:
-            payload = json.loads(entry.read_text(encoding="utf-8"))
-            pid = int(payload["pid"])
-            speaker_ip = str(payload["speaker_ip"])
-            speaker_port = int(payload["speaker_port"])
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            LOGGER.warning("Removing unreadable lease %s: %s", entry, error)
-            with contextlib.suppress(OSError):
-                entry.unlink()
+            age = now - entry.stat().st_mtime
+        except OSError:
             continue
-        if not is_pid_alive(pid):
-            stale.append(
-                Lease(path=entry, pid=pid, speaker_ip=speaker_ip, speaker_port=speaker_port)
-            )
+        if age < RECOVERY_CLAIM_TIMEOUT_S:
+            continue
+        lease = _parse_lease(entry)
+        if lease is not None:
+            stale.append(lease)
     return stale
