@@ -11,7 +11,7 @@
 | Environment | uppercase `WAMBRIDGE_*` | `WAMBRIDGE_FORMAT` | `foobar/wam_settings.cpp` |
 
 ## 2) Formatting and Linting
-Python policy is Ruff, line length 100, target `py314`, configured rules `E,F,I,UP,B,SIM`. CI currently invokes Ruff with only `E,F,B,UP`, so `I` and `SIM` are configured locally but not enforced by the main build job. C++ builds at warning level 4 with warnings as errors. Android runs Android lint in CI.
+Python policy is Ruff, line length 100, target `py314`, configured rules `E,F,I,UP,B,SIM`, all enforced by CI. C++ builds at warning level 4 with warnings as errors. Android runs Android lint in CI.
 
 ## 3) Import and Module Conventions
 Python imports are stdlib first and then relative package imports; `from __future__ import annotations` is common. There are no package-wide barrel exports. Platform adapters communicate through processes/network protocols rather than importing across language boundaries.

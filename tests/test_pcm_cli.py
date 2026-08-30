@@ -515,10 +515,11 @@ class PcmCliTests(TestCase):
 
         with (
             patch("wambridge.pcm_cli.PcmAudioStreamServer", SilentServer),
-            patch("wambridge.pcm_cli._pcm_input_closed", return_value=True),self.assertRaisesRegex(
-            StreamError,
-            "PCM input closed before the speaker requested",
-        )
+            patch("wambridge.pcm_cli._pcm_input_closed", return_value=True),
+            self.assertRaisesRegex(
+                StreamError,
+                "PCM input closed before the speaker requested",
+            ),
         ):
             run(
                 args,
