@@ -650,6 +650,7 @@ class PcmCliTests(TestCase):
         self,
         *,
         sleep_after_stop: int = 0,
+        menu_sleep_timer_active: bool = False,
         clear_sleep_timer: bool = False,
         rejection: str | None = None,
         rejection_method: str = "SetPlaybackControl",
@@ -663,6 +664,7 @@ class PcmCliTests(TestCase):
             CLIENT_UUID,
             port=55001,
             sleep_after_stop=sleep_after_stop,
+            menu_sleep_timer_active=menu_sleep_timer_active,
             clear_sleep_timer=clear_sleep_timer,
         )
         connection = FakeControlConnection(
@@ -923,6 +925,26 @@ class PcmCliTests(TestCase):
             [item[1][-1] for item in sleep_commands],
             [
                 ("sleeptime", 600, "dec"),
+                ("sleeptime", 0, "dec"),
+                ("sleeptime", 120, "dec"),
+            ],
+        )
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=120s")
+
+    def test_replacement_menu_timer_cancel_restores_after_stop_timer(self) -> None:
+        watcher, connection = self._connected_watcher(
+            sleep_after_stop=120,
+            menu_sleep_timer_active=True,
+        )
+        watcher.arm()
+
+        watcher.set_sleep_timer(0)
+        watcher.release()
+
+        sleep_commands = [item for item in connection.sent if item[0] == "SetSleepTimer"]
+        self.assertEqual(
+            [item[1][-1] for item in sleep_commands],
+            [
                 ("sleeptime", 0, "dec"),
                 ("sleeptime", 120, "dec"),
             ],
