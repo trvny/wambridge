@@ -1,6 +1,6 @@
 ![Samsung](https://img.shields.io/badge/Samsung-1428A0?logo=samsung&logoColor=fff&style=for-the-badge) ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff&style=for-the-badge)
 
-[![Release](https://github.com/trvny/wambridge/actions/workflows/release.yml/badge.svg)](https://github.com/trvny/wambridge/actions/workflows/release.yml) <a href="https://deepwiki.com/trvny/wambridge"><img src="https://deepwiki.com/badge.svg" alt="DeepWiki"></a>
+[![Release](https://github.com/trvny/wambridge/actions/workflows/release.yml/badge.svg)](https://github.com/trvny/wambridge/actions/workflows/release.yml) [![code license](https://img.shields.io/github/license/trvny/wambridge?label=code&logo=opensourceinitiative&logoColor=white&color=6f42c1&style=flat-square)](https://spdx.org/licenses/ISC) <a href="https://deepwiki.com/trvny/wambridge"><img src="https://deepwiki.com/badge.svg" alt="DeepWiki"></a>
 
 # WAM Bridge
 
