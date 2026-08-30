@@ -41,6 +41,11 @@ bool send_pause_over_helper(bool paused);
 // local control channel rejected or lost the request.
 std::optional<bool> send_sleep_timer_over_helper(int seconds);
 
+// Report whether a persisted menu-owned sleep deadline is still active. The
+// output uses this only to mark replacement helpers as inheriting menu timer
+// ownership while still passing the configured after-stop duration separately.
+bool menu_sleep_timer_active();
+
 // Tell the active helper this is a real stop, so its own release() (pause,
 // then conditionally arm the sleep timer) runs immediately over the control
 // channel rather than waiting for the helper's own exit path - which an
