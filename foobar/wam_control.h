@@ -41,6 +41,10 @@ bool send_pause_over_helper(bool paused);
 // local control channel rejected or lost the request.
 std::optional<bool> send_sleep_timer_over_helper(int seconds);
 
+// Record a menu-owned timer after the speaker accepts it. Zero clears menu
+// ownership and lets the configured after-stop timer take over again.
+void note_menu_sleep_timer(int seconds);
+
 // Report whether a persisted menu-owned sleep deadline is still active. The
 // output uses this only to mark replacement helpers as inheriting menu timer
 // ownership while still passing the configured after-stop duration separately.
