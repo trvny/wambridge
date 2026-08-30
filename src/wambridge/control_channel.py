@@ -216,21 +216,22 @@ class ControlChannel:
             return "ok"
         if command != "volume":
             LOGGER.warning("Ignoring unknown control command %r", command)
-            return
+            return None
         try:
             level = int(argument)
         except ValueError:
             LOGGER.warning("Ignoring volume command with argument %r", argument)
-            return
+            return None
         if not self._minimum_volume <= level <= self._maximum_volume:
             LOGGER.warning("Ignoring out-of-range volume %s", level)
-            return
+            return None
         try:
             self._set_volume(level)
         except Exception:  # helper boundary: a failed command is not fatal
             # The stream matters more than the command. A rejected SetVolume
             # must not take playback down with it.
             LOGGER.warning("Control volume %s failed", level, exc_info=True)
+        return None
 
 
 def _shutdown_quietly(client: socket.socket) -> None:
