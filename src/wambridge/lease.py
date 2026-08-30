@@ -151,6 +151,72 @@ def claim_lease(lease: Lease) -> Lease | None:
     return replace(lease, path=claimed_path)
 
 
+def discard_superseded(
+    speaker_ip: str,
+    speaker_port: int,
+    *,
+    keep_pid: int,
+    directory: Path | None = None,
+) -> None:
+    """Remove any other lease naming this speaker, now that ``keep_pid`` holds it.
+
+    Called once this session's own stream has actually superseded whatever a
+    crashed prior session left behind - never from the background sweep
+    itself, which only skips a same-target stale lease rather than deleting
+    it (see ``pcm_cli._recover_abandoned_speakers``). That split matters: if
+    this session's own startup fails between the sweep skipping the old
+    lease and reaching this call, the old record is left exactly as the
+    sweep found it, for a later sweep to recover correctly - deleting it
+    eagerly would have erased the only evidence of the abandoned speaker over
+    a promise ("my stream will supersede it") that was never kept.
+    """
+
+    target_dir = Path(directory) if directory is not None else default_lease_dir()
+    try:
+        entries = list(target_dir.glob("*.json")) + list(target_dir.glob("*.json.recovering-*"))
+    except OSError:
+        return
+    for entry in entries:
+        lease = _parse_lease(entry)
+        if lease is None or lease.pid == keep_pid:
+            continue
+        if (lease.speaker_ip, lease.speaker_port) == (speaker_ip, speaker_port):
+            remove_lease(lease)
+
+
+def has_live_lease(
+    speaker_ip: str,
+    speaker_port: int,
+    *,
+    directory: Path | None = None,
+) -> bool:
+    """Return whether some live process currently holds this speaker.
+
+    Checked right before recovery sends ``standby`` for a claimed lease, so a
+    session that has taken the same speaker over since this sweep started is
+    not stopped by a sweep recovering it on another session's behalf. This
+    narrows the race rather than closing it - a session whose own ``arm()``
+    lands after this check and before the ``standby`` call is still exposed;
+    closing that fully would need a lock shared across processes, which nothing
+    here provides.
+    """
+
+    target_dir = Path(directory) if directory is not None else default_lease_dir()
+    try:
+        entries = target_dir.glob("*.json")
+    except OSError:
+        return False
+    for entry in entries:
+        lease = _parse_lease(entry)
+        if (
+            lease is not None
+            and (lease.speaker_ip, lease.speaker_port) == (speaker_ip, speaker_port)
+            and is_pid_alive(lease.pid)
+        ):
+            return True
+    return False
+
+
 def is_pid_alive(pid: int) -> bool:
     """Return whether a process with this pid is still running."""
 

@@ -1272,7 +1272,7 @@ class RecoverAbandonedSpeakersTests(TestCase):
         )
 
     @patch("wambridge.pcm_cli.standby")
-    def test_a_lease_for_the_current_target_is_discarded_not_recovered(
+    def test_a_lease_for_the_current_target_is_skipped_not_recovered(
         self, standby_mock
     ) -> None:
         self._stale_lease("10.0.0.118", 55001)
@@ -1280,7 +1280,11 @@ class RecoverAbandonedSpeakersTests(TestCase):
         _recover_abandoned_speakers(("10.0.0.118", 55001))
 
         standby_mock.assert_not_called()
-        self.assertEqual(find_stale_leases(directory=self.directory), [])
+        # Left exactly as found: run() itself removes it, via
+        # discard_superseded, only once its own stream has actually
+        # succeeded - a startup that fails before that must not have lost
+        # the only record of the abandoned speaker.
+        self.assertEqual(len(find_stale_leases(directory=self.directory)), 1)
 
     @patch("wambridge.pcm_cli.standby")
     def test_a_lease_for_a_different_speaker_is_recovered(self, standby_mock) -> None:
@@ -1295,3 +1299,27 @@ class RecoverAbandonedSpeakersTests(TestCase):
         # Claimed and resolved - nothing left in either state.
         self.assertEqual(find_stale_leases(directory=self.directory), [])
         self.assertEqual(list(self.directory.glob("*")), [])
+
+    @patch("wambridge.pcm_cli.standby")
+    def test_a_speaker_with_a_live_lease_is_not_recovered(self, standby_mock) -> None:
+        self._stale_lease("10.0.0.200", 55001)
+        live_path = self.directory / f"{os.getpid()}.json"
+        live_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "pid": os.getpid(),
+                    "speaker_ip": "10.0.0.200",
+                    "speaker_port": 55001,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        _recover_abandoned_speakers(("10.0.0.118", 55001))
+
+        standby_mock.assert_not_called()
+        # The stale claim is cleared, since a live session now legitimately
+        # holds this speaker - but that live session's own lease is untouched.
+        self.assertEqual(find_stale_leases(directory=self.directory), [])
+        self.assertEqual(list(self.directory.glob("*")), [live_path])

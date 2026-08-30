@@ -603,10 +603,14 @@ operating system records.
       `stop=unreachable`/`stop=rejected`, where the abandoned session may still be held.
       A background thread on every new PCM session, started right after its own
       `probe()` succeeds, sweeps the lease directory: a stale lease naming *this*
-      session's own target is simply discarded (its own upcoming `SetUrlPlayback`
-      supersedes it), and every other stale lease is claimed (renamed so a concurrent
-      sweep skips it) and sent `standby(require_stop_confirmed=True)` - stricter than
-      the interactive command, since nothing here can notice a wrong "recovered". A
+      session's own target is skipped, not deleted (`run()` calls
+      `discard_superseded` for it once `offer_stream()` has actually succeeded - a
+      startup that fails first must not lose the only record of the abandoned
+      speaker over a promise that was never kept, found in review), and every
+      other stale lease is claimed (renamed so a concurrent sweep skips it),
+      re-checked with `has_live_lease` in case some other session has since taken
+      it over, and sent `standby(require_stop_confirmed=True)` - stricter than the
+      interactive command, since nothing here can notice a wrong "recovered". A
       claim `standby` cannot yet resolve is left in place; a claim past a 60 s
       timeout - own recovering process died, or the attempt failed - is retried by a
       later sweep.
@@ -621,13 +625,28 @@ operating system records.
       session while a new session targets a different one - out of reach with the
       single physical M5 this project has. Unit-tested with mocks only.
 
-      Known limitation, accepted rather than fixed: recovery trusts a lease's
-      `(ip, port)` without re-verifying the speaker's identity, so a DHCP
-      reassignment could in theory point `standby` at a different device that took
-      over the address. Low-probability on this project's single-physical-M5 scope,
-      and the identity check available (`samsung.identify`) costs an extra round trip
-      on every session start to guard an edge case - a worse trade against this
-      project's documented startup-latency sensitivity than leaving it noted here.
+      Known limitations, accepted rather than fixed:
+      - Recovery trusts a lease's `(ip, port)` without re-verifying the speaker's
+        identity, so a DHCP reassignment could in theory point `standby` at a
+        different device that took over the address. Low-probability on this
+        project's single-physical-M5 scope, and the identity check available
+        (`samsung.identify`) costs an extra round trip on every session start to
+        guard an edge case - a worse trade against this project's documented
+        startup-latency sensitivity than leaving it noted here.
+      - A lease is trusted alive purely by its pid existing; an ordinary pid-reuse
+        window (reboot, or the next session recycling the same number) can read an
+        abandoned lease as live, and a helper that reuses a crashed one's pid
+        overwrites its file outright. Distinguishing a reused pid from its
+        original owner needs a process-creation-time check this module does not
+        make; the failure mode is a missed or delayed recovery, not a wrong
+        `standby`, so it is left as a documented gap rather than fixed here.
+      - `has_live_lease`'s recheck before `standby` narrows, but does not close, a
+        race between two sessions recovering two different abandoned speakers at
+        once: a session whose own `arm()` lands in the gap between that check and
+        the `standby` call is still exposed. Closing it fully needs a lock shared
+        across processes, out of proportion to a scenario that needs two speakers
+        crashing close together, on a project with one physical M5 to test either
+        half of it against.
     - *The phone walked out of Wi-Fi.* Same end state, plus a second wrong one: nothing in
       `RadioService` watches for the network going away, so the foreground notification goes
       on claiming playback that stopped minutes ago, and coming back into range recovers

@@ -17,7 +17,9 @@ from wambridge.lease import (
     Lease,
     claim_lease,
     default_lease_dir,
+    discard_superseded,
     find_stale_leases,
+    has_live_lease,
     is_pid_alive,
     remove_lease,
     write_lease,
@@ -190,6 +192,96 @@ class ClaimLeaseTests(unittest.TestCase):
         lease.path.unlink()
 
         self.assertIsNone(claim_lease(lease))
+
+
+class DiscardSupersededTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.directory = Path(self._tmp.name)
+
+    def _dead_lease(self, speaker_ip: str, speaker_port: int) -> Lease:
+        # A genuinely different, genuinely dead pid - write_lease always
+        # stamps the calling process's own pid into the payload, so two
+        # calls from this same test process would be indistinguishable by
+        # pid regardless of filename.
+        dead_pid = _finished_pid()
+        path = self.directory / f"{dead_pid}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "pid": dead_pid,
+                    "speaker_ip": speaker_ip,
+                    "speaker_port": speaker_port,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return Lease(path=path, pid=dead_pid, speaker_ip=speaker_ip, speaker_port=speaker_port)
+
+    def test_removes_another_lease_naming_the_same_speaker(self) -> None:
+        other = self._dead_lease("10.0.0.118", 55001)
+        mine = write_lease("10.0.0.118", 55001, directory=self.directory)
+
+        discard_superseded("10.0.0.118", 55001, keep_pid=mine.pid, directory=self.directory)
+
+        self.assertFalse(other.path.exists())
+        self.assertTrue(mine.path.exists())
+
+    def test_leaves_a_different_speakers_lease_alone(self) -> None:
+        other = write_lease("10.0.0.200", 55001, directory=self.directory)
+
+        discard_superseded("10.0.0.118", 55001, keep_pid=os.getpid(), directory=self.directory)
+
+        self.assertTrue(other.path.exists())
+
+    def test_removes_a_matching_recovering_claim(self) -> None:
+        lease = self._dead_lease("10.0.0.118", 55001)
+        claimed = claim_lease(lease)
+        assert claimed is not None
+
+        discard_superseded("10.0.0.118", 55001, keep_pid=os.getpid(), directory=self.directory)
+
+        self.assertFalse(claimed.path.exists())
+
+    def test_missing_directory_is_not_an_error(self) -> None:
+        discard_superseded(
+            "10.0.0.118", 55001, keep_pid=os.getpid(), directory=self.directory / "missing"
+        )  # must not raise
+
+
+class HasLiveLeaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.directory = Path(self._tmp.name)
+
+    def test_true_for_a_live_process(self) -> None:
+        write_lease("10.0.0.118", 55001, directory=self.directory)
+
+        self.assertTrue(has_live_lease("10.0.0.118", 55001, directory=self.directory))
+
+    def test_false_for_a_dead_process(self) -> None:
+        dead_pid = _finished_pid()
+        (self.directory / f"{dead_pid}.json").write_text(
+            json.dumps(
+                {"version": 1, "pid": dead_pid, "speaker_ip": "10.0.0.118", "speaker_port": 55001}
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertFalse(has_live_lease("10.0.0.118", 55001, directory=self.directory))
+
+    def test_false_for_a_different_speaker(self) -> None:
+        write_lease("10.0.0.200", 55001, directory=self.directory)
+
+        self.assertFalse(has_live_lease("10.0.0.118", 55001, directory=self.directory))
+
+    def test_false_for_a_missing_directory(self) -> None:
+        self.assertFalse(
+            has_live_lease("10.0.0.118", 55001, directory=self.directory / "missing")
+        )
 
 
 class FindStaleLeasesTests(unittest.TestCase):

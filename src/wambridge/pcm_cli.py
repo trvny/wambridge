@@ -26,7 +26,15 @@ from .control_channel import ControlChannel
 from .control_cli import DEFAULT_RETRIES, DEFAULT_RETRY_DELAY, ControlError, Target, standby
 from .discovery import local_ip_for
 from .identity import load_client_uuid
-from .lease import Lease, claim_lease, find_stale_leases, remove_lease, write_lease
+from .lease import (
+    Lease,
+    claim_lease,
+    discard_superseded,
+    find_stale_leases,
+    has_live_lease,
+    remove_lease,
+    write_lease,
+)
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import (
@@ -1119,13 +1127,18 @@ def _recover_abandoned_speakers(current_target: tuple[str, int]) -> None:
     never delay the session actually being started.
 
     ``current_target`` is this session's own ``(speaker_ip, speaker_port)`` -
-    a stale lease naming it is not sent ``standby``. This session is about to
-    become that speaker's new legitimate owner; its own ``SetUrlPlayback``
-    supersedes whatever the crashed session left behind, and racing this
-    background thread's pause/mute against the fresh stream this same
-    startup is about to offer would stop the very playback being started
-    (found in review - the naive version of this function recovered
-    unconditionally).  The stale lease is simply discarded instead.
+    a stale lease naming it is skipped, not sent ``standby``. This session is
+    about to become that speaker's new legitimate owner; its own
+    ``SetUrlPlayback`` supersedes whatever the crashed session left behind,
+    and racing this background thread's pause/mute against the fresh stream
+    this same startup is about to offer would stop the very playback being
+    started (found in review - the naive version of this function recovered
+    unconditionally). The old lease is left in place here rather than
+    deleted: ``run()`` removes it, via ``discard_superseded``, only once its
+    own stream has actually superseded it, so a startup that fails first
+    leaves the record for a later sweep instead of erasing the only evidence
+    of the abandoned speaker over a promise that was never kept (also found
+    in review).
 
     ``require_stop_confirmed=True`` matters here specifically: an
     interactive ``standby`` treats a confirmed mute as success even if the
@@ -1138,15 +1151,24 @@ def _recover_abandoned_speakers(current_target: tuple[str, int]) -> None:
     two sessions started close together from both recovering the same
     speaker at once - the claim is left in place, not undone, on failure,
     which doubles as backoff until the next sweep's claim-age check allows a
-    retry.
+    retry. Right before the call, ``has_live_lease`` re-checks for a session
+    that has taken this same speaker over since the scan above - narrowing,
+    not closing, a separate race: a fresh session recovering *its own*
+    target only ever protects that one target, so this speaker could belong
+    to a different session's own concurrent startup rather than actually
+    being abandoned (found in review). Fully closing that would need a lock
+    shared across processes, which nothing here provides.
     """
     for lease in find_stale_leases():
         if (lease.speaker_ip, lease.speaker_port) == current_target:
-            remove_lease(lease)
             continue
         claimed = claim_lease(lease)
         if claimed is None:
             continue  # lost the race to another sweep, or already resolved
+        if has_live_lease(claimed.speaker_ip, claimed.speaker_port):
+            # A live session has taken this speaker over since the scan above.
+            remove_lease(claimed)
+            continue
         try:
             standby(
                 Target(claimed.speaker_ip, claimed.speaker_port),
@@ -1260,6 +1282,11 @@ def run(
             watcher.cancel_sleep_timer()
             watcher.arm()
             watcher.offer_stream(stream_url)
+            # Only now does this session's own stream actually supersede
+            # whatever a crashed prior session left on this speaker - see
+            # _recover_abandoned_speakers for why the sweep itself does not
+            # delete that old lease.
+            discard_superseded(speaker_ip, speaker_port, keep_pid=os.getpid())
             _raise_if_pcm_input_closed(input_stream)
 
             _wait_for_stream_request(
