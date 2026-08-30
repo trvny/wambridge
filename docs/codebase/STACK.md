@@ -1,9 +1,10 @@
 # Technology Stack
 
 ## 1) Runtime Summary
+
 | Area | Value | Evidence |
 |---|---|---|
-| Core | Python >=3.13, stdlib-only production package | `pyproject.toml`, `src/wambridge/` |
+| Core | Python 3.14 operational baseline, stdlib-only production package; metadata still says >=3.13 pending alignment | `pyproject.toml`, `.github/workflows/build.yml`, `src/wambridge/` |
 | Desktop adapter | C++17 x64 Windows DLL for foobar2000 | `foobar/foo_out_wam.vcxproj` |
 | Mobile adapter | Android app, Kotlin sources, AGP 9.3.2, Java 17 bytecode target | `mobile/build.gradle.kts`, `mobile/app/build.gradle.kts` |
 | Packaging | setuptools + uv; PyInstaller for Windows helpers | `pyproject.toml`, `.github/workflows/build.yml` |
@@ -12,6 +13,7 @@
 The Python package declares no third-party runtime dependencies. FFmpeg is an external executable used for transcoding/encoding. The foobar component depends on the foobar2000 SDK plus Win32/Winsock. Android declares no third-party runtime libraries in Gradle and uses Android platform APIs.
 
 ## 3) Development Toolchain
+
 | Tool | Purpose | Evidence |
 |---|---|---|
 | uv | locked Python environment | `uv.lock`, `.github/workflows/build.yml` |

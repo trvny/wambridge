@@ -4,13 +4,16 @@
 Primary style is a protocol core with platform adapters around it. Python owns the most complete measured WAM behavior; foobar delegates live PCM to a packaged Python helper, while Android reimplements only the protocol subset needed for its native lifecycle. The strongest design constraint is firmware behavior measured on the physical M5, especially stateful CPM browsing, port-55001 contention, TCP backpressure, and unrecoverable dead-stream offers.
 
 ## 2) System Flow
-Desktop file/radio: `radio_cli` → `cli.run` → `AudioStreamServer`/FFmpeg → local tokenized HTTP URL → `samsung.play_url` → M5 pulls audio.
+Desktop file/custom URL radio: `radio_cli` → `cli.run` → `AudioStreamServer`/FFmpeg → local tokenized HTTP URL → `samsung.play_url` → M5 pulls audio.
+
+Native TuneIn preset: `radio_cli` → `_play_tunein_safely` → `play_tunein_preset` → WAM `SetPlayPreset`; the speaker resolves/decodes TuneIn itself, so this path does not use the local `AudioStreamServer` or FFmpeg.
 
 foobar: foobar output callbacks → `WamOutput` → helper process `wambridge-pcm` → `PcmAudioStreamServer`/FFmpeg → M5; helper stdout reports READY/AUDIO_STARTED/PLAYING and a loopback `ControlChannel` carries volume/pause/stop/sleep back without opening another speaker connection.
 
 Android renderer: DLNA/UPnP control point → `UpnpRenderer` → phone-local stream endpoint → `RendererService` + `SamsungWamChannel` → M5. Android radio replaces the control point with `RadioService` + `RadioProxyServer`.
 
 ## 3) Layer/Module Responsibilities
+
 | Module | Owns | Must not own | Evidence |
 |---|---|---|---|
 | `samsung.py` | request validation, XML, UIC/CPM semantics | CLI/UI state | `src/wambridge/samsung.py` |

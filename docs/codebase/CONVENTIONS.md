@@ -1,6 +1,7 @@
 # Coding Conventions
 
 ## 1) Naming Rules
+
 | Item | Rule | Example | Evidence |
 |---|---|---|---|
 | Python files/functions | snake_case | `resolve_tunein_station` | `src/wambridge/tunein.py` |

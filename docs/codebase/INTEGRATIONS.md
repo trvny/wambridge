@@ -1,6 +1,7 @@
 # External Integrations
 
 ## 1) Integration Inventory
+
 | System | Type | Purpose | Auth model | Criticality | Evidence |
 |---|---|---|---|---|---|
 | Samsung WAM M5 | local HTTP/TCP UIC+CPM on 55001 | control, status, URL/share playback | none; trusted LAN | high | `src/wambridge/samsung.py` |

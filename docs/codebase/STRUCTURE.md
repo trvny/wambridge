@@ -1,6 +1,7 @@
 # Codebase Structure
 
 ## 1) Top-Level Map
+
 | Path | Purpose | Evidence |
 |---|---|---|
 | `src/wambridge/` | protocol client, discovery, CLI, streaming, persistence | `pyproject.toml`, package sources |
@@ -15,6 +16,7 @@
 Primary Python entry is `wambridge.radio_cli:main`; `python -m wambridge` delegates there. Secondary console scripts are `wambridge-control`, `wambridge-events`, `wambridge-pcm`, and `wambridge-share`. foobar loads `foo_out_wam.dll`; Android starts from `MainActivity` and foreground `RendererService`/`RadioService`.
 
 ## 3) Module Boundaries
+
 | Boundary | Owns | Must not own |
 |---|---|---|
 | `samsung.py` + protocol modules | WAM wire format and device semantics | UI policy |

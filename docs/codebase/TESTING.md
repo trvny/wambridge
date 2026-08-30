@@ -7,6 +7,7 @@ Python uses stdlib `unittest` plus `unittest.mock`; Android local tests use JUni
 There are 35 Python `tests/test_*.py` files and 9 Android JVM test files under `mobile/app/src/test/java/...`. Tests are mostly feature-oriented (`test_samsung.py`, `test_pcm_stream.py`, `RendererRoutingTest.kt`). No shared global test setup file is required.
 
 ## 3) Test Scope Matrix
+
 | Scope | Covered? | Typical target | Notes |
 |---|---|---|---|
 | Unit | yes | parsers, validation, state/routing, FFmpeg command construction | network/process calls usually mocked |
