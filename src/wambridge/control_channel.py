@@ -43,6 +43,7 @@ class ControlChannel:
         set_paused: Callable[[bool], None] | None = None,
         set_release: Callable[[], None] | None = None,
         set_discard: Callable[[], None] | None = None,
+        set_sleep_timer: Callable[[int], None] | None = None,
         minimum_volume: int = 0,
         maximum_volume: int = 30,
     ) -> None:
@@ -55,6 +56,7 @@ class ControlChannel:
         # than the command.
         self._set_release = set_release
         self._set_discard = set_discard
+        self._set_sleep_timer = set_sleep_timer
         self._minimum_volume = minimum_volume
         self._maximum_volume = maximum_volume
         # Loopback only. This accepts commands that move a speaker in someone's

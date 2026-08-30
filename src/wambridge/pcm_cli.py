@@ -1209,6 +1209,7 @@ def run(
                 set_paused=watcher.set_pause_volume,
                 set_release=watcher.release,
                 set_discard=watcher.discard,
+                set_sleep_timer=watcher.set_sleep_timer,
                 minimum_volume=RAW_MIN_VOLUME,
                 maximum_volume=RAW_MAX_VOLUME,
             ) as control:

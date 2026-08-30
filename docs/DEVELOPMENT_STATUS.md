@@ -352,21 +352,16 @@ operating system records.
    says `Stop & mute`, which is exactly what the existing action does: it stops playback and
    mutes the speaker without claiming to enter network standby. The legacy helper action name
    remains `standby` for compatibility. A real on-demand sleep control stays separate as item 7.
-7. **Offer the sleep timer as a menu command, not only as an automatic fallback.** A related
-   setting turned up but does not change this item yet: `GetNetworkStandByMode` answers
-   `networkstandbymode=on` on `UIC`, the socket this component already holds open. What writing
-   it does is unknown, and the name suggests it governs the network *during* standby rather
-   than entering it, so treat it as a hypothesis with a safe test attached rather than a second
-   power control. `WAM_PROTOCOL.md` has the order for settling that. This
-   component is meant to be a complete driver for the speaker, and `SetSleepTimer` is the
-   only power lever the firmware answers a client with — yet the only way to reach it is
-   `sleep_after_stop`, which fires by itself at the end of a stream. A listener who wants the
-   speaker asleep in twenty minutes cannot say so from foobar. Command shape is measured and
-   in `WAM_PROTOCOL.md`: `("option","start","str")` plus `("sleeptime", <seconds>, "dec")`,
-   seconds, self-clearing once it fires. Two constraints it has to respect: a configured
-   session clears pending timers before offering a stream, so starting playback must not
-   silently wipe a timer set from the menu; and the speaker never says who armed a timer, so
-   clearing one always risks removing one set from the Samsung app.
+7. ~~**Offer the sleep timer as a menu command, not only as an automatic fallback.**~~ **Done and hardware-validated 2026-08-29.**
+   `Playback -> WAM Bridge` now exposes `Start sleep timer` and `Cancel sleep timer`, reusing
+   the configured `sleep_after_stop` duration. During PCM playback the command travels over
+   the helper's existing control connection. The absolute deadline survives helper replacement
+   and foobar restart, and release/discard preserves a menu-armed timer. Foobar stops two seconds
+   before the M5 deadline so standby does not look like a failed helper exit and respawn it. A
+   30 s physical M5 pass confirmed the timer fired with no helper respawn. Persistence is
+   best-effort: if the INI write fails, the live coordinator still follows the timer accepted
+   by the speaker.
+
 8. ~~**Move release onto the helper's control channel.**~~ **Done.** The component now
    sends `release` (a real stop) or `discard` (replacing this helper for a seek or format
    change) over the existing `WAMBRIDGE CONTROL_PORT` channel, from `~WamOutput()`,
