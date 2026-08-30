@@ -1,0 +1,124 @@
+name: Finish sleep timer ownership
+
+on:
+  push:
+    branches: [feat/foobar-sleep-timer]
+    paths: [.github/workflows/finish-sleep-timer-ownership.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.repository == 'trvny/wambridge'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/foobar-sleep-timer
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          python-version: "3.14"
+      - name: Separate configured timer from menu ownership
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("foobar/foo_out_wam.cpp")
+          text = path.read_text(encoding="utf-8")
+          old = '''        const bool menuSleepTimerActive = wam::menu_sleep_timer_active();
+          const int sleepAfterStopSeconds = menuSleepTimerActive
+              ? 0
+              : m_settings.sleepAfterStopSeconds;
+          command += L" --sleep-after-stop " +
+              std::to_wstring(sleepAfterStopSeconds);
+          if (m_sleepTimerArmed.load() && !menuSleepTimerActive) {
+          '''
+          new = '''        const bool menuSleepTimerActive = wam::menu_sleep_timer_active();
+          command += L" --sleep-after-stop " +
+              std::to_wstring(m_settings.sleepAfterStopSeconds);
+          if (menuSleepTimerActive) {
+              command += L" --menu-sleep-timer-active";
+          }
+          if (m_sleepTimerArmed.load() && !menuSleepTimerActive) {
+          '''
+          if old not in text:
+              raise SystemExit("C++ sleep ownership block not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          path = Path("src/wambridge/pcm_cli.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    parser.add_argument(
+              "--clear-sleep-timer",
+              action="store_true",
+          '''
+          new = '''    parser.add_argument(
+              "--menu-sleep-timer-active",
+              action="store_true",
+              help=(
+                  "Preserve an explicit menu-owned timer already accepted by the "
+                  "speaker while retaining --sleep-after-stop for later release"
+              ),
+          )
+          parser.add_argument(
+              "--clear-sleep-timer",
+              action="store_true",
+          '''
+          if old not in text:
+              raise SystemExit("parser insertion point not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        sleep_after_stop: int = 0,
+              clear_sleep_timer: bool = False,
+          ) -> None:
+          '''
+          new = '''        sleep_after_stop: int = 0,
+              menu_sleep_timer_active: bool = False,
+              clear_sleep_timer: bool = False,
+          ) -> None:
+          '''
+          if old not in text:
+              raise SystemExit("watcher signature target not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        self._sleep_after_stop = sleep_after_stop
+          self._menu_sleep_timer_active = False
+          self._clear_sleep_timer = clear_sleep_timer
+          '''
+          new = '''        self._sleep_after_stop = sleep_after_stop
+          self._menu_sleep_timer_active = menu_sleep_timer_active
+          self._clear_sleep_timer = clear_sleep_timer
+          '''
+          if old not in text:
+              raise SystemExit("watcher state target not found")
+          text = text.replace(old, new, 1)
+
+          old = '''            sleep_after_stop=args.sleep_after_stop,
+              clear_sleep_timer=args.clear_sleep_timer,
+          )
+          '''
+          new = '''            sleep_after_stop=args.sleep_after_stop,
+              menu_sleep_timer_active=args.menu_sleep_timer_active,
+              clear_sleep_timer=args.clear_sleep_timer,
+          )
+          '''
+          if old not in text:
+              raise SystemExit("watcher construction target not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+      - name: Validate ownership split
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --locked
+          uv run ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
+          uv run python -m unittest discover -s tests -v
+      - name: Commit fix and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'gptomek[bot]'
+          git config user.email '314538226+gptomek[bot]@users.noreply.github.com'
+          git rm .github/workflows/finish-sleep-timer-ownership.yml
+          git add foobar/foo_out_wam.cpp src/wambridge/pcm_cli.py
+          git commit -m 'fix(foobar): preserve configured after-stop timer'
+          git push origin HEAD:feat/foobar-sleep-timer
