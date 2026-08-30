@@ -23,34 +23,10 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-
           path = Path("foobar/wam_menu.cpp")
           text = path.read_text(encoding="utf-8")
-          old = '''        console::printf(
-              "%s: could not remember sleep timer deadline (Windows error %u)",
-              kComponentName,
-              static_cast<unsigned>(GetLastError())
-          );
-          return;
-      }
-          if (seconds > 0) {
-          sleep_timer_coordinator().arm(epoch_seconds_now() + seconds);
-      } else {
-          sleep_timer_coordinator().arm(0);
-      }
-          '''
-          new = '''        console::printf(
-              "%s: could not remember sleep timer deadline (Windows error %u)",
-              kComponentName,
-              static_cast<unsigned>(GetLastError())
-          );
-      }
-          if (seconds > 0) {
-          sleep_timer_coordinator().arm(epoch_seconds_now() + seconds);
-      } else {
-          sleep_timer_coordinator().arm(0);
-      }
-          '''
+          old = "            static_cast<unsigned>(GetLastError())\n        );\n        return;\n    }\n    if (seconds > 0) {"
+          new = "            static_cast<unsigned>(GetLastError())\n        );\n    }\n    if (seconds > 0) {"
           if old not in text:
               raise SystemExit("target persistence block not found")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
