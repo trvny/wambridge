@@ -595,10 +595,11 @@ operating system records.
       minutes to dark after one that did). Recovery is one command, `emergency-stop` or
       `standby`; nothing sent it because the side that would is gone.
 
-      **Coded and unit-tested 2026-08-30, not yet hardware-validated.** `arm()` now
-      writes a small lease file (`src/wambridge/lease.py`) naming the speaker and this
-      process's pid before offering the stream; `_release()` removes it once teardown
-      confirms the speaker is actually clear (`stop=sent`/`stop=skipped`) - not on
+      **Coded and unit-tested 2026-08-30. The same-speaker path is now
+      hardware-validated too (2026-08-30).** `arm()` writes a small lease file
+      (`src/wambridge/lease.py`) naming the speaker and this process's pid before
+      offering the stream; `_release()` removes it once teardown confirms the speaker
+      is actually clear (`stop=sent`/`stop=skipped`) - not on
       `stop=unreachable`/`stop=rejected`, where the abandoned session may still be held.
       A background thread on every new PCM session, started right after its own
       `probe()` succeeds, sweeps the lease directory: a stale lease naming *this*
@@ -608,9 +609,17 @@ operating system records.
       the interactive command, since nothing here can notice a wrong "recovered". A
       claim `standby` cannot yet resolve is left in place; a claim past a 60 s
       timeout - own recovering process died, or the attempt failed - is retried by a
-      later sweep. Still needed: kill `wambridge-pcm.exe` outright on the physical M5,
-      confirm the speaker is left lit, then start a fresh session and confirm that one
-      puts it to standby before its own playback begins.
+      later sweep.
+
+      On the physical M5: `wambridge-pcm.exe` killed outright while playing, foobar's
+      own output-invalidation path relaunched a fresh session against the *same*
+      speaker within about a second, and the crashed session's lease was found
+      deleted outright (not renamed to a `.recovering-*` claim) with no `standby` or
+      audible interruption sent in between - the discard branch, exactly as designed.
+      Still open: the *different*-speaker claim-and-`standby` branch has no physical
+      coverage, since exercising it needs a second WAM speaker abandoned by a crashed
+      session while a new session targets a different one - out of reach with the
+      single physical M5 this project has. Unit-tested with mocks only.
 
       Known limitation, accepted rather than fixed: recovery trusts a lease's
       `(ip, port)` without re-verifying the speaker's identity, so a DHCP
