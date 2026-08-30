@@ -965,7 +965,6 @@ void note_menu_sleep_timer(int seconds) {
             kComponentName,
             static_cast<unsigned>(GetLastError())
         );
-        return;
     }
     if (seconds > 0) {
         sleep_timer_coordinator().arm(epoch_seconds_now() + seconds);
