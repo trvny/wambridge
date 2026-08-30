@@ -152,18 +152,22 @@ class ClaimLeaseTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.directory = Path(self._tmp.name)
 
-    def test_claim_renames_to_recovering(self) -> None:
+    def test_claim_renames_to_a_fresh_recovering_name(self) -> None:
         lease = write_lease("10.0.0.118", 55001, directory=self.directory)
 
         claimed = claim_lease(lease)
 
         self.assertIsNotNone(claimed)
         assert claimed is not None  # narrow for the type checker
-        self.assertEqual(claimed.path.name, f"{lease.pid}.json.recovering")
+        self.assertTrue(claimed.path.name.startswith(f"{lease.pid}.json.recovering-"))
         self.assertFalse(lease.path.exists())
         self.assertTrue(claimed.path.exists())
 
-    def test_claim_is_idempotent_and_refreshes_the_claim_time(self) -> None:
+    def test_reclaiming_an_expired_claim_moves_it_to_a_new_name(self) -> None:
+        # A fresh name every claim, never a rename-in-place, is what makes two
+        # concurrent reclaims of the same expired .recovering file mutually
+        # exclusive: only one of them still finds the source path to rename
+        # from (found in review - renaming in place let both callers succeed).
         lease = write_lease("10.0.0.118", 55001, directory=self.directory)
         claimed = claim_lease(lease)
         assert claimed is not None
@@ -174,8 +178,12 @@ class ClaimLeaseTests(unittest.TestCase):
 
         self.assertIsNotNone(reclaimed)
         assert reclaimed is not None
-        self.assertEqual(reclaimed.path, claimed.path)
+        self.assertNotEqual(reclaimed.path, claimed.path)
+        self.assertFalse(claimed.path.exists())
         self.assertGreater(reclaimed.path.stat().st_mtime, old_mtime - 120)
+        # The already-claimed source is gone by the time a second caller
+        # would try the same rename - that FileNotFoundError is the mutex.
+        self.assertIsNone(claim_lease(claimed))
 
     def test_claiming_a_vanished_lease_returns_none(self) -> None:
         lease = write_lease("10.0.0.118", 55001, directory=self.directory)
@@ -232,7 +240,7 @@ class FindStaleLeasesTests(unittest.TestCase):
 
     def _recovering_lease(self, *, age_seconds: float) -> Path:
         dead_pid = _finished_pid()
-        path = self.directory / f"{dead_pid}.json.recovering"
+        path = self.directory / f"{dead_pid}.json.recovering-cafef00d"
         path.write_text(
             json.dumps(
                 {"version": 1, "pid": dead_pid, "speaker_ip": "10.0.0.118", "speaker_port": 55001}

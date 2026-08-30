@@ -1107,7 +1107,7 @@ def _stopped_line(
     )
 
 
-def _recover_abandoned_speakers() -> None:
+def _recover_abandoned_speakers(current_target: tuple[str, int]) -> None:
     """Send ``standby`` for any speaker a crashed prior session left holding.
 
     A PC that loses power, or a helper killed outright, runs no cleanup of
@@ -1117,6 +1117,15 @@ def _recover_abandoned_speakers() -> None:
     a speaker that never idles. Runs on a background thread (see its call
     site in ``run()``) so an unreachable stale speaker's retries and timeouts
     never delay the session actually being started.
+
+    ``current_target`` is this session's own ``(speaker_ip, speaker_port)`` -
+    a stale lease naming it is not sent ``standby``. This session is about to
+    become that speaker's new legitimate owner; its own ``SetUrlPlayback``
+    supersedes whatever the crashed session left behind, and racing this
+    background thread's pause/mute against the fresh stream this same
+    startup is about to offer would stop the very playback being started
+    (found in review - the naive version of this function recovered
+    unconditionally).  The stale lease is simply discarded instead.
 
     ``require_stop_confirmed=True`` matters here specifically: an
     interactive ``standby`` treats a confirmed mute as success even if the
@@ -1132,6 +1141,9 @@ def _recover_abandoned_speakers() -> None:
     retry.
     """
     for lease in find_stale_leases():
+        if (lease.speaker_ip, lease.speaker_port) == current_target:
+            remove_lease(lease)
+            continue
         claimed = claim_lease(lease)
         if claimed is None:
             continue  # lost the race to another sweep, or already resolved
@@ -1177,6 +1189,7 @@ def run(
     # actually here to start.
     threading.Thread(
         target=_recover_abandoned_speakers,
+        args=((speaker_ip, speaker_port),),
         name="wambridge-abandoned-speaker-sweep",
         daemon=True,
     ).start()

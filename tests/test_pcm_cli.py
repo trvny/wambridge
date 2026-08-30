@@ -1,12 +1,23 @@
+import json
 import os
+import subprocess
+import sys
 from io import BytesIO, StringIO
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import call, patch
 
-from wambridge.pcm_cli import PlaybackWatcher, _stopped_line, build_parser, run
+from wambridge.lease import find_stale_leases
+from wambridge.pcm_cli import (
+    PlaybackWatcher,
+    _recover_abandoned_speakers,
+    _stopped_line,
+    build_parser,
+    run,
+)
 from wambridge.samsung import WamApiError
 from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent, WamEventError
@@ -1228,3 +1239,59 @@ class PcmCliTests(TestCase):
         # matching the answer this said `sleep=120s` about a timer the speaker
         # had refused.
         self.assertEqual(watcher.release_summary, "stop=sent sleep=rejected")
+
+
+class RecoverAbandonedSpeakersTests(TestCase):
+    """A stale lease naming this session's own target must not race its startup."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.directory = Path(self._tmp.name)
+        patcher = patch.dict(os.environ, {"WAMBRIDGE_LEASES": str(self.directory)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _stale_lease(self, speaker_ip: str, speaker_port: int) -> None:
+        # A real finished subprocess's pid, not a fabricated large number -
+        # the same standard test_lease.py holds itself to for "genuinely
+        # dead", proven rather than assumed.
+        process = subprocess.Popen([sys.executable, "-c", "pass"])
+        process.wait()
+        path = self.directory / f"{process.pid}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "pid": process.pid,
+                    "speaker_ip": speaker_ip,
+                    "speaker_port": speaker_port,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    @patch("wambridge.pcm_cli.standby")
+    def test_a_lease_for_the_current_target_is_discarded_not_recovered(
+        self, standby_mock
+    ) -> None:
+        self._stale_lease("10.0.0.118", 55001)
+
+        _recover_abandoned_speakers(("10.0.0.118", 55001))
+
+        standby_mock.assert_not_called()
+        self.assertEqual(find_stale_leases(directory=self.directory), [])
+
+    @patch("wambridge.pcm_cli.standby")
+    def test_a_lease_for_a_different_speaker_is_recovered(self, standby_mock) -> None:
+        self._stale_lease("10.0.0.200", 55001)
+
+        _recover_abandoned_speakers(("10.0.0.118", 55001))
+
+        standby_mock.assert_called_once()
+        (target,), kwargs = standby_mock.call_args
+        self.assertEqual((target.ip, target.port), ("10.0.0.200", 55001))
+        self.assertTrue(kwargs["require_stop_confirmed"])
+        # Claimed and resolved - nothing left in either state.
+        self.assertEqual(find_stale_leases(directory=self.directory), [])
+        self.assertEqual(list(self.directory.glob("*")), [])

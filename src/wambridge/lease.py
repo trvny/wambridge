@@ -124,12 +124,15 @@ to survive.
 def claim_lease(lease: Lease) -> Lease | None:
     """Mark a lease as being recovered, so a concurrent sweep leaves it alone.
 
-    Renames the file to a ``.recovering`` suffix (idempotent - claiming an
-    already-``.recovering`` lease just refreshes its claim time) and stamps
-    the current time on it. The rename is atomic, so at most one caller ever
-    gets a non-``None`` result back for a given lease - a second sweep racing
-    for the same stale file loses here instead of running ``standby`` against
-    the same speaker at the same time.
+    Renames the file to a fresh ``<pid>.json.recovering-<random>`` name and
+    stamps the current time on it. The destination name is always new - even
+    when reclaiming an already-``.recovering`` lease past
+    ``RECOVERY_CLAIM_TIMEOUT_S`` - so the rename's source path is never one
+    two callers could both still see: whichever one no longer finds
+    ``lease.path`` there loses the race here instead of running ``standby``
+    against the same speaker at the same time. Renaming an existing
+    ``.recovering`` file in place would not have that property, since
+    "already claimed" and "reclaim me" would otherwise share one name.
 
     A failed recovery attempt does not call ``unclaim`` - there isn't one.
     It simply leaves the file claimed, which doubles as backoff: nothing
@@ -139,11 +142,9 @@ def claim_lease(lease: Lease) -> Lease | None:
     after all, or claimed by another sweep between the scan and this call).
     """
 
-    base_name = lease.path.name.removesuffix(".recovering")
-    claimed_path = lease.path.with_name(base_name + ".recovering")
+    claimed_path = lease.path.with_name(f"{lease.pid}.json.recovering-{secrets.token_hex(4)}")
     try:
-        if lease.path != claimed_path:
-            os.replace(lease.path, claimed_path)
+        os.replace(lease.path, claimed_path)
         os.utime(claimed_path, None)
     except OSError:
         return None
@@ -229,7 +230,7 @@ def find_stale_leases(*, directory: Path | None = None) -> list[Lease]:
         if lease is not None and not is_pid_alive(lease.pid):
             stale.append(lease)
     now = time.time()
-    for entry in sorted(target_dir.glob("*.json.recovering")):
+    for entry in sorted(target_dir.glob("*.json.recovering-*")):
         try:
             age = now - entry.stat().st_mtime
         except OSError:

@@ -597,15 +597,28 @@ operating system records.
 
       **Coded and unit-tested 2026-08-30, not yet hardware-validated.** `arm()` now
       writes a small lease file (`src/wambridge/lease.py`) naming the speaker and this
-      process's pid before offering the stream; `_release()` removes it on any normal
-      teardown. Every new PCM session, right after its own `probe()` succeeds, sweeps
-      that lease directory for files whose pid is no longer running and sends `standby`
-      for each - so recovery no longer depends on anyone noticing a speaker that never
-      idles, only on some *later* wambridge session eventually starting. A lease
-      `standby` cannot yet confirm (the M5 wedged, say) is left in place for the next
-      sweep rather than discarded. Still needed: kill `wambridge-pcm.exe` outright on
-      the physical M5, confirm the speaker is left lit, then start a fresh session and
-      confirm that one puts it to standby before its own playback begins.
+      process's pid before offering the stream; `_release()` removes it once teardown
+      confirms the speaker is actually clear (`stop=sent`/`stop=skipped`) - not on
+      `stop=unreachable`/`stop=rejected`, where the abandoned session may still be held.
+      A background thread on every new PCM session, started right after its own
+      `probe()` succeeds, sweeps the lease directory: a stale lease naming *this*
+      session's own target is simply discarded (its own upcoming `SetUrlPlayback`
+      supersedes it), and every other stale lease is claimed (renamed so a concurrent
+      sweep skips it) and sent `standby(require_stop_confirmed=True)` - stricter than
+      the interactive command, since nothing here can notice a wrong "recovered". A
+      claim `standby` cannot yet resolve is left in place; a claim past a 60 s
+      timeout - own recovering process died, or the attempt failed - is retried by a
+      later sweep. Still needed: kill `wambridge-pcm.exe` outright on the physical M5,
+      confirm the speaker is left lit, then start a fresh session and confirm that one
+      puts it to standby before its own playback begins.
+
+      Known limitation, accepted rather than fixed: recovery trusts a lease's
+      `(ip, port)` without re-verifying the speaker's identity, so a DHCP
+      reassignment could in theory point `standby` at a different device that took
+      over the address. Low-probability on this project's single-physical-M5 scope,
+      and the identity check available (`samsung.identify`) costs an extra round trip
+      on every session start to guard an edge case - a worse trade against this
+      project's documented startup-latency sensitivity than leaving it noted here.
     - *The phone walked out of Wi-Fi.* Same end state, plus a second wrong one: nothing in
       `RadioService` watches for the network going away, so the foreground notification goes
       on claiming playback that stopped minutes ago, and coming back into range recovers
