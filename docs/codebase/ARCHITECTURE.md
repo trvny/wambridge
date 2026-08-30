@@ -21,7 +21,7 @@ Android renderer: DLNA/UPnP control point → `UpnpRenderer` → phone-local str
 | Android services | foreground lifecycle and Android-facing adapters | desktop process assumptions | `RendererService.kt`, `RadioService.kt` |
 
 ## 4) Reused Patterns
-Adapters wrap a single measured protocol vocabulary rather than copying product logic. State is modeled with immutable dataclasses/data classes. Local stores use alias-keyed versioned records and atomic replacement on Python. Startup is fail-safe: mute first, prove stream/server readiness, release audio, then restore a bounded level.
+Adapters wrap a single measured protocol vocabulary rather than copying product logic. Protocol and value records often use dataclasses/data classes; live service/session state such as Android `RendererState` remains mutable and uses explicit synchronization/volatile fields where needed. Local alias stores use versioned records and atomic replacement on Python. Startup is fail-safe: mute first, prove stream/server readiness, release audio, then restore a bounded level.
 
 ## 5) Known Architectural Risks
 The speaker itself is stateful and fragile: the CPM browse cursor survives processes, fast CPM traffic temporarily wedges that subsystem, and a dead `SetUrlPlayback` target can wedge the control path until power-cycle. The main transport implementations are large state machines (`pcm_cli.py`, `foo_out_wam.cpp`, `UpnpRenderer.kt`), so timing/lifecycle changes need narrow tests plus physical validation.

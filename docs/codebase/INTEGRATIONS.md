@@ -12,7 +12,7 @@
 | GitHub | CI/releases | build and publish component/APK | Actions token + release signing secrets | delivery | `.github/workflows/release.yml` |
 
 ## 2) Data Stores
-There is no database. Python persists versioned JSON device profiles, radio stations and a client UUID under per-user config paths; writes use temp-file + `os.replace`. Android uses private `SharedPreferences`, including its renderer/radio state and serialized station list. Bundled station data has one maintained source, `src/wambridge/station_packs.json`, copied into Android assets during build.
+There is no database. Python persists versioned JSON device profiles, radio stations and a client UUID under per-user config paths. Alias-backed profile/station stores use temp-file + `os.replace`; client UUID persistence writes its JSON file directly. Android uses private `SharedPreferences`, including its renderer/radio state and serialized station list. Bundled station data has one maintained source, `src/wambridge/station_packs.json`, copied into Android assets during build.
 
 ## 3) Secrets and Credentials Handling
 Android signing credentials come from GitHub secrets into `WAMBRIDGE_KEYSTORE_*`/key environment variables. Runtime speaker control has no protocol authentication. Random URL/control tokens protect desktop local servers. `GetStationData.stationurl` can contain TuneIn partner/serial data and must not be logged; probe scratch directories carrying raw XML are ignored.
