@@ -1,11 +1,23 @@
+import json
 import os
+import subprocess
+import sys
 from io import BytesIO, StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import call, patch
 
-from wambridge.pcm_cli import PlaybackWatcher, _stopped_line, build_parser, run
+from wambridge.lease import find_stale_leases
+from wambridge.pcm_cli import (
+    PlaybackWatcher,
+    _recover_abandoned_speakers,
+    _stopped_line,
+    build_parser,
+    run,
+)
 from wambridge.samsung import WamApiError
 from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent, WamEventError
@@ -192,6 +204,18 @@ class PcmCliTests(TestCase):
         )
         released_patcher.start()
         self.addCleanup(released_patcher.stop)
+        # A watcher constructed directly below (not through the FakePlaybackWatcher
+        # patch above) calls the real arm()/_release(), which write and remove a
+        # lease file - point that at a throwaway directory instead of the real
+        # machine-wide one, and clean it up even if a test leaves a file behind.
+        self._lease_dir = TemporaryDirectory()
+        self.addCleanup(self._lease_dir.cleanup)
+        leases_patcher = patch.dict(
+            "os.environ",
+            {"WAMBRIDGE_LEASES": self._lease_dir.name},
+        )
+        leases_patcher.start()
+        self.addCleanup(leases_patcher.stop)
 
     def _args(self, *extra: str):
         return build_parser().parse_args(
@@ -1072,6 +1096,10 @@ class PcmCliTests(TestCase):
         watcher.release()
 
         self.assertEqual(watcher.release_summary, "stop=rejected sleep=120s")
+        # A rejected stop does not establish that the speaker is clear - the
+        # lease has to survive for a later sweep to retry recovery, or an
+        # abandoned session loses its only record.
+        self.assertIsNotNone(watcher._lease)
 
     def test_an_offer_the_speaker_never_took_up_is_not_released(self) -> None:
         # The matched rejection is the rare way to own nothing; this firmware
@@ -1113,6 +1141,30 @@ class PcmCliTests(TestCase):
         watcher.release()
 
         self.assertEqual(watcher.release_summary, "stop=unreachable sleep=off")
+        # An unreachable speaker may still be holding the abandoned session -
+        # removing the only recovery record here would be exactly backwards.
+        self.assertIsNotNone(watcher._lease)
+
+    def test_release_removes_the_lease_once_the_stop_is_confirmed(self) -> None:
+        watcher, _connection = self._connected_watcher()
+        watcher.arm()
+
+        watcher.release()
+
+        self.assertEqual(watcher.release_summary, "stop=sent sleep=off")
+        self.assertIsNone(watcher._lease)
+
+    def test_an_unarmed_release_removes_the_lease(self) -> None:
+        # arm() itself is what writes the lease; release() before it ever runs
+        # (__enter__ raising, say) has nothing to remove, but a release after
+        # arm() with nothing offered still owns no session to recover.
+        watcher, _connection = self._connected_watcher(stream_active=False)
+        watcher.arm()
+
+        watcher.release()
+
+        self.assertEqual(watcher.release_summary, "stop=skipped sleep=off")
+        self.assertIsNone(watcher._lease)
 
     def test_a_pending_sleep_timer_is_cleared_before_the_next_stream(self) -> None:
         watcher, connection = self._connected_watcher(
@@ -1187,3 +1239,87 @@ class PcmCliTests(TestCase):
         # matching the answer this said `sleep=120s` about a timer the speaker
         # had refused.
         self.assertEqual(watcher.release_summary, "stop=sent sleep=rejected")
+
+
+class RecoverAbandonedSpeakersTests(TestCase):
+    """A stale lease naming this session's own target must not race its startup."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.directory = Path(self._tmp.name)
+        patcher = patch.dict(os.environ, {"WAMBRIDGE_LEASES": str(self.directory)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _stale_lease(self, speaker_ip: str, speaker_port: int) -> None:
+        # A real finished subprocess's pid, not a fabricated large number -
+        # the same standard test_lease.py holds itself to for "genuinely
+        # dead", proven rather than assumed.
+        process = subprocess.Popen([sys.executable, "-c", "pass"])
+        process.wait()
+        path = self.directory / f"{process.pid}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "pid": process.pid,
+                    "speaker_ip": speaker_ip,
+                    "speaker_port": speaker_port,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    @patch("wambridge.pcm_cli.standby")
+    def test_a_lease_for_the_current_target_is_skipped_not_recovered(
+        self, standby_mock
+    ) -> None:
+        self._stale_lease("10.0.0.118", 55001)
+
+        _recover_abandoned_speakers(("10.0.0.118", 55001))
+
+        standby_mock.assert_not_called()
+        # Left exactly as found: run() itself removes it, via
+        # discard_superseded, only once its own stream has actually
+        # succeeded - a startup that fails before that must not have lost
+        # the only record of the abandoned speaker.
+        self.assertEqual(len(find_stale_leases(directory=self.directory)), 1)
+
+    @patch("wambridge.pcm_cli.standby")
+    def test_a_lease_for_a_different_speaker_is_recovered(self, standby_mock) -> None:
+        self._stale_lease("10.0.0.200", 55001)
+
+        _recover_abandoned_speakers(("10.0.0.118", 55001))
+
+        standby_mock.assert_called_once()
+        (target,), kwargs = standby_mock.call_args
+        self.assertEqual((target.ip, target.port), ("10.0.0.200", 55001))
+        self.assertTrue(kwargs["require_stop_confirmed"])
+        # Claimed and resolved - nothing left in either state.
+        self.assertEqual(find_stale_leases(directory=self.directory), [])
+        self.assertEqual(list(self.directory.glob("*")), [])
+
+    @patch("wambridge.pcm_cli.standby")
+    def test_a_speaker_with_a_live_lease_is_not_recovered(self, standby_mock) -> None:
+        self._stale_lease("10.0.0.200", 55001)
+        live_path = self.directory / f"{os.getpid()}.json"
+        live_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "pid": os.getpid(),
+                    "speaker_ip": "10.0.0.200",
+                    "speaker_port": 55001,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        _recover_abandoned_speakers(("10.0.0.118", 55001))
+
+        standby_mock.assert_not_called()
+        # The stale claim is cleared, since a live session now legitimately
+        # holds this speaker - but that live session's own lease is untouched.
+        self.assertEqual(find_stale_leases(directory=self.directory), [])
+        self.assertEqual(list(self.directory.glob("*")), [live_path])

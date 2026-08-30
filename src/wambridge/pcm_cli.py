@@ -23,8 +23,18 @@ from .cli_common import (
 )
 from .connections import wait_until_released
 from .control_channel import ControlChannel
+from .control_cli import DEFAULT_RETRIES, DEFAULT_RETRY_DELAY, ControlError, Target, standby
 from .discovery import local_ip_for
 from .identity import load_client_uuid
+from .lease import (
+    Lease,
+    claim_lease,
+    discard_superseded,
+    find_stale_leases,
+    has_live_lease,
+    remove_lease,
+    write_lease,
+)
 from .pcm_stream import PCM_FORMATS, PcmAudioStreamServer
 from .profiles import ProfileError, ProfileStore
 from .samsung import (
@@ -298,6 +308,10 @@ class PlaybackWatcher:
         self._stop = threading.Event()
         self._error = ""
         self._thread: threading.Thread | None = None
+        # Written once arm() sends the playback command, removed once _release()
+        # tears the session down. A process killed in between leaves the file
+        # behind for the next session's stale-lease sweep to find - see lease.py.
+        self._lease: Lease | None = None
         self._connection: WamEventConnection | None = None
         self._connection_lock = threading.Lock()
         self._pending: list[str] = []
@@ -393,6 +407,22 @@ class PlaybackWatcher:
             if self._released:
                 return
             self._released = True
+        try:
+            self._release_locked(arm_sleep_timer=arm_sleep_timer)
+        finally:
+            # Only once the outcome is known, and only when it says the
+            # speaker is actually clear. "stop=unreachable"/"stop=rejected"
+            # mean the abandoned SetUrlPlayback session may still be held -
+            # removing the lease there would tell the next session's sweep
+            # there is nothing left to recover, which is exactly backwards.
+            if self._lease is not None and not self.release_summary.startswith(
+                ("stop=unreachable", "stop=rejected")
+            ):
+                remove_lease(self._lease)
+                self._lease = None
+
+    def _release_locked(self, *, arm_sleep_timer: bool) -> None:
+        """Body of ``_release`` proper, run once ``_released`` is claimed."""
         # A stop, track change or foobar shutdown does not have to deliver a
         # matching resume callback. Restore the raw volume we replaced with 0 for pause
         # while the persistent 55001 connection is still alive.
@@ -532,6 +562,7 @@ class PlaybackWatcher:
     def arm(self) -> None:
         """Accept playback events only after this attempt sends its command."""
         self._armed.set()
+        self._lease = write_lease(self._speaker_ip, self._port)
 
     def mark_stream_active(self) -> None:
         """Mark that the speaker requested this attempt's local HTTP stream."""
@@ -1084,6 +1115,83 @@ def _stopped_line(
     )
 
 
+def _recover_abandoned_speakers(current_target: tuple[str, int]) -> None:
+    """Send ``standby`` for any speaker a crashed prior session left holding.
+
+    A PC that loses power, or a helper killed outright, runs no cleanup of
+    its own - the lease it wrote in ``arm()`` is exactly what survives that,
+    and this is the other side of it: every new PCM session checks for one
+    before starting its own, so recovery does not depend on anyone noticing
+    a speaker that never idles. Runs on a background thread (see its call
+    site in ``run()``) so an unreachable stale speaker's retries and timeouts
+    never delay the session actually being started.
+
+    ``current_target`` is this session's own ``(speaker_ip, speaker_port)`` -
+    a stale lease naming it is skipped, not sent ``standby``. This session is
+    about to become that speaker's new legitimate owner; its own
+    ``SetUrlPlayback`` supersedes whatever the crashed session left behind,
+    and racing this background thread's pause/mute against the fresh stream
+    this same startup is about to offer would stop the very playback being
+    started (found in review - the naive version of this function recovered
+    unconditionally). The old lease is left in place here rather than
+    deleted: ``run()`` removes it, via ``discard_superseded``, only once its
+    own stream has actually superseded it, so a startup that fails first
+    leaves the record for a later sweep instead of erasing the only evidence
+    of the abandoned speaker over a promise that was never kept (also found
+    in review).
+
+    ``require_stop_confirmed=True`` matters here specifically: an
+    interactive ``standby`` treats a confirmed mute as success even if the
+    stop itself failed, which is right for a human clearing a speaker they
+    can see. Automated recovery has no one to notice a wrong call - the
+    abandoned ``SetUrlPlayback`` session must be confirmed stopped, or the
+    lease has to survive to be tried again.
+
+    Claiming before calling ``standby`` (see ``claim_lease``) is what keeps
+    two sessions started close together from both recovering the same
+    speaker at once - the claim is left in place, not undone, on failure,
+    which doubles as backoff until the next sweep's claim-age check allows a
+    retry. Right before the call, ``has_live_lease`` re-checks for a session
+    that has taken this same speaker over since the scan above - narrowing,
+    not closing, a separate race: a fresh session recovering *its own*
+    target only ever protects that one target, so this speaker could belong
+    to a different session's own concurrent startup rather than actually
+    being abandoned (found in review). Fully closing that would need a lock
+    shared across processes, which nothing here provides.
+    """
+    for lease in find_stale_leases():
+        if (lease.speaker_ip, lease.speaker_port) == current_target:
+            continue
+        claimed = claim_lease(lease)
+        if claimed is None:
+            continue  # lost the race to another sweep, or already resolved
+        if has_live_lease(claimed.speaker_ip, claimed.speaker_port):
+            # A live session has taken this speaker over since the scan above.
+            remove_lease(claimed)
+            continue
+        try:
+            standby(
+                Target(claimed.speaker_ip, claimed.speaker_port),
+                retries=DEFAULT_RETRIES,
+                retry_delay=DEFAULT_RETRY_DELAY,
+                require_stop_confirmed=True,
+            )
+        except ControlError as error:
+            LOGGER.warning(
+                "Could not recover speaker %s from a crashed session (pid %s): %s",
+                claimed.speaker_ip,
+                claimed.pid,
+                error,
+            )
+            continue
+        LOGGER.info(
+            "Recovered speaker %s, abandoned by a crashed session (pid %s)",
+            claimed.speaker_ip,
+            claimed.pid,
+        )
+        remove_lease(claimed)
+
+
 def run(
     args: argparse.Namespace,
     *,
@@ -1097,6 +1205,16 @@ def run(
     speaker_ip, speaker_port = select_speaker(args, store)
     client_uuid = load_client_uuid()
     response = probe(speaker_ip, port=speaker_port)
+    # Backgrounded: a stale lease naming an unreachable speaker retries and
+    # times out on its own schedule (up to ~30 s, see RECOVERY_CLAIM_TIMEOUT_S
+    # in lease.py), and none of that may delay the session this call is
+    # actually here to start.
+    threading.Thread(
+        target=_recover_abandoned_speakers,
+        args=((speaker_ip, speaker_port),),
+        name="wambridge-abandoned-speaker-sweep",
+        daemon=True,
+    ).start()
     LOGGER.info(
         "Speaker %s replied with %s",
         speaker_ip,
@@ -1164,6 +1282,11 @@ def run(
             watcher.cancel_sleep_timer()
             watcher.arm()
             watcher.offer_stream(stream_url)
+            # Only now does this session's own stream actually supersede
+            # whatever a crashed prior session left on this speaker - see
+            # _recover_abandoned_speakers for why the sweep itself does not
+            # delete that old lease.
+            discard_superseded(speaker_ip, speaker_port, keep_pid=os.getpid())
             _raise_if_pcm_input_closed(input_stream)
 
             _wait_for_stream_request(

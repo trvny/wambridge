@@ -19,7 +19,7 @@ from wambridge.control_cli import (
     standby,
     wait_until_released,
 )
-from wambridge.samsung import WamApiError
+from wambridge.samsung import WamApiError, WamResponse
 
 
 class ControlParserTests(TestCase):
@@ -243,6 +243,66 @@ class StandbyReleaseTests(TestCase):
 
         self.assertIn("holding=unknown", lines)
         self.assertNotIn("holding=0", lines)
+
+    @patch("wambridge.connections.attached_connections_to", return_value=0)
+    @patch("wambridge.control_cli.get_mute", return_value=True)
+    @patch("wambridge.control_cli.set_mute")
+    @patch("wambridge.control_cli.stop_playback", side_effect=WamApiError("no reply"))
+    def test_mute_only_success_passes_by_default(
+        self, _stop, _set_mute, _get_mute, _held
+    ) -> None:
+        # A confirmed mute is enough for the interactive command even if every
+        # stop attempt failed - it can only promise "nothing is attached now",
+        # which a speaker someone else already stopped still satisfies.
+        lines = standby(Target("10.0.0.118", 55001), retries=1, retry_delay=0)
+
+        self.assertIn("verified=yes", lines)
+
+    @patch("wambridge.connections.attached_connections_to", return_value=0)
+    @patch("wambridge.control_cli.get_mute", return_value=True)
+    @patch("wambridge.control_cli.set_mute")
+    @patch("wambridge.control_cli.stop_playback", side_effect=WamApiError("no reply"))
+    def test_require_stop_confirmed_rejects_mute_only_success(
+        self, _stop, _set_mute, _get_mute, _held
+    ) -> None:
+        # Automated recovery has no one to notice a wrong "recovered" - a
+        # confirmed mute with a failed stop must not pass here, or the
+        # abandoned SetUrlPlayback session this exists to end is reported
+        # cleared while it may still be held.
+        with self.assertRaisesRegex(ControlError, "stop command was never confirmed"):
+            standby(
+                Target("10.0.0.118", 55001),
+                retries=1,
+                retry_delay=0,
+                require_stop_confirmed=True,
+            )
+
+    @patch("wambridge.connections.attached_connections_to", return_value=0)
+    @patch("wambridge.control_cli.get_mute", return_value=True)
+    @patch("wambridge.control_cli.set_mute")
+    @patch(
+        "wambridge.control_cli.stop_playback",
+        return_value=WamResponse(
+            method="PausePlaybackEvent", result="ng", body="", values={}, matched=False
+        ),
+    )
+    def test_an_unmatched_stop_reply_is_not_confirmed(
+        self, _stop, _set_mute, _get_mute, _held
+    ) -> None:
+        # stop_playback tolerates an unrelated broadcast sharing its response
+        # slot by returning it unmatched rather than raising - correctly, so
+        # working playback is never aborted as a false rejection (see
+        # test_response_matching.py). But an unmatched reply has not actually
+        # confirmed the stop either, so require_stop_confirmed must still
+        # reject it rather than read "no exception" as "stopped" (found in
+        # review - the underlying bug this covers).
+        with self.assertRaisesRegex(ControlError, "stop command was never confirmed"):
+            standby(
+                Target("10.0.0.118", 55001),
+                retries=1,
+                retry_delay=0,
+                require_stop_confirmed=True,
+            )
 
     @patch("wambridge.connections.time.sleep")
     @patch("wambridge.connections.attached_connections_to", side_effect=[2, 1, 0])

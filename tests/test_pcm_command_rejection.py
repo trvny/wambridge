@@ -10,6 +10,8 @@ restore skipped because startup counted as complete.
 
 from __future__ import annotations
 
+import os
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -18,6 +20,22 @@ from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent
 
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
+
+# arm() below writes a real lease file - point it at a throwaway directory
+# rather than the machine-wide default every other wambridge session reads.
+# patch.dict itself saves and restores whatever WAMBRIDGE_LEASES already held,
+# so a test runner that set it for its own reasons gets it back afterward.
+_lease_dir = TemporaryDirectory()
+_lease_env_patcher = patch.dict(os.environ, {"WAMBRIDGE_LEASES": _lease_dir.name})
+
+
+def setUpModule() -> None:
+    _lease_env_patcher.start()
+
+
+def tearDownModule() -> None:
+    _lease_env_patcher.stop()
+    _lease_dir.cleanup()
 
 
 def _response(method: str, result: str, **values: str) -> WamEvent:
