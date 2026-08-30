@@ -30,6 +30,7 @@ class FoobarMenuSourceTests(TestCase):
 
     def test_sleep_timer_reuses_config_and_routes_through_active_helper(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
+        control_header = CONTROL_HEADER.read_text(encoding="utf-8")
         pcm_source = PCM_SOURCE.read_text(encoding="utf-8")
 
         self.assertIn('L"WAMBRIDGE_SLEEP_AFTER_STOP"', source)
@@ -37,6 +38,7 @@ class FoobarMenuSourceTests(TestCase):
         self.assertIn('L" --seconds "', source)
         self.assertIn("wam::send_sleep_timer_over_helper", source)
         self.assertIn("wam::note_menu_sleep_timer", source)
+        self.assertIn("void note_menu_sleep_timer(int seconds);", control_header)
         self.assertIn('L"menu_sleep_timer_deadline"', source)
         self.assertIn("set_sleep_timer=watcher.set_sleep_timer", pcm_source)
 
