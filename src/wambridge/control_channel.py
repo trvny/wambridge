@@ -16,6 +16,7 @@ speaker's network port.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import secrets
 import socket
@@ -235,14 +236,10 @@ class ControlChannel:
 
 
 def _shutdown_quietly(client: socket.socket) -> None:
-    try:
+    with contextlib.suppress(OSError):
         client.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
-    try:
+    with contextlib.suppress(OSError):
         client.close()
-    except OSError:
-        pass
 
 
 def _read_lines(client: socket.socket, stop: threading.Event):

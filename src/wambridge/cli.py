@@ -36,7 +36,7 @@ from .samsung import (
     set_volume,
     stop_playback,
 )
-from .stream import AudioStreamServer, OUTPUT_PROFILES, StreamError
+from .stream import OUTPUT_PROFILES, AudioStreamServer, StreamError
 
 LOGGER = logging.getLogger("wambridge")
 

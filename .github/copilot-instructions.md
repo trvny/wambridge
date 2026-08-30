@@ -36,7 +36,7 @@ with Python 3.14 via uv. Use `uv` (there is a `uv.lock`; dev group provides `ruf
 
 ```powershell
 uv sync --locked                                          # bootstrap, always first
-uv run ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
+uv run ruff check src tests foobar/wambridge_pcm_entry.py tools
 uv run python -m compileall -q src tests foobar/wambridge_pcm_entry.py tools
 uv run python -m unittest discover -s tests -v            # the full test suite
 uv run wambridge-control --help                           # smoke checks used by CI
@@ -44,8 +44,8 @@ uv run wambridge-events --help
 ```
 
 Ruff config is in `pyproject.toml`: line-length 100, target py314, lint select
-`E,F,I,UP,B,SIM` (CI itself checks only `E,F,B,UP`, but keep code clean for the full
-configured set). Tests are stdlib `unittest`, plain function/`TestCase` style, all
+`E,F,I,UP,B,SIM` — CI runs bare `ruff check`, so it enforces the full configured set.
+Tests are stdlib `unittest`, plain function/`TestCase` style, all
 offline — no speaker or network needed. There is no pytest config; use the unittest
 command above, not `pytest`.
 

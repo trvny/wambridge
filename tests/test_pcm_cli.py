@@ -10,7 +10,6 @@ from wambridge.samsung import WamApiError
 from wambridge.stream import StreamError
 from wambridge.wam_events import WamEvent, WamEventError
 
-
 CLIENT_UUID = "00000000-0000-4000-8000-000000000001"
 
 
@@ -470,16 +469,18 @@ class PcmCliTests(TestCase):
         args = self._args()
         args.startup_timeout = 0.01
 
-        with patch("wambridge.pcm_cli.PcmAudioStreamServer", SilentServer):
-            with self.assertRaisesRegex(
+        with (
+            patch("wambridge.pcm_cli.PcmAudioStreamServer", SilentServer),
+            self.assertRaisesRegex(
                 StreamError,
                 "did not request the PCM stream",
-            ):
-                run(
-                    args,
-                    pcm_input=BytesIO(),
-                    protocol_output=StringIO(),
-                )
+            ),
+        ):
+            run(
+                args,
+                pcm_input=BytesIO(),
+                protocol_output=StringIO(),
+            )
 
         self.assertEqual(
             volume_mock.call_args_list,
@@ -515,16 +516,16 @@ class PcmCliTests(TestCase):
         with (
             patch("wambridge.pcm_cli.PcmAudioStreamServer", SilentServer),
             patch("wambridge.pcm_cli._pcm_input_closed", return_value=True),
-        ):
-            with self.assertRaisesRegex(
+            self.assertRaisesRegex(
                 StreamError,
                 "PCM input closed before the speaker requested",
-            ):
-                run(
-                    args,
-                    pcm_input=BytesIO(),
-                    protocol_output=StringIO(),
-                )
+            ),
+        ):
+            run(
+                args,
+                pcm_input=BytesIO(),
+                protocol_output=StringIO(),
+            )
 
         self.assertEqual(
             volume_mock.call_args_list,
@@ -558,16 +559,18 @@ class PcmCliTests(TestCase):
         args = self._args("--volume", "4")
         args.startup_timeout = 0.01
 
-        with patch("wambridge.pcm_cli.PcmAudioStreamServer", ReadyServer):
-            with self.assertRaisesRegex(
+        with (
+            patch("wambridge.pcm_cli.PcmAudioStreamServer", ReadyServer),
+            self.assertRaisesRegex(
                 StreamError,
                 "Timed out waiting for audio_started",
-            ):
-                run(
-                    args,
-                    pcm_input=BytesIO(),
-                    protocol_output=StringIO(),
-                )
+            ),
+        ):
+            run(
+                args,
+                pcm_input=BytesIO(),
+                protocol_output=StringIO(),
+            )
 
         # A speaker found at 0 was muted on purpose, and the startup that failed
         # here is the one that would have undone it. The 0 goes back.
@@ -603,9 +606,11 @@ class PcmCliTests(TestCase):
         args.startup_timeout = 0.01
         protocol = StringIO()
 
-        with patch("wambridge.pcm_cli.PcmAudioStreamServer", SilentServer):
-            with self.assertRaises(StreamError):
-                run(args, pcm_input=BytesIO(), protocol_output=protocol)
+        with (
+            patch("wambridge.pcm_cli.PcmAudioStreamServer", SilentServer),
+            self.assertRaises(StreamError),
+        ):
+            run(args, pcm_input=BytesIO(), protocol_output=protocol)
 
         lines = protocol.getvalue().splitlines()
         self.assertTrue(FakePlaybackWatcher.instances[0].released)

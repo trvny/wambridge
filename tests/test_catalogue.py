@@ -428,7 +428,6 @@ class SearchTests(TestCase):
         self.assertEqual(page.total, 66)
 
     def test_an_empty_query_is_refused_before_the_speaker_is_asked(self) -> None:
-        with patch("wambridge.catalogue.request") as send:
-            with self.assertRaises(WamApiError):
-                search("10.0.0.104", "   ")
+        with patch("wambridge.catalogue.request") as send, self.assertRaises(WamApiError):
+            search("10.0.0.104", "   ")
         send.assert_not_called()

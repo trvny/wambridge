@@ -50,7 +50,7 @@ jobs:
       - name: Check Python
         shell: pwsh
         run: |
-          uv run ruff check --select E,F,B,UP src tests foobar/wambridge_pcm_entry.py tools
+          uv run ruff check src tests foobar/wambridge_pcm_entry.py tools
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run python -m compileall -q src tests foobar/wambridge_pcm_entry.py tools
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
