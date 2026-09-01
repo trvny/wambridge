@@ -44,7 +44,7 @@ class ComponentVersionTests(TestCase):
         # Asked for directly: the repository is not discoverable from a DLL
         # sitting in a components folder unless the component says so.
         about = "".join(declaration()[2:])
-        self.assertIn("https://github.com/trvny/wambridge", about)
+        self.assertIn("https://github.com/twojstar/wambridge", about)
         self.assertIn("Copyright", about)
         self.assertIn("2026 trvny", about)
         self.assertIn("ISC", about)
