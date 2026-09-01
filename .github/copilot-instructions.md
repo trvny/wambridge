@@ -1,4 +1,4 @@
-# Copilot instructions for trvny/wambridge
+# Copilot instructions for twojstar/wambridge
 
 Trust these instructions first. Only search the repo when something here is incomplete or
 found to be wrong. Also read `AGENTS.md` (traps from physical-speaker testing) and, for

@@ -1899,7 +1899,7 @@ DECLARE_COMPONENT_VERSION(
     "0.0.5",
     "Streams foobar2000 PCM to Samsung WAM speakers through wambridge-pcm.\n"
     "\n"
-    "https://github.com/trvny/wambridge\n"
+    "https://github.com/twojstar/wambridge\n"
     "\n"
     "Copyright \xC2\xA9 2026 trvny. ISC licensed."
 );
