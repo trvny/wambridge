@@ -1,6 +1,6 @@
 ![Samsung](https://img.shields.io/badge/Samsung-1428A0?logo=samsung&logoColor=fff&style=for-the-badge) ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff&style=for-the-badge)
 
-[![Release](https://github.com/trvny/wambridge/actions/workflows/release.yml/badge.svg)](https://github.com/trvny/wambridge/actions/workflows/release.yml) [![code license](https://img.shields.io/github/license/trvny/wambridge?label=code&logo=opensourceinitiative&logoColor=white&color=6f42c1&style=flat-square)](https://spdx.org/licenses/ISC) <a href="https://deepwiki.com/trvny/wambridge"><img src="https://deepwiki.com/badge.svg" alt="DeepWiki"></a>
+[![Release](https://github.com/twojstar/wambridge/actions/workflows/release.yml/badge.svg)](https://github.com/twojstar/wambridge/actions/workflows/release.yml) [![code license](https://img.shields.io/github/license/twojstar/wambridge?label=code&logo=opensourceinitiative&logoColor=white&color=6f42c1&style=flat-square)](https://spdx.org/licenses/ISC) <a href="https://deepwiki.com/twojstar/wambridge"><img src="https://deepwiki.com/badge.svg" alt="DeepWiki"></a>
 
 # WAM Bridge
 
@@ -17,7 +17,7 @@ but not integrated.
 Everything here was measured against one physical Shape M5 (`SPK-WAM550`,
 firmware `WAM550WWB-3117.1`). Other models in the family are untested.
 
-## Status: working [`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha)
+## Status: working [`alpha`](https://github.com/twojstar/wambridge/releases/tag/alpha)
 
 Both paths play audio on real hardware. The foobar component passed its full
 physical checklist on 2026-08-02: a complete 213-second track start to finish at
@@ -65,7 +65,7 @@ facts from a physical `SPK-WAM550` are in
 ## Foobar2000 output
 
 Rolling prerelease,
-[`alpha`](https://github.com/trvny/wambridge/releases/tag/alpha), rebuilt whenever `main`
+[`alpha`](https://github.com/twojstar/wambridge/releases/tag/alpha), rebuilt whenever `main`
 moves. The link does not change and both halves always come from the same commit. The
 version comes from `version` in `pyproject.toml`, the only place it is written down:
 
@@ -98,7 +98,7 @@ Configuration, known limitations and the physical checklist are documented in
 ## Install the CLI
 
 ```powershell
-git clone https://github.com/trvny/wambridge.git
+git clone https://github.com/twojstar/wambridge.git
 cd wambridge
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
