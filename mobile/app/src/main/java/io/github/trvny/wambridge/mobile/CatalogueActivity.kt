@@ -87,7 +87,9 @@ class CatalogueActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        MobileUi.applyWindow(this)`r`n        val content = MobileUi.page(this)
+        MobileUi.applyWindow(this)
+
+        val content = MobileUi.page(this)
         content.addView(
             MobileUi.header(
                 this,
