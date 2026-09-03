@@ -22,6 +22,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
     private var proxy: RadioProxyServer? = null
     private var channel: SamsungWamChannel? = null
+    private var volumeChannel: SamsungWamChannel? = null
     private var station: MobileRadioStation? = null
     private var safeVolumeApplied = false
     private var targetVolume = SAFE_START_VOLUME
@@ -152,6 +153,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         try {
             activeProxy = RadioProxyServer(this, speakerIp, sources, this).also { it.start() }
             activeChannel = SamsungWamChannel(this, speakerIp, clientUuid, this).also { it.connect() }
+            volumeChannel = activeChannel
 
             // Same startup rule as renderer and desktop radio: keep old firmware
             // silent while switching into URL playback. The proxy callback lifts
@@ -175,6 +177,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             lastStatus = "Starting ${selected.alias}…"
             publish(lastStatus)
         } catch (error: Exception) {
+            if (volumeChannel === activeChannel) volumeChannel = null
             runCatching { activeChannel?.setVolumeRaw(0) }
             runCatching { activeChannel?.setMute(true) }
             runCatching { activeChannel?.close() }
@@ -247,10 +250,10 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         publish(lastStatus)
     }
 
-    override fun onVolumeChanged(raw: Int) {
-        // Drop startup SetVolume(0) replies at receipt time. Queuing this decision behind
-        // startStation can otherwise make an old startup zero look like active state.
-        if (destroyed || (!running && raw == 0)) return
+    override fun onVolumeChanged(source: SamsungWamChannel, raw: Int) {
+        // VolumeLevel has no request ID. Source identity rejects delayed replies from a
+        // retired session while still accepting physical changes on the channel being started.
+        if (destroyed || source !== volumeChannel || (!running && raw == 0)) return
         execute {
             if (destroyed || !running) return@execute
             if (paused || muted) {
@@ -305,6 +308,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         targetVolume = SAFE_START_VOLUME
         muted = false
         paused = false
+        volumeChannel = null
         runCatching { channel?.close() }
         channel = null
         runCatching { proxy?.close() }
