@@ -250,7 +250,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     override fun onVolumeChanged(raw: Int) {
         // Drop startup SetVolume(0) replies at receipt time. Queuing this decision behind
         // startStation can otherwise make an old startup zero look like active state.
-        if (destroyed || !running) return
+        if (destroyed || (!running && raw == 0)) return
         execute {
             if (destroyed || !running) return@execute
             if (paused || muted) {
