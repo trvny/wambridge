@@ -24,6 +24,8 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     private var channel: SamsungWamChannel? = null
     private var station: MobileRadioStation? = null
     private var safeVolumeApplied = false
+    private var targetVolume = SAFE_START_VOLUME
+    private var muted = false
     private var speakerIp = ""
 
     @Volatile
@@ -158,6 +160,8 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             activeChannel.setVolumeRaw(0)
             activeChannel.setMute(true)
             safeVolumeApplied = false
+            targetVolume = SAFE_START_VOLUME
+            muted = false
             activeChannel.offerStream(activeProxy.url)
 
             station = selected
@@ -197,18 +201,17 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     override fun onStreamOpened(sourceUrl: String) = execute {
         if (destroyed || !running) return@execute
         val alias = station?.alias ?: "radio"
-        if (paused) {
-            lastStatus = "Paused $alias"
-            publish(lastStatus)
-            return@execute
-        }
         if (!safeVolumeApplied) {
             val activeChannel = channel ?: return@execute
-            activeChannel.setVolumeRaw(SAFE_START_VOLUME)
+            activeChannel.setVolumeRaw(audibleVolume())
             activeChannel.setMute(false)
             safeVolumeApplied = true
         }
-        lastStatus = "Playing $alias"
+        lastStatus = when {
+            paused -> "Paused $alias"
+            muted -> "Muted $alias"
+            else -> "Playing $alias"
+        }
         publish(lastStatus)
     }
 
@@ -230,7 +233,11 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     override fun onPlaybackStarted() = execute {
         if (destroyed || !running) return@execute
         val alias = station?.alias ?: "radio"
-        lastStatus = if (paused) "Paused $alias" else "Playing $alias · confirmed"
+        lastStatus = when {
+            paused -> "Paused $alias"
+            muted -> "Muted $alias"
+            else -> "Playing $alias · confirmed"
+        }
         publish(lastStatus)
     }
 
@@ -245,44 +252,40 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         if (!running) return
         val activeChannel = channel ?: return
         val alias = station?.alias ?: "Radio"
-        if (paused) {
-            runCatching { activeChannel.resume() }
-            if (!safeVolumeApplied) {
-                activeChannel.setVolumeRaw(SAFE_START_VOLUME)
-                safeVolumeApplied = true
-            }
-            activeChannel.setMute(false)
-            paused = false
-            lastStatus = "Resuming $alias…"
-        } else {
-            // URL playback pause is unreliable on this M5, so mute is the audible guard.
-            runCatching { activeChannel.pause() }
-            activeChannel.setMute(true)
-            paused = true
-            lastStatus = "Paused $alias"
-        }
+        paused = !paused
+        if (safeVolumeApplied) activeChannel.setVolumeRaw(audibleVolume())
+        lastStatus = if (paused) "Paused $alias" else "Resuming $alias…"
         publish(lastStatus)
     }
 
     private fun toggleMute() {
-        if (!running || !RendererService.isReasonableIpv4(speakerIp)) return
-        val muted = SpeakerRemote.toggleMute(applicationContext, speakerIp)
+        if (!running) return
+        val activeChannel = channel ?: return
+        muted = !muted
+        if (safeVolumeApplied) activeChannel.setVolumeRaw(audibleVolume())
         lastStatus = "${station?.alias ?: "Radio"} · ${if (muted) "muted" else "unmuted"}"
         publish(lastStatus)
     }
 
     private fun changeVolume(delta: Int) {
-        if (!running || !RendererService.isReasonableIpv4(speakerIp)) return
-        val value = SpeakerRemote.changeVolume(applicationContext, speakerIp, delta)
-        lastStatus = "${station?.alias ?: "Radio"} · volume $value/30"
+        if (!running) return
+        val activeChannel = channel ?: return
+        targetVolume = (targetVolume + delta)
+            .coerceIn(SamsungWamChannel.MIN_VOLUME_STEP, SamsungWamChannel.MAX_VOLUME_STEP)
+        if (safeVolumeApplied) activeChannel.setVolumeRaw(audibleVolume())
+        lastStatus = "${station?.alias ?: "Radio"} · volume $targetVolume/30"
         publish(lastStatus)
     }
+
+    private fun audibleVolume(): Int = if (paused || muted) 0 else targetVolume
 
     private fun stopRadio(removeForeground: Boolean = true) {
         if (channel != null) {
             runCatching { channel?.pause() }
         }
         safeVolumeApplied = false
+        targetVolume = SAFE_START_VOLUME
+        muted = false
         paused = false
         runCatching { channel?.close() }
         channel = null
