@@ -76,8 +76,6 @@ class CatalogueActivity : Activity() {
     private lateinit var upButton: Button
     private lateinit var moreButton: Button
 
-    private var padding = 0
-
     /** Last page the speaker reported, or null before the first answer. */
     private var page: SamsungCatalogue.Page? = null
 
@@ -89,66 +87,46 @@ class CatalogueActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        MobileUi.applyWindow(this)
 
-        padding = (24 * resources.displayMetrics.density).toInt()
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(padding, padding, padding, padding)
-        }
+        val content = MobileUi.page(this)
+        content.addView(
+            MobileUi.header(
+                this,
+                "TuneIn catalogue",
+                "Browse the catalogue reported by the M5 itself, then play through the phone relay.",
+            ),
+        )
 
-        content.addView(TextView(this).apply {
-            text = "TuneIn catalogue"
-            textSize = 24f
+        val searchCard = MobileUi.card(this)
+        searchCard.addView(MobileUi.label(this, "Search"))
+        searchInput = MobileUi.field(this, "Station, genre, show…").apply { setSingleLine(true) }
+        searchCard.addView(searchInput)
+        searchCard.addView(MobileUi.row(this).apply {
+            setPadding(0, MobileUi.dp(this@CatalogueActivity, 10), 0, 0)
+            MobileUi.addWeighted(this, MobileUi.button(this@CatalogueActivity, "Search", MobileUi.ButtonKind.PRIMARY) { runSearch() }, 1.25f)
+            upButton = MobileUi.button(this@CatalogueActivity, "Up") { goUp() }
+            MobileUi.addWeighted(this, upButton)
+            MobileUi.addWeighted(this, MobileUi.button(this@CatalogueActivity, "Top") { openRoot() }, marginDp = 0)
         })
-        content.addView(TextView(this).apply {
-            text = "\nBrowsed from the speaker itself, so it shows what the M5 shows. " +
-                "Tapping a station resolves it and plays it through this phone.\n"
-            textSize = 14f
-        })
-
-        searchInput = EditText(this).apply {
-            hint = "Search TuneIn"
-            setSingleLine(true)
-        }
-        content.addView(searchInput)
-
-        content.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(Button(this@CatalogueActivity).apply {
-                text = "Search"
-                setOnClickListener { runSearch() }
-            })
-            upButton = Button(this@CatalogueActivity).apply {
-                text = "Up"
-                setOnClickListener { goUp() }
-            }
-            addView(upButton)
-            addView(Button(this@CatalogueActivity).apply {
-                text = "Top"
-                setOnClickListener { openRoot() }
-            })
-        })
+        content.addView(searchCard)
 
         breadcrumbView = TextView(this).apply {
-            textSize = 15f
-            setPadding(0, padding / 2, 0, 0)
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(getColor(R.color.wam_muted))
+            setPadding(MobileUi.dp(this@CatalogueActivity, 2), MobileUi.dp(this@CatalogueActivity, 4), 0, MobileUi.dp(this@CatalogueActivity, 8))
         }
         content.addView(breadcrumbView)
 
-        statusView = TextView(this).apply {
-            textSize = 15f
-            setPadding(0, padding / 4, 0, padding / 4)
-        }
+        statusView = MobileUi.status(this)
         content.addView(statusView)
+        content.addView(MobileUi.sectionTitle(this, "Browse"))
 
-        entriesView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
+        entriesView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(entriesView)
 
-        moreButton = Button(this).apply {
-            text = "Load more"
-            setOnClickListener { loadMore() }
+        moreButton = MobileUi.button(this, "Load more") { loadMore() }.apply {
             visibility = View.GONE
         }
         content.addView(moreButton)
@@ -270,7 +248,7 @@ class CatalogueActivity : Activity() {
         val where = current.category ?: current.root ?: SamsungCatalogue.BROWSE_ROOT
         val counted = current.total?.let { " — ${current.entries.size} of $it" }.orEmpty()
         breadcrumbView.text = where + counted
-        upButton.isEnabled = !current.isRoot || inSearch
+        MobileUi.setEnabled(upButton, !current.isRoot || inSearch)
         moreButton.visibility =
             if (current.hasMore) View.VISIBLE else View.GONE
 
@@ -286,38 +264,28 @@ class CatalogueActivity : Activity() {
     }
 
     private fun rowFor(entry: SamsungCatalogue.Entry): LinearLayout {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, padding / 3, 0, padding / 3)
+        val card = MobileUi.card(this)
+        if (entry.isFolder) {
+            card.setOnClickListener { descend(entry) }
         }
-
-        row.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        card.addView(MobileUi.row(this).apply {
             addView(TextView(this@CatalogueActivity).apply {
-                text = if (entry.isFolder) "▸  ${entry.title}" else entry.title
+                text = if (entry.isFolder) "${entry.title}  ›" else entry.title
                 textSize = 17f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(getColor(R.color.wam_text))
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                // The whole title is the target for a folder; a station's title is
-                // not tappable, so its Play button cannot be hit by accident.
-                if (entry.isFolder) setOnClickListener { descend(entry) }
             })
             if (entry.isStation) {
-                addView(Button(this@CatalogueActivity).apply {
-                    text = "Play"
-                    setOnClickListener { play(entry) }
-                })
+                addView(MobileUi.button(this@CatalogueActivity, "Play", MobileUi.ButtonKind.PRIMARY) { play(entry) })
             }
         })
-
-        // `description` is what the speaker shows under a station - usually its genre.
         entry.description?.takeIf { it.isNotBlank() }?.let { description ->
-            row.addView(TextView(this).apply {
-                text = description
-                textSize = 12f
+            card.addView(MobileUi.body(this, description).apply {
+                setPadding(0, MobileUi.dp(this@CatalogueActivity, 4), 0, 0)
             })
         }
-        return row
+        return card
     }
 
     // ---- playing -----------------------------------------------------------------

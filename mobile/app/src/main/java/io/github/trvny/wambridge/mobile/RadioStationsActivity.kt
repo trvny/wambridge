@@ -17,6 +17,8 @@ class RadioStationsActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var volumeView: TextView
     private lateinit var stationsView: LinearLayout
+    private lateinit var editorCard: LinearLayout
+    private lateinit var scrollView: ScrollView
     private val store by lazy { RadioStationStore(this) }
     private var editingAlias: String? = null
 
@@ -26,88 +28,67 @@ class RadioStationsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        MobileUi.applyWindow(this)
 
-        val padding = (24 * resources.displayMetrics.density).toInt()
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(padding, padding, padding, padding)
-        }
-
-        content.addView(TextView(this).apply {
-            text = "Radio stations"
-            textSize = 24f
-        })
-        content.addView(TextView(this).apply {
-            text = "\nSave a direct HTTP/HTTPS audio stream. Put fallbacks on following lines. MP3/AAC/FLAC-style direct streams can be relayed; HLS and Ogg still need a mobile transcoder.\n\nA TuneIn station id like s15984 is optional. It is looked up again every time the station plays, so it keeps working after the broadcaster moves its stream; the saved URLs stay behind it as fallbacks."
-            textSize = 14f
-        })
-
-        aliasInput = EditText(this).apply {
-            hint = "Station name"
-            setSingleLine(true)
-        }
-        content.addView(aliasInput)
-
-        urlsInput = EditText(this).apply {
-            hint = "Primary stream URL\nFallback URL\n…"
-            minLines = 3
-            maxLines = 7
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or
-                InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        }
-        content.addView(urlsInput)
-
-        tuneInInput = EditText(this).apply {
-            hint = "TuneIn station id (optional, e.g. s15984)"
-            setSingleLine(true)
-        }
-        content.addView(tuneInInput)
-
-        content.addView(Button(this).apply {
-            text = "Save station"
-            setOnClickListener { saveStation() }
-        })
-
-        content.addView(Button(this).apply {
-            text = "Stop radio"
-            setOnClickListener { stopRadio() }
-        })
-
-        // The M5 has thirty volume steps, not a hundred. Stepping the raw scale means every
-        // press moves the speaker; a 0-100 slider divided down would ignore two presses in
-        // three, which is exactly how this speaker feels from a phone player over UPnP.
+        val content = MobileUi.page(this)
         content.addView(
-            LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(Button(this@RadioStationsActivity).apply {
-                    text = "Vol −"
-                    setOnClickListener { stepVolume(-1) }
-                })
-                addView(Button(this@RadioStationsActivity).apply {
-                    text = "Vol +"
-                    setOnClickListener { stepVolume(+1) }
-                })
-                volumeView = TextView(this@RadioStationsActivity).apply {
-                    textSize = 15f
-                    setPadding(padding, 0, 0, 0)
-                    text = "volume …"
-                }
-                addView(volumeView)
-            },
+            MobileUi.header(
+                this,
+                "Radio stations",
+                "Saved streams with TuneIn resolution and ordered fallbacks.",
+            ),
         )
 
-        statusView = TextView(this).apply {
-            textSize = 15f
-            setPadding(0, padding / 2, 0, padding / 2)
-        }
+        statusView = MobileUi.status(this)
         content.addView(statusView)
 
-        stationsView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        content.addView(MobileUi.sectionTitle(this, "Playback"))
+        val playbackCard = MobileUi.card(this)
+        playbackCard.addView(MobileUi.body(this, "Direct MP3/AAC/FLAC-style streams are relayed by the phone. HLS and Ogg still need transcoding."))
+        playbackCard.addView(MobileUi.row(this).apply {
+            setPadding(0, MobileUi.dp(this@RadioStationsActivity, 12), 0, 0)
+            MobileUi.addWeighted(this, MobileUi.button(this@RadioStationsActivity, "Stop radio", MobileUi.ButtonKind.DANGER) { stopRadio() }, 1.3f)
+            MobileUi.addWeighted(this, MobileUi.button(this@RadioStationsActivity, "−") { stepVolume(-1) }, 0.65f)
+            volumeView = TextView(this@RadioStationsActivity).apply {
+                text = "Volume …"
+                textSize = 14f
+                gravity = android.view.Gravity.CENTER
+                setTextColor(getColor(R.color.wam_text))
+            }
+            MobileUi.addWeighted(this, volumeView, 1.2f)
+            MobileUi.addWeighted(this, MobileUi.button(this@RadioStationsActivity, "+") { stepVolume(+1) }, 0.65f, marginDp = 0)
+        })
+        content.addView(playbackCard)
+
+        content.addView(MobileUi.sectionTitle(this, "Add or edit"))
+        editorCard = MobileUi.card(this)
+        editorCard.addView(MobileUi.label(this, "Station name"))
+        aliasInput = MobileUi.field(this, "e.g. Radio Paradise").apply { setSingleLine(true) }
+        editorCard.addView(aliasInput)
+        editorCard.addView(MobileUi.label(this, "Stream URLs").apply { setPadding(MobileUi.dp(this@RadioStationsActivity, 2), MobileUi.dp(this@RadioStationsActivity, 12), 0, MobileUi.dp(this@RadioStationsActivity, 6)) })
+        urlsInput = MobileUi.field(this, "Primary URL\nFallback URL\n…", multiline = true).apply {
+            minLines = 3
+            maxLines = 7
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_MULTI_LINE
         }
+        editorCard.addView(urlsInput)
+        editorCard.addView(MobileUi.label(this, "TuneIn ID, optional").apply { setPadding(MobileUi.dp(this@RadioStationsActivity, 2), MobileUi.dp(this@RadioStationsActivity, 12), 0, MobileUi.dp(this@RadioStationsActivity, 6)) })
+        tuneInInput = MobileUi.field(this, "e.g. s15984").apply { setSingleLine(true) }
+        editorCard.addView(tuneInInput)
+        editorCard.addView(MobileUi.button(this, "Save station", MobileUi.ButtonKind.PRIMARY) { saveStation() }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = MobileUi.dp(this@RadioStationsActivity, 12) }
+        })
+        content.addView(editorCard)
+
+        content.addView(MobileUi.sectionTitle(this, "Saved stations"))
+        stationsView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(stationsView)
 
-        setContentView(ScrollView(this).apply { addView(content) })
+        scrollView = ScrollView(this).apply { addView(content) }
+        setContentView(scrollView)
         refreshStations()
         refreshStatus()
     }
@@ -153,53 +134,48 @@ class RadioStationsActivity : Activity() {
         stationsView.removeAllViews()
         val stations = store.all()
         if (stations.isEmpty()) {
-            stationsView.addView(TextView(this).apply {
-                text = "No custom stations saved."
-                textSize = 14f
-            })
+            stationsView.addView(MobileUi.body(this, "No stations saved yet."))
             return
         }
 
         stations.forEach { station ->
-            stationsView.addView(TextView(this).apply {
+            val card = MobileUi.card(this)
+            card.addView(TextView(this).apply {
                 text = station.alias
                 textSize = 18f
-                setPadding(0, 16, 0, 0)
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(getColor(R.color.wam_text))
             })
-            stationsView.addView(TextView(this).apply {
-                val tuneInLine = station.tuneInId?.let { "TuneIn $it" }
-                text = (listOfNotNull(tuneInLine) + station.urls).joinToString("\n")
-                textSize = 12f
+            val detail = buildList {
+                station.tuneInId?.let { add("TuneIn $it") }
+                addAll(station.urls)
+            }.joinToString("\n")
+            card.addView(MobileUi.body(this, detail).apply {
+                maxLines = 3
+                setPadding(0, MobileUi.dp(this@RadioStationsActivity, 4), 0, MobileUi.dp(this@RadioStationsActivity, 12))
             })
-            stationsView.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(Button(this@RadioStationsActivity).apply {
-                    text = "Play"
-                    setOnClickListener { playStation(station) }
+            card.addView(MobileUi.row(this).apply {
+                MobileUi.addWeighted(this, MobileUi.button(this@RadioStationsActivity, "Play", MobileUi.ButtonKind.PRIMARY) { playStation(station) })
+                MobileUi.addWeighted(this, MobileUi.button(this@RadioStationsActivity, "Edit") {
+                    editingAlias = station.alias
+                    aliasInput.setText(station.alias)
+                    urlsInput.setText(station.urls.joinToString("\n"))
+                    tuneInInput.setText(station.tuneInId.orEmpty())
+                    statusView.text = "Editing ${station.alias}"
+                    editorCard.post { scrollView.smoothScrollTo(0, editorCard.top) }
                 })
-                addView(Button(this@RadioStationsActivity).apply {
-                    text = "Edit"
-                    setOnClickListener {
-                        editingAlias = station.alias
-                        aliasInput.setText(station.alias)
-                        urlsInput.setText(station.urls.joinToString("\n"))
-                        tuneInInput.setText(station.tuneInId.orEmpty())
+                MobileUi.addWeighted(this, MobileUi.button(this@RadioStationsActivity, "Delete", MobileUi.ButtonKind.DANGER) {
+                    store.remove(station.alias)
+                    if (editingAlias.equals(station.alias, ignoreCase = true)) {
+                        editingAlias = null
+                        aliasInput.text.clear()
+                        urlsInput.text.clear()
+                        tuneInInput.text.clear()
                     }
-                })
-                addView(Button(this@RadioStationsActivity).apply {
-                    text = "Delete"
-                    setOnClickListener {
-                        store.remove(station.alias)
-                        if (editingAlias.equals(station.alias, ignoreCase = true)) {
-                            editingAlias = null
-                            aliasInput.text.clear()
-                            urlsInput.text.clear()
-                            tuneInInput.text.clear()
-                        }
-                        refreshStations()
-                    }
-                })
+                    refreshStations()
+                }, marginDp = 0)
             })
+            stationsView.addView(card)
         }
     }
 
