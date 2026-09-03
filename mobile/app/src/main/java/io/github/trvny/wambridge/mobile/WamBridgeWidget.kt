@@ -36,7 +36,6 @@ class WamBridgeWidget : AppWidgetProvider() {
             ACTION_VOLUME_DOWN,
             ACTION_VOLUME_UP,
             -> runRemoteAction(context, intent.action.orEmpty())
-            ACTION_STOP_RADIO -> stopRadio(context)
         }
     }
 
@@ -72,7 +71,7 @@ class WamBridgeWidget : AppWidgetProvider() {
         val appContext = context.applicationContext
         Thread({
             try {
-                if (RadioService.running) {
+                if (RadioService.active) {
                     val radioAction = when (action) {
                         ACTION_PLAY_PAUSE -> RadioService.ACTION_TOGGLE_PAUSE
                         ACTION_MUTE -> RadioService.ACTION_MUTE
@@ -124,13 +123,6 @@ class WamBridgeWidget : AppWidgetProvider() {
         }, "wam-widget-control").start()
     }
 
-    private fun stopRadio(context: Context) {
-        if (!RadioService.running) return
-        context.startService(
-            Intent(context, RadioService::class.java).apply { action = RadioService.ACTION_STOP },
-        )
-    }
-
     private fun refreshAfterTransition(context: Context) {
         val pending = goAsync()
         val appContext = context.applicationContext
@@ -172,7 +164,6 @@ class WamBridgeWidget : AppWidgetProvider() {
         private const val ACTION_MUTE = "trvny.wambridge.mobile.WIDGET_MUTE"
         private const val ACTION_VOLUME_DOWN = "trvny.wambridge.mobile.WIDGET_VOLUME_DOWN"
         private const val ACTION_VOLUME_UP = "trvny.wambridge.mobile.WIDGET_VOLUME_UP"
-        private const val ACTION_STOP_RADIO = "trvny.wambridge.mobile.WIDGET_STOP_RADIO"
         private const val TRANSITION_TIMEOUT_MS = 20_000L
         private const val EXPANDED_MIN_DP = 100
 
@@ -252,20 +243,18 @@ class WamBridgeWidget : AppWidgetProvider() {
             )
             views.setOnClickPendingIntent(
                 R.id.widget_stop,
-                if (RadioService.running) {
-                    broadcast(context, appWidgetId, ACTION_STOP_RADIO, 5)
-                } else {
-                    nativeTuneInStop(context, appWidgetId)
-                },
+                playbackStop(context, appWidgetId),
             )
             manager.updateAppWidget(appWidgetId, views)
         }
 
-        private fun nativeTuneInStop(context: Context, appWidgetId: Int): PendingIntent =
+        private fun playbackStop(context: Context, appWidgetId: Int): PendingIntent =
             PendingIntent.getActivity(
                 context,
                 appWidgetId * 10 + 5,
-                Intent(context, TuneInActivity::class.java).apply { action = TuneInActivity.ACTION_STOP_NATIVE },
+                Intent(context, TuneInActivity::class.java).apply {
+                    action = TuneInActivity.ACTION_STOP_PLAYBACK
+                },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
 

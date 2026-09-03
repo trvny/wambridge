@@ -37,9 +37,10 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                startPending.set(false)
                 execute {
                     stopRadio()
+                    startPending.set(false)
+                    starting = false
                     lastStatus = "Stopped"
                     stopSelf()
                 }
@@ -76,11 +77,15 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
                     return START_NOT_STICKY
                 }
                 if (startPending.compareAndSet(false, true)) {
+                    starting = true
+                    WamBridgeWidget.updateAll(applicationContext)
                     execute {
                         try {
                             startStation(alias, tuneInId)
                         } finally {
                             startPending.set(false)
+                            starting = false
+                            WamBridgeWidget.updateAll(applicationContext)
                         }
                     }
                 }
@@ -94,6 +99,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     override fun onDestroy() {
         destroyed = true
         startPending.set(false)
+        starting = false
         try {
             worker.submit { stopRadio() }.get(TEARDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } catch (_: Exception) {
@@ -190,13 +196,18 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
     override fun onStreamOpened(sourceUrl: String) = execute {
         if (destroyed || !running) return@execute
+        val alias = station?.alias ?: "radio"
+        if (paused) {
+            lastStatus = "Paused $alias"
+            publish(lastStatus)
+            return@execute
+        }
         if (!safeVolumeApplied) {
             val activeChannel = channel ?: return@execute
             activeChannel.setVolumeRaw(SAFE_START_VOLUME)
             activeChannel.setMute(false)
             safeVolumeApplied = true
         }
-        val alias = station?.alias ?: "radio"
         lastStatus = "Playing $alias"
         publish(lastStatus)
     }
@@ -219,7 +230,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
     override fun onPlaybackStarted() = execute {
         if (destroyed || !running) return@execute
         val alias = station?.alias ?: "radio"
-        lastStatus = "Playing $alias · confirmed"
+        lastStatus = if (paused) "Paused $alias" else "Playing $alias · confirmed"
         publish(lastStatus)
     }
 
@@ -235,11 +246,18 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         val activeChannel = channel ?: return
         val alias = station?.alias ?: "Radio"
         if (paused) {
-            activeChannel.resume()
+            runCatching { activeChannel.resume() }
+            if (!safeVolumeApplied) {
+                activeChannel.setVolumeRaw(SAFE_START_VOLUME)
+                safeVolumeApplied = true
+            }
+            activeChannel.setMute(false)
             paused = false
             lastStatus = "Resuming $alias…"
         } else {
-            activeChannel.pause()
+            // URL playback pause is unreliable on this M5, so mute is the audible guard.
+            runCatching { activeChannel.pause() }
+            activeChannel.setMute(true)
             paused = true
             lastStatus = "Paused $alias"
         }
@@ -382,8 +400,12 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         private const val TEARDOWN_TIMEOUT_MS = 1_500L
         private const val WORKER_THREAD_NAME = "wam-mobile-radio"
 
+        @Volatile var starting = false
+            private set
         @Volatile var running = false
             private set
+        val active: Boolean
+            get() = starting || running
         @Volatile var paused = false
             private set
         @Volatile var lastStatus = "Stopped"

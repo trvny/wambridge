@@ -25,6 +25,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 class TuneInActivity : Activity() {
+    private var widgetStopInProgress = false
     private lateinit var statusView: TextView
     private lateinit var refreshButton: Button
     private lateinit var playPauseButton: Button
@@ -85,10 +86,22 @@ class TuneInActivity : Activity() {
         content.addView(presetsView)
 
         setContentView(ScrollView(this).apply { addView(content) })
-        if (intent.action == ACTION_STOP_NATIVE) {
-            stopPlayback()
-        } else {
-            loadPresets()
+        val widgetStop = intent.action == ACTION_STOP_PLAYBACK
+        if (widgetStop) intent.action = null
+        when {
+            savedInstanceState?.getBoolean(STATE_WIDGET_STOP) == true -> finish()
+            widgetStop && RadioService.active -> {
+                widgetStopInProgress = true
+                startService(
+                    Intent(this, RadioService::class.java).apply { action = RadioService.ACTION_STOP },
+                )
+                finish()
+            }
+            widgetStop -> {
+                widgetStopInProgress = true
+                stopPlayback(finishAfter = true)
+            }
+            else -> loadPresets()
         }
     }
 
@@ -330,7 +343,7 @@ class TuneInActivity : Activity() {
         }, "wam-mobile-tunein-control").start()
     }
 
-    private fun stopPlayback() {
+    private fun stopPlayback(finishAfter: Boolean = false) {
         setButtonsEnabled(false)
         statusView.text = "Stopping TuneIn…"
 
@@ -351,6 +364,7 @@ class TuneInActivity : Activity() {
                         statusView.text = "Could not stop playback: ${error.message ?: error.javaClass.simpleName}"
                     },
                 )
+                if (finishAfter) finish()
             }
         }, "wam-mobile-tunein-stop").start()
     }
@@ -512,6 +526,11 @@ class TuneInActivity : Activity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (widgetStopInProgress) outState.putBoolean(STATE_WIDGET_STOP, true)
+    }
+
     override fun onDestroy() {
         artworkExecutor.shutdownNow()
         super.onDestroy()
@@ -551,7 +570,8 @@ class TuneInActivity : Activity() {
     }
 
     companion object {
-        const val ACTION_STOP_NATIVE = "trvny.wambridge.mobile.TUNEIN_STOP_NATIVE"
+        const val ACTION_STOP_PLAYBACK = "trvny.wambridge.mobile.TUNEIN_STOP_PLAYBACK"
+        private const val STATE_WIDGET_STOP = "widget_stop_in_progress"
         private const val OWNER_STOP_TIMEOUT_MS = 2_500L
         private const val ARTWORK_TIMEOUT_MS = 5_000
         private const val MAX_ARTWORK_BYTES = 1024 * 1024
