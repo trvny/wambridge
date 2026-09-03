@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="launcher_background">#000000</color>
+    <color name="wam_background">#F4F6F9</color>
+    <color name="wam_surface">#FFFFFF</color>
+    <color name="wam_surface_alt">#E9EDF3</color>
+    <color name="wam_text">#172033</color>
+    <color name="wam_muted">#657084</color>
+    <color name="wam_accent">#3D6FD6</color>
+    <color name="wam_accent_soft">#E8EEFB</color>
+    <color name="wam_border">#D8DEE9</color>
+    <color name="wam_danger">#B74452</color>
+    <color name="wam_danger_soft">#FAE9EC</color>
+    <color name="wam_success">#28835A</color>
 </resources>

@@ -47,42 +47,23 @@ class TuneInActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        MobileUi.applyWindow(this)
 
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(24))
-        }
-
-        content.addView(TextView(this).apply {
-            text = "TuneIn"
-            textSize = 28f
-            typeface = Typeface.DEFAULT_BOLD
-        })
-        content.addView(TextView(this).apply {
-            text = "Native radio on the Samsung speaker"
-            textSize = 14f
-            setTextColor(Color.DKGRAY)
-            setPadding(0, dp(2), 0, dp(14))
-        })
-
+        val content = MobileUi.page(this)
+        content.addView(
+            MobileUi.header(
+                this,
+                "TuneIn",
+                "Native radio living on the M5, with the controls that Samsung forgot to keep alive.",
+            ),
+        )
         content.addView(buildControls())
 
-        statusView = TextView(this).apply {
-            textSize = 14f
-            setPadding(dp(2), dp(12), dp(2), dp(12))
-        }
+        statusView = MobileUi.status(this)
         content.addView(statusView)
+        content.addView(MobileUi.sectionTitle(this, "Presets"))
 
-        content.addView(TextView(this).apply {
-            text = "Presets"
-            textSize = 19f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(2), dp(4), 0, dp(8))
-        })
-
-        presetsView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
+        presetsView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(presetsView)
 
         setContentView(ScrollView(this).apply { addView(content) })
@@ -92,9 +73,7 @@ class TuneInActivity : Activity() {
             savedInstanceState?.getBoolean(STATE_WIDGET_STOP) == true -> finish()
             widgetStop && RadioService.active -> {
                 widgetStopInProgress = true
-                startService(
-                    Intent(this, RadioService::class.java).apply { action = RadioService.ACTION_STOP },
-                )
+                startService(Intent(this, RadioService::class.java).apply { action = RadioService.ACTION_STOP })
                 finish()
             }
             widgetStop -> {
@@ -106,56 +85,33 @@ class TuneInActivity : Activity() {
     }
 
     private fun buildControls(): View {
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            background = roundedBackground()
-        }
-
-        card.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            refreshButton = compactButton("Refresh") { loadPresets() }
-            playPauseButton = compactButton("Play / pause") { togglePlayback() }
-            stopButton = compactButton("Stop") { stopPlayback() }
-            addWeighted(refreshButton)
-            addWeighted(playPauseButton)
-            addWeighted(stopButton)
+        val card = MobileUi.card(this)
+        card.addView(MobileUi.label(this, "Playback"))
+        card.addView(MobileUi.row(this).also { row ->
+            refreshButton = MobileUi.button(this, "Refresh") { loadPresets() }
+            playPauseButton = MobileUi.button(this, "Play / pause", MobileUi.ButtonKind.PRIMARY) { togglePlayback() }
+            stopButton = MobileUi.button(this, "Stop", MobileUi.ButtonKind.DANGER) { stopPlayback() }
+            MobileUi.addWeighted(row, refreshButton)
+            MobileUi.addWeighted(row, playPauseButton)
+            MobileUi.addWeighted(row, stopButton, marginDp = 0)
         })
-
-        card.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6), 0, 0)
-            volumeDownButton = compactButton("−") { changeVolume(-1) }
-            volumeUpButton = compactButton("+") { changeVolume(+1) }
-            muteButton = compactButton("Mute") { toggleMute() }
+        card.addView(MobileUi.row(this).apply {
+            setPadding(0, MobileUi.dp(this@TuneInActivity, 10), 0, 0)
+            volumeDownButton = MobileUi.button(this@TuneInActivity, "−") { changeVolume(-1) }
+            volumeUpButton = MobileUi.button(this@TuneInActivity, "+") { changeVolume(+1) }
+            muteButton = MobileUi.button(this@TuneInActivity, "Mute") { toggleMute() }
             volumeView = TextView(this@TuneInActivity).apply {
                 text = "Volume"
                 textSize = 14f
                 gravity = Gravity.CENTER
+                setTextColor(getColor(R.color.wam_text))
             }
-            addView(volumeDownButton, LinearLayout.LayoutParams(0, dp(44), 0.75f))
-            addView(volumeView, LinearLayout.LayoutParams(0, dp(44), 1.4f))
-            addView(volumeUpButton, LinearLayout.LayoutParams(0, dp(44), 0.75f))
-            addView(muteButton, LinearLayout.LayoutParams(0, dp(44), 1.2f))
+            MobileUi.addWeighted(this, volumeDownButton, 0.7f)
+            MobileUi.addWeighted(this, volumeView, 1.35f)
+            MobileUi.addWeighted(this, volumeUpButton, 0.7f)
+            MobileUi.addWeighted(this, muteButton, 1.1f, marginDp = 0)
         })
         return card
-    }
-
-    private fun LinearLayout.addWeighted(view: View) {
-        addView(view, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
-            marginEnd = dp(4)
-        })
-    }
-
-    private fun compactButton(label: String, click: () -> Unit): Button = Button(this).apply {
-        text = label
-        isAllCaps = false
-        textSize = 12f
-        minWidth = 0
-        setPadding(dp(6), 0, dp(6), 0)
-        setOnClickListener { click() }
     }
 
     private fun resolveSpeaker(verifySaved: Boolean = true): String =
@@ -241,11 +197,7 @@ class TuneInActivity : Activity() {
             })
         }
         row.addView(copy, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(Button(this).apply {
-            text = "Play"
-            isAllCaps = false
-            setOnClickListener { playPreset(preset) }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(46)))
+        row.addView(MobileUi.button(this, "Play", MobileUi.ButtonKind.PRIMARY) { playPreset(preset) })
         return row
     }
 
@@ -421,12 +373,12 @@ class TuneInActivity : Activity() {
         throw lastError ?: IOException("No active Wi-Fi network")
     }
 
-    private fun roundedBackground(): GradientDrawable = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(14).toFloat()
-        setColor(Color.argb(16, 0, 0, 0))
-        setStroke(dp(1), Color.argb(24, 0, 0, 0))
-    }
+    private fun roundedBackground(): GradientDrawable = MobileUi.rounded(
+        this,
+        fill = getColor(R.color.wam_surface),
+        stroke = getColor(R.color.wam_border),
+        radiusDp = 18,
+    )
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 

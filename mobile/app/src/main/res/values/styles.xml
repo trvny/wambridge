@@ -2,5 +2,11 @@
 <resources>
     <style name="Theme.WAMBridge" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@color/wam_background</item>
+        <item name="android:colorAccent">@color/wam_accent</item>
+        <item name="android:navigationBarColor">@color/wam_background</item>
+        <item name="android:statusBarColor">@color/wam_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>

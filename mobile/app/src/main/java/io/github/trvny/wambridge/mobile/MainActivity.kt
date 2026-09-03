@@ -37,107 +37,77 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        MobileUi.applyWindow(this)
 
-        val padding = (24 * resources.displayMetrics.density).toInt()
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(padding, padding, padding, padding)
-        }
+        val content = MobileUi.page(this)
+        content.addView(
+            MobileUi.header(
+                this,
+                getString(R.string.app_name),
+                "Samsung Wireless Audio Multiroom, without the fossilized Samsung app.",
+            ),
+        )
 
-        layout.addView(TextView(this).apply {
-            text = getString(R.string.app_name)
-            textSize = 24f
-        })
-        layout.addView(TextView(this).apply {
-            text = "\nUPnP/DLNA player → WAM Bridge → Samsung M5"
-            textSize = 16f
-        })
+        statusView = MobileUi.status(this)
+        content.addView(statusView)
 
-        speakerIp = EditText(this).apply {
-            hint = "M5 IPv4 address, e.g. 10.0.0.118"
+        content.addView(MobileUi.sectionTitle(this, "Speaker"))
+        val speakerCard = MobileUi.card(this)
+        speakerCard.addView(MobileUi.label(this, "Samsung M5"))
+        speakerIp = MobileUi.field(this, "IPv4 address, or leave empty for discovery").apply {
             inputType = InputType.TYPE_CLASS_PHONE
             setText(preferences.getString(RendererService.KEY_SPEAKER_IP, ""))
             setSingleLine(true)
         }
-        layout.addView(speakerIp)
-
-        discoverButton = Button(this).apply {
-            text = "Discover WAM speaker"
-            setOnClickListener { discoverSpeaker(allowScan = true) }
-        }
-        layout.addView(discoverButton)
-
-        layout.addView(Button(this).apply {
-            text = "Save + test M5"
-            setOnClickListener { testSpeaker() }
+        speakerCard.addView(speakerIp)
+        speakerCard.addView(MobileUi.body(this, "Discovery follows the saved speaker across DHCP changes.").apply {
+            setPadding(0, MobileUi.dp(this@MainActivity, 10), 0, MobileUi.dp(this@MainActivity, 10))
         })
-
-        layout.addView(Button(this).apply {
-            text = "Start UPnP renderer"
-            setOnClickListener { startRenderer() }
+        speakerCard.addView(MobileUi.row(this).also { row ->
+            discoverButton = MobileUi.button(this, "Discover") { discoverSpeaker(allowScan = true) }
+            MobileUi.addWeighted(row, discoverButton)
+            MobileUi.addWeighted(row, MobileUi.button(this, "Save + test") { testSpeaker() }, marginDp = 0)
         })
+        content.addView(speakerCard)
 
-        layout.addView(Button(this).apply {
-            text = "Stop renderer"
-            setOnClickListener {
-                startService(
-                    Intent(this@MainActivity, RendererService::class.java).apply {
-                        action = RendererService.ACTION_STOP
-                    },
-                )
+        content.addView(MobileUi.sectionTitle(this, "Renderer"))
+        val rendererCard = MobileUi.card(this)
+        rendererCard.addView(MobileUi.body(this, "Expose this phone as ‘WAM Bridge · M5’ to local UPnP/DLNA players."))
+        rendererCard.addView(MobileUi.row(this).apply {
+            setPadding(0, MobileUi.dp(this@MainActivity, 12), 0, 0)
+            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Start renderer", MobileUi.ButtonKind.PRIMARY) { startRenderer() })
+            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Stop", MobileUi.ButtonKind.DANGER) {
+                startService(Intent(this@MainActivity, RendererService::class.java).apply { action = RendererService.ACTION_STOP })
                 refreshUntilSettled()
+            }, marginDp = 0)
+        })
+        content.addView(rendererCard)
+
+        content.addView(MobileUi.sectionTitle(this, "Radio"))
+        val radioCard = MobileUi.card(this)
+        radioCard.addView(MobileUi.body(this, "Native TuneIn presets, the speaker catalogue, and your saved direct streams."))
+        radioCard.addView(MobileUi.row(this).apply {
+            setPadding(0, MobileUi.dp(this@MainActivity, 12), 0, 0)
+            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Presets") { startActivity(Intent(this@MainActivity, TuneInActivity::class.java)) })
+            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Browse") { startActivity(Intent(this@MainActivity, CatalogueActivity::class.java)) })
+            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Stations") { startActivity(Intent(this@MainActivity, RadioStationsActivity::class.java)) }, marginDp = 0)
+        })
+        content.addView(radioCard)
+
+        content.addView(MobileUi.sectionTitle(this, "Quick access"))
+        val shortcutsCard = MobileUi.card(this)
+        shortcutsCard.addView(MobileUi.body(this, "Add the Quick Settings tile before hiding the launcher. Long-pressing the tile reopens this screen."))
+        shortcutsCard.addView(MobileUi.row(this).apply {
+            setPadding(0, MobileUi.dp(this@MainActivity, 12), 0, 0)
+            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Quick Settings") { requestQuickSettingsTile() })
+            launcherButton = MobileUi.button(this@MainActivity, "Launcher") {
+                if (isLauncherHidden()) setLauncherVisible(true) else confirmHideLauncher()
             }
+            MobileUi.addWeighted(this, launcherButton, marginDp = 0)
         })
+        content.addView(shortcutsCard)
 
-        statusView = TextView(this).apply {
-            textSize = 16f
-            setPadding(0, padding / 2, 0, padding)
-        }
-        layout.addView(statusView)
-
-        layout.addView(Button(this).apply {
-            text = "TuneIn presets"
-            setOnClickListener {
-                startActivity(Intent(this@MainActivity, TuneInActivity::class.java))
-            }
-        })
-
-        layout.addView(Button(this).apply {
-            text = "TuneIn catalogue"
-            setOnClickListener {
-                startActivity(Intent(this@MainActivity, CatalogueActivity::class.java))
-            }
-        })
-
-        layout.addView(Button(this).apply {
-            text = "Radio stations"
-            setOnClickListener {
-                startActivity(Intent(this@MainActivity, RadioStationsActivity::class.java))
-            }
-        })
-
-        layout.addView(TextView(this).apply {
-            text = "Neutron: Settings → Output To → select ‘WAM Bridge · M5’. Other local UPnP/DLNA players can use the same renderer; WAV/L16, MP3 and FLAC are advertised."
-            textSize = 14f
-        })
-
-        layout.addView(Button(this).apply {
-            text = "Add Quick Settings toggle"
-            setOnClickListener { requestQuickSettingsTile() }
-        })
-
-        launcherButton = Button(this).apply {
-            setOnClickListener {
-                if (isLauncherHidden()) {
-                    setLauncherVisible(true)
-                } else {
-                    confirmHideLauncher()
-                }
-            }
-        }
-        layout.addView(launcherButton)
-
-        setContentView(ScrollView(this).apply { addView(layout) })
+        setContentView(ScrollView(this).apply { addView(content) })
         refreshLauncherButton()
         refreshStatus()
 
@@ -385,9 +355,9 @@ class MainActivity : Activity() {
 
     private fun refreshLauncherButton() {
         launcherButton.text = if (isLauncherHidden()) {
-            "Restore launcher icon"
+            "Restore icon"
         } else {
-            "Hide launcher icon"
+            "Hide icon"
         }
     }
 }
