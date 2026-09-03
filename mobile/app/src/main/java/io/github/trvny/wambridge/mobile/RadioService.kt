@@ -250,7 +250,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         publish(lastStatus)
     }
 
-    override fun onVolumeChanged(source: SamsungWamChannel, raw: Int) {
+    override fun onVolumeChanged(source: Any, raw: Int) {
         // VolumeLevel has no request ID. Source identity rejects delayed replies from a
         // retired session while still accepting physical changes on the channel being started.
         if (destroyed || source !== volumeChannel || (!running && raw == 0)) return

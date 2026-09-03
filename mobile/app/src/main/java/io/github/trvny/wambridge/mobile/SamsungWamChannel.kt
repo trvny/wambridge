@@ -74,7 +74,7 @@ internal class SamsungWamChannel(
     interface Listener {
         fun onPlaybackStarted()
         fun onReportedError(method: String?, code: String)
-        fun onVolumeChanged(source: SamsungWamChannel, raw: Int) {}
+        fun onVolumeChanged(source: Any, raw: Int) {}
     }
 
     /** What `GetFunc` answered: the selected source and, on wifi, its submode. */
