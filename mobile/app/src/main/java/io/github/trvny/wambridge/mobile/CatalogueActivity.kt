@@ -76,8 +76,6 @@ class CatalogueActivity : Activity() {
     private lateinit var upButton: Button
     private lateinit var moreButton: Button
 
-    private var padding = 0
-
     /** Last page the speaker reported, or null before the first answer. */
     private var page: SamsungCatalogue.Page? = null
 
@@ -251,7 +249,7 @@ class CatalogueActivity : Activity() {
         val where = current.category ?: current.root ?: SamsungCatalogue.BROWSE_ROOT
         val counted = current.total?.let { " — ${current.entries.size} of $it" }.orEmpty()
         breadcrumbView.text = where + counted
-        upButton.isEnabled = !current.isRoot || inSearch
+        MobileUi.setEnabled(upButton, !current.isRoot || inSearch)
         moreButton.visibility =
             if (current.hasMore) View.VISIBLE else View.GONE
 

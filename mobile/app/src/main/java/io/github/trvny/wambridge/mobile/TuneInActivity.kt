@@ -458,19 +458,19 @@ class TuneInActivity : Activity() {
     }
 
     private fun setButtonsEnabled(enabled: Boolean) {
-        refreshButton.isEnabled = enabled
-        playPauseButton.isEnabled = enabled
-        stopButton.isEnabled = enabled
-        muteButton.isEnabled = enabled
-        volumeDownButton.isEnabled = enabled
-        volumeUpButton.isEnabled = enabled
+        MobileUi.setEnabled(refreshButton, enabled)
+        MobileUi.setEnabled(playPauseButton, enabled)
+        MobileUi.setEnabled(stopButton, enabled)
+        MobileUi.setEnabled(muteButton, enabled)
+        MobileUi.setEnabled(volumeDownButton, enabled)
+        MobileUi.setEnabled(volumeUpButton, enabled)
         for (index in 0 until presetsView.childCount) {
             setViewTreeEnabled(presetsView.getChildAt(index), enabled)
         }
     }
 
     private fun setViewTreeEnabled(view: View, enabled: Boolean) {
-        view.isEnabled = enabled
+        MobileUi.setEnabled(view, enabled)
         if (view is ViewGroup) {
             for (index in 0 until view.childCount) {
                 setViewTreeEnabled(view.getChildAt(index), enabled)

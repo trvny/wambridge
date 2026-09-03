@@ -149,6 +149,11 @@ internal object MobileUi {
         gravity = Gravity.CENTER_VERTICAL
     }
 
+    fun setEnabled(view: View, enabled: Boolean) {
+        view.isEnabled = enabled
+        view.alpha = if (enabled) 1f else 0.45f
+    }
+
     fun addWeighted(row: LinearLayout, view: View, weight: Float = 1f, marginDp: Int = 6) {
         row.addView(
             view,

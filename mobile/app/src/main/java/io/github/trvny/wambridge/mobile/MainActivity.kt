@@ -28,6 +28,8 @@ internal const val LAUNCHER_ALIAS_CLASS = "trvny.wambridge.mobile.LauncherAlias"
 class MainActivity : Activity() {
     private lateinit var launcherButton: Button
     private lateinit var discoverButton: Button
+    private lateinit var startRendererButton: Button
+    private lateinit var stopRendererButton: Button
     private lateinit var speakerIp: EditText
     private lateinit var statusView: TextView
 
@@ -75,11 +77,16 @@ class MainActivity : Activity() {
         rendererCard.addView(MobileUi.body(this, "Expose this phone as ‘WAM Bridge · M5’ to local UPnP/DLNA players."))
         rendererCard.addView(MobileUi.row(this).apply {
             setPadding(0, MobileUi.dp(this@MainActivity, 12), 0, 0)
-            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Start renderer", MobileUi.ButtonKind.PRIMARY) { startRenderer() })
-            MobileUi.addWeighted(this, MobileUi.button(this@MainActivity, "Stop", MobileUi.ButtonKind.DANGER) {
+            startRendererButton = MobileUi.button(this@MainActivity, "Start renderer", MobileUi.ButtonKind.PRIMARY) { startRenderer() }
+            stopRendererButton = MobileUi.button(this@MainActivity, "Stop", MobileUi.ButtonKind.DANGER) {
                 startService(Intent(this@MainActivity, RendererService::class.java).apply { action = RendererService.ACTION_STOP })
                 refreshUntilSettled()
-            }, marginDp = 0)
+            }
+            MobileUi.addWeighted(this, startRendererButton)
+            MobileUi.addWeighted(this, stopRendererButton, marginDp = 0)
+        })
+        rendererCard.addView(MobileUi.body(this, "Neutron: Settings → Output To → WAM Bridge · M5. WAV/L16, MP3 and FLAC are advertised.").apply {
+            setPadding(0, MobileUi.dp(this@MainActivity, 10), 0, 0)
         })
         content.addView(rendererCard)
 
@@ -137,7 +144,7 @@ class MainActivity : Activity() {
             return
         }
 
-        discoverButton.isEnabled = false
+        MobileUi.setEnabled(discoverButton, false)
         statusView.text = if (allowScan) {
             "Discovering WAM speakers on Wi-Fi…"
         } else {
@@ -148,7 +155,7 @@ class MainActivity : Activity() {
             val result = WamDiscovery.discover(applicationContext, allowScan = allowScan)
             val speakers = result.speakers
             runOnUiThread {
-                discoverButton.isEnabled = true
+                MobileUi.setEnabled(discoverButton, true)
                 when {
                     speakers.isEmpty() && allowScan -> {
                         statusView.text = emptyScanMessage(result.scan)
@@ -265,6 +272,10 @@ class MainActivity : Activity() {
             RendererService.Phase.STOPPED -> "○"
         }
         statusView.text = "$marker ${RendererService.lastStatus}"
+        if (::startRendererButton.isInitialized) {
+            MobileUi.setEnabled(startRendererButton, !RendererService.active)
+            MobileUi.setEnabled(stopRendererButton, RendererService.busy)
+        }
     }
 
     private fun requestQuickSettingsTile() {
