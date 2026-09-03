@@ -85,7 +85,11 @@ class TuneInActivity : Activity() {
         content.addView(presetsView)
 
         setContentView(ScrollView(this).apply { addView(content) })
-        loadPresets()
+        if (intent.action == ACTION_STOP_NATIVE) {
+            stopPlayback()
+        } else {
+            loadPresets()
+        }
     }
 
     private fun buildControls(): View {
@@ -547,6 +551,7 @@ class TuneInActivity : Activity() {
     }
 
     companion object {
+        const val ACTION_STOP_NATIVE = "trvny.wambridge.mobile.TUNEIN_STOP_NATIVE"
         private const val OWNER_STOP_TIMEOUT_MS = 2_500L
         private const val ARTWORK_TIMEOUT_MS = 5_000
         private const val MAX_ARTWORK_BYTES = 1024 * 1024

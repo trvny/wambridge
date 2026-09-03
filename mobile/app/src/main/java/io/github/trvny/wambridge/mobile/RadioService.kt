@@ -159,6 +159,9 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             channel = activeChannel
             activeProxy = null
             activeChannel = null
+            // Start state belongs to the command, not to delayed speaker/proxy callbacks.
+            // A late StartPlaybackEvent or stream-open signal must not undo a user pause.
+            paused = false
             running = true
             lastStatus = "Starting ${selected.alias}…"
             publish(lastStatus)
@@ -193,7 +196,6 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             activeChannel.setMute(false)
             safeVolumeApplied = true
         }
-        paused = false
         val alias = station?.alias ?: "radio"
         lastStatus = "Playing $alias"
         publish(lastStatus)
@@ -216,7 +218,6 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
     override fun onPlaybackStarted() = execute {
         if (destroyed || !running) return@execute
-        paused = false
         val alias = station?.alias ?: "radio"
         lastStatus = "Playing $alias · confirmed"
         publish(lastStatus)

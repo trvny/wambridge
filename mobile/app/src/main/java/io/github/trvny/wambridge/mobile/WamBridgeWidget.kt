@@ -252,10 +252,22 @@ class WamBridgeWidget : AppWidgetProvider() {
             )
             views.setOnClickPendingIntent(
                 R.id.widget_stop,
-                broadcast(context, appWidgetId, ACTION_STOP_RADIO, 5),
+                if (RadioService.running) {
+                    broadcast(context, appWidgetId, ACTION_STOP_RADIO, 5)
+                } else {
+                    nativeTuneInStop(context, appWidgetId)
+                },
             )
             manager.updateAppWidget(appWidgetId, views)
         }
+
+        private fun nativeTuneInStop(context: Context, appWidgetId: Int): PendingIntent =
+            PendingIntent.getActivity(
+                context,
+                appWidgetId * 10 + 5,
+                Intent(context, TuneInActivity::class.java).apply { action = TuneInActivity.ACTION_STOP_NATIVE },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
 
         private fun broadcast(
             context: Context,
