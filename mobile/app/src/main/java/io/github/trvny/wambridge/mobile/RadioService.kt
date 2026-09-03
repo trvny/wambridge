@@ -247,17 +247,22 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         publish(lastStatus)
     }
 
-    override fun onVolumeChanged(raw: Int) = execute {
-        if (destroyed || !running) return@execute
-        if (paused || muted) {
-            if (raw > 0) {
+    override fun onVolumeChanged(raw: Int) {
+        // Drop startup SetVolume(0) replies at receipt time. Queuing this decision behind
+        // startStation can otherwise make an old startup zero look like active state.
+        if (destroyed || !running) return
+        execute {
+            if (destroyed || !running) return@execute
+            if (paused || muted) {
+                if (raw > 0) {
+                    targetVolume = raw
+                    // Physical buttons and other clients may lift a silent session.
+                    // Remember their intent, then immediately restore transport-safe silence.
+                    channel?.setVolumeRaw(0)
+                }
+            } else {
                 targetVolume = raw
-                // Physical buttons and other clients may lift a silent session.
-                // Remember their intent, then immediately restore transport-safe silence.
-                channel?.setVolumeRaw(0)
             }
-        } else {
-            targetVolume = raw
         }
     }
 
