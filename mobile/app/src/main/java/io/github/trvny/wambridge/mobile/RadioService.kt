@@ -22,7 +22,7 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
 
     private var proxy: RadioProxyServer? = null
     private var channel: SamsungWamChannel? = null
-    private var volumeChannel: SamsungWamChannel? = null
+    @Volatile private var volumeChannel: SamsungWamChannel? = null
     private var station: MobileRadioStation? = null
     private var safeVolumeApplied = false
     private var targetVolume = SAFE_START_VOLUME
@@ -255,7 +255,9 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
         // retired session while still accepting physical changes on the channel being started.
         if (destroyed || source !== volumeChannel || (!running && raw == 0)) return
         execute {
-            if (destroyed || !running) return@execute
+            // Re-check after serialization too: an old callback can be queued before a
+            // station switch and otherwise run after the new channel becomes active.
+            if (destroyed || !running || source !== volumeChannel) return@execute
             if (paused || muted) {
                 if (raw > 0) {
                     targetVolume = raw
