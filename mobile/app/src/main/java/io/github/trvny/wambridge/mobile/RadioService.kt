@@ -41,7 +41,6 @@ class RadioService : Service(), RadioProxyServer.Listener, SamsungWamChannel.Lis
             ACTION_STOP -> {
                 execute {
                     stopRadio()
-                    startPending.set(false)
                     starting = false
                     lastStatus = "Stopped"
                     stopSelf()
