@@ -173,10 +173,7 @@ class MainActivity : Activity() {
     private fun autoDiscoverSpeaker() {
         if (isFinishing || isDestroyed || discoveryExecutor.isShutdown) return
         window.decorView.removeCallbacks(autoDiscoveryRetry)
-        if (RendererService.busy || RadioService.active) {
-            window.decorView.postDelayed(autoDiscoveryRetry, 1_000L)
-            return
-        }
+        if (deferAutoDiscoveryWhileBusy()) return
 
         val previous = speakerIp.text.toString().trim()
         val savedBefore = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
@@ -186,40 +183,64 @@ class MainActivity : Activity() {
         statusView.text = "Finding M5 on Wi-Fi…"
 
         discoveryExecutor.execute {
-            val shouldContinue = {
-                autoDiscoveryGeneration.get() == generation &&
-                    speakerInputRevision.get() == inputRevision &&
-                    preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim() == savedBefore &&
-                    !Thread.currentThread().isInterrupted
-            }
             val result = runCatching {
-                SpeakerTarget.resolve(applicationContext, shouldContinue = shouldContinue)
+                SpeakerTarget.resolve(applicationContext) {
+                    autoDiscoveryStillCurrent(generation, inputRevision, savedBefore)
+                }
             }
             runOnUiThread {
-                if (isFinishing || isDestroyed || autoDiscoveryGeneration.get() != generation) return@runOnUiThread
-                MobileUi.setEnabled(discoverButton, true)
-                if (speakerInputRevision.get() != inputRevision) return@runOnUiThread
-                val resolvedTarget = result.getOrNull()
-                val savedNow = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
-                if (savedNow != savedBefore && savedNow != resolvedTarget) return@runOnUiThread
-                result.fold(
-                    onSuccess = { target ->
-                        if (target == null) {
-                            statusView.text = "No WAM speaker found automatically. Tap Discover to retry."
-                        } else {
-                            speakerIp.setText(target)
-                            statusView.text = if (target == previous) {
-                                "M5 ready at $target."
-                            } else {
-                                "Found M5 at $target and updated the saved address."
-                            }
-                        }
-                    },
-                    onFailure = { error ->
-                        statusView.text = "Automatic discovery failed: ${error.message ?: error.javaClass.simpleName}"
-                    },
-                )
+                applyAutoDiscoveryResult(generation, inputRevision, savedBefore, previous, result)
             }
+        }
+    }
+
+    private fun deferAutoDiscoveryWhileBusy(): Boolean {
+        if (!RendererService.busy && !RadioService.active) return false
+        window.decorView.postDelayed(autoDiscoveryRetry, 1_000L)
+        return true
+    }
+
+    private fun autoDiscoveryStillCurrent(
+        generation: Int,
+        inputRevision: Int,
+        savedBefore: String,
+    ): Boolean = autoDiscoveryGeneration.get() == generation &&
+        speakerInputRevision.get() == inputRevision &&
+        preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim() == savedBefore &&
+        !Thread.currentThread().isInterrupted
+
+    private fun applyAutoDiscoveryResult(
+        generation: Int,
+        inputRevision: Int,
+        savedBefore: String,
+        previous: String,
+        result: Result<String?>,
+    ) {
+        if (isFinishing || isDestroyed || autoDiscoveryGeneration.get() != generation) return
+        MobileUi.setEnabled(discoverButton, true)
+        if (speakerInputRevision.get() != inputRevision) return
+        val target = result.getOrNull()
+        val savedNow = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
+        if (savedNow != savedBefore && savedNow != target) return
+
+        result.fold(
+            onSuccess = { showAutoDiscoveryTarget(previous, it) },
+            onFailure = { error ->
+                statusView.text = "Automatic discovery failed: ${error.message ?: error.javaClass.simpleName}"
+            },
+        )
+    }
+
+    private fun showAutoDiscoveryTarget(previous: String, target: String?) {
+        if (target == null) {
+            statusView.text = "No WAM speaker found automatically. Tap Discover to retry."
+            return
+        }
+        speakerIp.setText(target)
+        statusView.text = if (target == previous) {
+            "M5 ready at $target."
+        } else {
+            "Found M5 at $target and updated the saved address."
         }
     }
 
