@@ -1,6 +1,6 @@
 # GitHub Copilot adapter
 
-Use `AGENTS.md` as the repository-wide source of truth. Apply the nearest path-specific `.github/instructions/*.instructions.md` when one matches the changed files.
+Use `AGENTS.md` and the measured WAM docs (`docs/WAM_PROTOCOL.md` and `docs/DEVELOPMENT_STATUS.md`) as authoritative sources, and read them first for playback and protocol work. Apply the nearest path-specific `.github/instructions/*.instructions.md` when one matches the changed files.
 
 For code review:
 - Focus on concrete regressions introduced by the PR: correctness, security/privacy, data loss, races/lifecycle/resource leaks, compatibility, and violations of repository contracts.
