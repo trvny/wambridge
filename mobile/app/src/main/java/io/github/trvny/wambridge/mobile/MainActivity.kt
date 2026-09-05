@@ -185,7 +185,7 @@ class MainActivity : Activity() {
 
         discoveryExecutor.execute {
             val result = runCatching {
-                SpeakerTarget.resolve(applicationContext, persistResult = false) {
+                SpeakerTarget.resolveUnpersisted(applicationContext) {
                     autoDiscoveryStillCurrent(generation, inputRevision, savedBefore)
                 }
             }
@@ -215,12 +215,13 @@ class MainActivity : Activity() {
         inputRevision: Int,
         savedBefore: String,
         previous: String,
-        result: Result<String?>,
+        result: Result<SpeakerTarget.Resolution?>,
     ) {
         if (isFinishing || isDestroyed || autoDiscoveryGeneration.get() != generation) return
         MobileUi.setEnabled(discoverButton, true)
         if (speakerInputRevision.get() != inputRevision) return
-        val target = result.getOrNull()
+        val resolution = result.getOrNull()
+        val target = resolution?.ip
         val savedNow = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
         if (savedNow != savedBefore && savedNow != target) return
 
@@ -232,12 +233,13 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun showAutoDiscoveryTarget(previous: String, target: String?) {
-        if (target == null) {
+    private fun showAutoDiscoveryTarget(previous: String, result: SpeakerTarget.Resolution?) {
+        if (result == null) {
             statusView.text = "No WAM speaker found automatically. Tap Discover to retry."
             return
         }
-        SpeakerTarget.rememberResolvedIp(applicationContext, target)
+        SpeakerTarget.rememberResolved(applicationContext, result)
+        val target = result.ip
         speakerIp.setText(target)
         statusView.text = if (target == previous) {
             "M5 ready at $target."
