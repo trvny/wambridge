@@ -6,6 +6,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      time: "21:37"
+      timezone: "Europe/Warsaw"
     groups:
       actions:
         patterns: ["*"]
@@ -13,6 +15,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      time: "21:37"
+      timezone: "Europe/Warsaw"
     groups:
       uv:
         patterns: ["*"]
@@ -20,6 +24,8 @@ updates:
     directory: "/mobile"
     schedule:
       interval: "weekly"
+      time: "21:37"
+      timezone: "Europe/Warsaw"
     groups:
       gradle:
         patterns: ["*"]
