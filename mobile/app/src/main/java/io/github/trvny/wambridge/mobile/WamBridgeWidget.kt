@@ -36,10 +36,17 @@ class WamBridgeWidget : AppWidgetProvider() {
             ACTION_VOLUME_DOWN,
             ACTION_VOLUME_UP,
             -> runRemoteAction(context, intent.action.orEmpty())
+            ACTION_STOP -> stopPlayback(context)
         }
     }
 
     private fun toggleBridge(context: Context) {
+        if (RendererService.transitioning) {
+            updateAll(context)
+            showToast(context.applicationContext, "DLNA renderer is still changing state")
+            refreshAfterTransition(context)
+            return
+        }
         if (RendererService.active) {
             context.startService(
                 Intent(context, RendererService::class.java).apply {
@@ -63,6 +70,21 @@ class WamBridgeWidget : AppWidgetProvider() {
         } catch (error: Exception) {
             updateAll(appContext, active = false)
             showToast(appContext, error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    private fun stopPlayback(context: Context) {
+        val appContext = context.applicationContext
+        if (RadioService.active) {
+            appContext.startService(Intent(appContext, RadioService::class.java).apply {
+                action = RadioService.ACTION_STOP
+            })
+            updateAll(appContext)
+        } else {
+            appContext.startActivity(Intent(appContext, TuneInActivity::class.java).apply {
+                action = TuneInActivity.ACTION_STOP_PLAYBACK
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
         }
     }
 
@@ -164,6 +186,7 @@ class WamBridgeWidget : AppWidgetProvider() {
         private const val ACTION_MUTE = "trvny.wambridge.mobile.WIDGET_MUTE"
         private const val ACTION_VOLUME_DOWN = "trvny.wambridge.mobile.WIDGET_VOLUME_DOWN"
         private const val ACTION_VOLUME_UP = "trvny.wambridge.mobile.WIDGET_VOLUME_UP"
+        private const val ACTION_STOP = "trvny.wambridge.mobile.WIDGET_STOP"
         private const val TRANSITION_TIMEOUT_MS = 20_000L
         private const val EXPANDED_MIN_DP = 100
 
@@ -217,10 +240,36 @@ class WamBridgeWidget : AppWidgetProvider() {
             appWidgetId: Int,
         ) {
             val views = RemoteViews(context.packageName, R.layout.widget_wam_bridge_controls)
+            val rendererActive = RendererService.running
             views.setTextViewText(
                 R.id.widget_status,
-                if (RadioService.running) RadioService.lastStatus else "TuneIn / speaker",
+                when {
+                    RadioService.active -> RadioService.lastStatus
+                    RendererService.busy -> RendererService.lastStatus
+                    else -> "Speaker controls"
+                },
             )
+            views.setTextViewText(
+                R.id.widget_renderer_toggle,
+                when {
+                    rendererActive -> "DLNA ●"
+                    RendererService.transitioning -> "DLNA ◐"
+                    else -> "DLNA ○"
+                },
+            )
+            views.setContentDescription(
+                R.id.widget_renderer_toggle,
+                when {
+                    RendererService.transitioning -> "DLNA renderer changing state"
+                    rendererActive -> "DLNA renderer on; tap to stop"
+                    else -> "DLNA renderer off; tap to start"
+                },
+            )
+            views.setOnClickPendingIntent(
+                R.id.widget_renderer_toggle,
+                broadcast(context, appWidgetId, ACTION_TOGGLE, 0),
+            )
+            views.setBoolean(R.id.widget_renderer_toggle, "setEnabled", !RendererService.transitioning)
             views.setTextViewText(
                 R.id.widget_play_pause,
                 if (RadioService.running && RadioService.paused) "▶" else "⏯",
@@ -245,16 +294,26 @@ class WamBridgeWidget : AppWidgetProvider() {
                 R.id.widget_stop,
                 playbackStop(context, appWidgetId),
             )
+            views.setOnClickPendingIntent(
+                R.id.widget_radio,
+                openRadio(context, appWidgetId),
+            )
             manager.updateAppWidget(appWidgetId, views)
         }
 
-        private fun playbackStop(context: Context, appWidgetId: Int): PendingIntent =
+        private fun openRadio(context: Context, appWidgetId: Int): PendingIntent =
             PendingIntent.getActivity(
                 context,
+                appWidgetId * 10 + 6,
+                Intent(context, RadioStationsActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+        private fun playbackStop(context: Context, appWidgetId: Int): PendingIntent =
+            PendingIntent.getBroadcast(
+                context,
                 appWidgetId * 10 + 5,
-                Intent(context, TuneInActivity::class.java).apply {
-                    action = TuneInActivity.ACTION_STOP_PLAYBACK
-                },
+                Intent(context, WamBridgeWidget::class.java).apply { action = ACTION_STOP },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
 
