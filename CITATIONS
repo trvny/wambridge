@@ -4,16 +4,22 @@ message: "If you use this software or its protocol research in your work, please
 type: software
 authors:
   - name: trvny
-  - name: github-actions[bot]
-  - name: dependabot[bot]
-  - name: actions-user
   - name: claude
   - name: chatgpt
   - name: codex
-  - name: chatgpt-codex-connector
+  - name: actions-user
+  - name: github-actions[bot]
+  - name: dependabot[bot]
+  - name: chatgpt-codex-connector[bot]
   - name: gptomek[bot]
   - name: claudiusz69[bot]
+  - name: kanarek-companion[bot]
   - name: devin-ai-integration[bot]
+  - name: stepsecurity-app[bot]
+  - name: deepsource-io[bot]
+  - name: sourcery-ai[bot]
+  - name: coderabbitai[bot]
+  - name: mergify[bot]
 identifiers:
   - type: doi
     value: "10.5281/zenodo.21877543"
