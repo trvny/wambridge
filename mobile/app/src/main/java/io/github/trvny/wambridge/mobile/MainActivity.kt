@@ -62,7 +62,7 @@ class MainActivity : Activity() {
             setSingleLine(true)
         }
         speakerCard.addView(speakerIp)
-        speakerCard.addView(MobileUi.body(this, "Discovery follows the saved speaker across DHCP changes.").apply {
+        speakerCard.addView(MobileUi.body(this, "Discovery runs automatically on launch and follows the saved speaker across DHCP changes.").apply {
             setPadding(0, MobileUi.dp(this@MainActivity, 10), 0, MobileUi.dp(this@MainActivity, 10))
         })
         speakerCard.addView(MobileUi.row(this).also { row ->
@@ -117,10 +117,7 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(content) })
         refreshLauncherButton()
         refreshStatus()
-
-        if (!RendererService.isReasonableIpv4(speakerIp.text.toString().trim())) {
-            window.decorView.post { discoverSpeaker(allowScan = false) }
-        }
+        window.decorView.post { autoDiscoverSpeaker() }
     }
 
     override fun onResume() {
@@ -136,6 +133,39 @@ class MainActivity : Activity() {
         }
         SpeakerTarget.rememberManualIp(applicationContext, value)
         return value
+    }
+
+    private fun autoDiscoverSpeaker() {
+        if (RendererService.busy || RadioService.active) return
+
+        val previous = speakerIp.text.toString().trim()
+        MobileUi.setEnabled(discoverButton, false)
+        statusView.text = "Finding M5 on Wi-Fi…"
+
+        Thread({
+            val result = runCatching { SpeakerTarget.resolve(applicationContext) }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                MobileUi.setEnabled(discoverButton, true)
+                result.fold(
+                    onSuccess = { target ->
+                        if (target == null) {
+                            statusView.text = "No WAM speaker found automatically. Tap Discover to retry."
+                        } else {
+                            speakerIp.setText(target)
+                            statusView.text = if (target == previous) {
+                                "M5 ready at $target."
+                            } else {
+                                "Found M5 at $target and updated the saved address."
+                            }
+                        }
+                    },
+                    onFailure = { error ->
+                        statusView.text = "Automatic discovery failed: ${error.message ?: error.javaClass.simpleName}"
+                    },
+                )
+            }
+        }, "wam-mobile-auto-discovery").start()
     }
 
     private fun discoverSpeaker(allowScan: Boolean) {
