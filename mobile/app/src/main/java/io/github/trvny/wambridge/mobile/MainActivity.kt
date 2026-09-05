@@ -36,6 +36,7 @@ class MainActivity : Activity() {
     private lateinit var stopRendererButton: Button
     private lateinit var speakerIp: EditText
     private lateinit var statusView: TextView
+    private var manualDiscoveryRunning = false
 
     private val autoDiscoveryGeneration = AtomicInteger()
     private val speakerInputRevision = AtomicInteger()
@@ -167,7 +168,7 @@ class MainActivity : Activity() {
     private fun cancelAutoDiscovery() {
         autoDiscoveryGeneration.incrementAndGet()
         window.decorView.removeCallbacks(autoDiscoveryRetry)
-        if (::discoverButton.isInitialized) MobileUi.setEnabled(discoverButton, true)
+        if (::discoverButton.isInitialized && !manualDiscoveryRunning) MobileUi.setEnabled(discoverButton, true)
     }
 
     private fun autoDiscoverSpeaker() {
@@ -184,7 +185,7 @@ class MainActivity : Activity() {
 
         discoveryExecutor.execute {
             val result = runCatching {
-                SpeakerTarget.resolve(applicationContext) {
+                SpeakerTarget.resolve(applicationContext, persistResult = false) {
                     autoDiscoveryStillCurrent(generation, inputRevision, savedBefore)
                 }
             }
@@ -236,6 +237,7 @@ class MainActivity : Activity() {
             statusView.text = "No WAM speaker found automatically. Tap Discover to retry."
             return
         }
+        SpeakerTarget.rememberResolvedIp(applicationContext, target)
         speakerIp.setText(target)
         statusView.text = if (target == previous) {
             "M5 ready at $target."
@@ -245,11 +247,15 @@ class MainActivity : Activity() {
     }
 
     private fun discoverSpeaker(allowScan: Boolean) {
-        if (RendererService.busy) {
-            Toast.makeText(this, "Stop the renderer before discovery.", Toast.LENGTH_SHORT).show()
+        cancelAutoDiscovery()
+        if (manualDiscoveryRunning) return
+        if (RendererService.busy || RadioService.active) {
+            Toast.makeText(this, "Stop renderer/radio playback before discovery.", Toast.LENGTH_SHORT).show()
             return
         }
 
+        val inputRevision = speakerInputRevision.get()
+        manualDiscoveryRunning = true
         MobileUi.setEnabled(discoverButton, false)
         statusView.text = if (allowScan) {
             "Discovering WAM speakers on Wi-Fi…"
@@ -258,10 +264,18 @@ class MainActivity : Activity() {
         }
 
         Thread({
-            val result = WamDiscovery.discover(applicationContext, allowScan = allowScan)
+            val result = SpeakerTarget.withDiscoveryLock {
+                WamDiscovery.discover(applicationContext, allowScan = allowScan)
+            }
             val speakers = result.speakers
             runOnUiThread {
+                manualDiscoveryRunning = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 MobileUi.setEnabled(discoverButton, true)
+                if (speakerInputRevision.get() != inputRevision) {
+                    statusView.text = "Discovery finished; keeping the address you edited."
+                    return@runOnUiThread
+                }
                 when {
                     speakers.isEmpty() && allowScan -> {
                         statusView.text = emptyScanMessage(result.scan)
@@ -322,10 +336,10 @@ class MainActivity : Activity() {
 
     private fun testSpeaker() {
         val value = saveSpeakerIp() ?: return
-        if (RendererService.busy) {
+        if (RendererService.busy || RadioService.active) {
             Toast.makeText(
                 this,
-                "Stop the renderer before probing. Active playback keeps one WAM control connection only.",
+                "Stop renderer/radio playback before probing. The M5 keeps one WAM control connection only.",
                 Toast.LENGTH_LONG,
             ).show()
             return
@@ -333,7 +347,9 @@ class MainActivity : Activity() {
 
         statusView.text = "Testing $value…"
         Thread({
-            val reachable = SamsungWamChannel.probe(applicationContext, value)
+            val reachable = SpeakerTarget.withDiscoveryLock {
+                SamsungWamChannel.probe(applicationContext, value)
+            }
             runOnUiThread {
                 statusView.text = if (reachable) {
                     "M5 answered at $value."

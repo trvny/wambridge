@@ -5,11 +5,22 @@ import android.content.Context
 internal object SpeakerTarget {
     private const val KEY_SPEAKER_DEVICE_ID = "speaker_device_id"
     private const val IDENTITY_TIMEOUT_MS = 1_500
+    private val resolutionLock = Any()
 
     fun resolve(
         context: Context,
         verifySaved: Boolean = true,
+        persistResult: Boolean = true,
         shouldContinue: () -> Boolean = { true },
+    ): String? = withDiscoveryLock {
+        resolveLocked(context, verifySaved, persistResult, shouldContinue)
+    }
+
+    private fun resolveLocked(
+        context: Context,
+        verifySaved: Boolean,
+        persistResult: Boolean,
+        shouldContinue: () -> Boolean,
     ): String? {
         val appContext = context.applicationContext
         val preferences = appContext.getSharedPreferences(RendererService.PREFS, Context.MODE_PRIVATE)
@@ -24,7 +35,7 @@ internal object SpeakerTarget {
             val currentId = identify(appContext, savedIp)
             if (!shouldContinue()) return null
             if (currentId != null && (savedId.isBlank() || currentId == savedId)) {
-                remember(appContext, savedIp, currentId)
+                if (persistResult) remember(appContext, savedIp, currentId)
                 return savedIp
             }
             // Preserve compatibility if this install predates stable IDs and the
@@ -48,8 +59,21 @@ internal object SpeakerTarget {
 
         val selectedId = identify(appContext, selected.ip)
         if (!shouldContinue()) return null
-        remember(appContext, selected.ip, selectedId)
+        if (persistResult) remember(appContext, selected.ip, selectedId)
         return selected.ip
+    }
+
+    /** Keep discovery/probes off the legacy speaker control port one at a time. */
+    internal fun <T> withDiscoveryLock(block: () -> T): T =
+        synchronized(resolutionLock) { block() }
+
+    /** Persist an automatically resolved address without discarding its stable device id. */
+    fun rememberResolvedIp(context: Context, ip: String) {
+        context.applicationContext
+            .getSharedPreferences(RendererService.PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(RendererService.KEY_SPEAKER_IP, ip)
+            .apply()
     }
 
     fun rememberManualIp(context: Context, ip: String) {
