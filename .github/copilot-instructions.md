@@ -1,6 +1,9 @@
 # GitHub Copilot adapter
 
-Use `AGENTS.md` and the measured WAM docs (`docs/WAM_PROTOCOL.md` and `docs/DEVELOPMENT_STATUS.md`) as authoritative sources, and read them first for playback and protocol work. Apply the nearest path-specific `.github/instructions/*.instructions.md` when one matches the changed files.
+Use the nearest applicable `AGENTS.md` for workflow and review rules. For playback, protocol,
+and hardware facts, use `docs/WAM_PROTOCOL.md` and `docs/DEVELOPMENT_STATUS.md`; the
+newest measured result overrides older assumptions. Apply matching path-specific
+`.github/instructions/*.instructions.md` files.
 
 For code review:
 
