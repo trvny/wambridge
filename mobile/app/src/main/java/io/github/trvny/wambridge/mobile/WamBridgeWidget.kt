@@ -41,6 +41,12 @@ class WamBridgeWidget : AppWidgetProvider() {
     }
 
     private fun toggleBridge(context: Context) {
+        if (RendererService.transitioning) {
+            updateAll(context)
+            showToast(context.applicationContext, "DLNA renderer is still changing state")
+            refreshAfterTransition(context)
+            return
+        }
         if (RendererService.active) {
             context.startService(
                 Intent(context, RendererService::class.java).apply {
@@ -253,12 +259,17 @@ class WamBridgeWidget : AppWidgetProvider() {
             )
             views.setContentDescription(
                 R.id.widget_renderer_toggle,
-                if (rendererActive) "DLNA renderer on; tap to stop" else "DLNA renderer off; tap to start",
+                when {
+                    RendererService.transitioning -> "DLNA renderer changing state"
+                    rendererActive -> "DLNA renderer on; tap to stop"
+                    else -> "DLNA renderer off; tap to start"
+                },
             )
             views.setOnClickPendingIntent(
                 R.id.widget_renderer_toggle,
                 broadcast(context, appWidgetId, ACTION_TOGGLE, 0),
             )
+            views.setBoolean(R.id.widget_renderer_toggle, "setEnabled", !RendererService.transitioning)
             views.setTextViewText(
                 R.id.widget_play_pause,
                 if (RadioService.running && RadioService.paused) "▶" else "⏯",
