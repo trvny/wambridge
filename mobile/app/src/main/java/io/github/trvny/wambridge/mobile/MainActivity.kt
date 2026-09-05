@@ -79,6 +79,7 @@ class MainActivity : Activity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
                 speakerInputRevision.incrementAndGet()
+                cancelAutoDiscovery()
             }
         })
         speakerCard.addView(speakerIp)
@@ -137,7 +138,7 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(content) })
         refreshLauncherButton()
         refreshStatus()
-        window.decorView.post { autoDiscoverSpeaker() }
+        window.decorView.post(autoDiscoveryRetry)
     }
 
     override fun onResume() {
@@ -170,6 +171,7 @@ class MainActivity : Activity() {
     }
 
     private fun autoDiscoverSpeaker() {
+        if (isFinishing || isDestroyed || discoveryExecutor.isShutdown) return
         window.decorView.removeCallbacks(autoDiscoveryRetry)
         if (RendererService.busy || RadioService.active) {
             window.decorView.postDelayed(autoDiscoveryRetry, 1_000L)
