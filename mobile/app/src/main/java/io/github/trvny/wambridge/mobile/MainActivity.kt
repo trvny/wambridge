@@ -9,13 +9,17 @@ import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The launcher alias, spelled as `AndroidManifest.xml` declares it.
@@ -32,6 +36,16 @@ class MainActivity : Activity() {
     private lateinit var stopRendererButton: Button
     private lateinit var speakerIp: EditText
     private lateinit var statusView: TextView
+    private var manualDiscoveryRunning = false
+
+    private val autoDiscoveryGeneration = AtomicInteger()
+    private val speakerInputRevision = AtomicInteger()
+    private val discoveryExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "wam-mobile-auto-discovery").apply { isDaemon = true }
+    }
+    private val autoDiscoveryRetry = Runnable {
+        if (!isFinishing && !isDestroyed) autoDiscoverSpeaker()
+    }
 
     private val preferences by lazy {
         getSharedPreferences(RendererService.PREFS, MODE_PRIVATE)
@@ -61,8 +75,16 @@ class MainActivity : Activity() {
             setText(preferences.getString(RendererService.KEY_SPEAKER_IP, ""))
             setSingleLine(true)
         }
+        speakerIp.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                speakerInputRevision.incrementAndGet()
+                cancelAutoDiscovery()
+            }
+        })
         speakerCard.addView(speakerIp)
-        speakerCard.addView(MobileUi.body(this, "Discovery follows the saved speaker across DHCP changes.").apply {
+        speakerCard.addView(MobileUi.body(this, "Discovery runs automatically on launch and follows the saved speaker across DHCP changes.").apply {
             setPadding(0, MobileUi.dp(this@MainActivity, 10), 0, MobileUi.dp(this@MainActivity, 10))
         })
         speakerCard.addView(MobileUi.row(this).also { row ->
@@ -117,10 +139,7 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(content) })
         refreshLauncherButton()
         refreshStatus()
-
-        if (!RendererService.isReasonableIpv4(speakerIp.text.toString().trim())) {
-            window.decorView.post { discoverSpeaker(allowScan = false) }
-        }
+        window.decorView.post(autoDiscoveryRetry)
     }
 
     override fun onResume() {
@@ -128,7 +147,15 @@ class MainActivity : Activity() {
         if (::statusView.isInitialized) refreshStatus()
     }
 
+    override fun onDestroy() {
+        autoDiscoveryGeneration.incrementAndGet()
+        window.decorView.removeCallbacks(autoDiscoveryRetry)
+        discoveryExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
     private fun saveSpeakerIp(): String? {
+        cancelAutoDiscovery()
         val value = speakerIp.text.toString().trim()
         if (!RendererService.isReasonableIpv4(value)) {
             speakerIp.error = "Enter an IPv4 address"
@@ -138,12 +165,99 @@ class MainActivity : Activity() {
         return value
     }
 
+    private fun cancelAutoDiscovery() {
+        autoDiscoveryGeneration.incrementAndGet()
+        window.decorView.removeCallbacks(autoDiscoveryRetry)
+        if (::discoverButton.isInitialized && !manualDiscoveryRunning) MobileUi.setEnabled(discoverButton, true)
+    }
+
+    private fun autoDiscoverSpeaker() {
+        if (isFinishing || isDestroyed || discoveryExecutor.isShutdown) return
+        window.decorView.removeCallbacks(autoDiscoveryRetry)
+        if (deferAutoDiscoveryWhileBusy()) return
+
+        val previous = speakerIp.text.toString().trim()
+        val savedBefore = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
+        val inputRevision = speakerInputRevision.get()
+        val generation = autoDiscoveryGeneration.incrementAndGet()
+        MobileUi.setEnabled(discoverButton, false)
+        statusView.text = "Finding M5 on Wi-Fi…"
+
+        discoveryExecutor.execute {
+            val result = runCatching {
+                SpeakerTarget.resolveUnpersisted(applicationContext) {
+                    autoDiscoveryStillCurrent(generation, inputRevision, savedBefore)
+                }
+            }
+            runOnUiThread {
+                applyAutoDiscoveryResult(generation, inputRevision, savedBefore, previous, result)
+            }
+        }
+    }
+
+    private fun deferAutoDiscoveryWhileBusy(): Boolean {
+        if (!RendererService.busy && !RadioService.active) return false
+        window.decorView.postDelayed(autoDiscoveryRetry, 1_000L)
+        return true
+    }
+
+    private fun autoDiscoveryStillCurrent(
+        generation: Int,
+        inputRevision: Int,
+        savedBefore: String,
+    ): Boolean = autoDiscoveryGeneration.get() == generation &&
+        speakerInputRevision.get() == inputRevision &&
+        preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim() == savedBefore &&
+        !Thread.currentThread().isInterrupted
+
+    private fun applyAutoDiscoveryResult(
+        generation: Int,
+        inputRevision: Int,
+        savedBefore: String,
+        previous: String,
+        result: Result<SpeakerTarget.Resolution?>,
+    ) {
+        if (isFinishing || isDestroyed || autoDiscoveryGeneration.get() != generation) return
+        MobileUi.setEnabled(discoverButton, true)
+        if (speakerInputRevision.get() != inputRevision) return
+        val resolution = result.getOrNull()
+        val target = resolution?.ip
+        val savedNow = preferences.getString(RendererService.KEY_SPEAKER_IP, "").orEmpty().trim()
+        if (savedNow != savedBefore && savedNow != target) return
+
+        result.fold(
+            onSuccess = { showAutoDiscoveryTarget(previous, it) },
+            onFailure = { error ->
+                statusView.text = "Automatic discovery failed: ${error.message ?: error.javaClass.simpleName}"
+            },
+        )
+    }
+
+    private fun showAutoDiscoveryTarget(previous: String, result: SpeakerTarget.Resolution?) {
+        if (result == null) {
+            statusView.text = "No WAM speaker found automatically. Tap Discover to retry."
+            return
+        }
+        SpeakerTarget.rememberResolved(applicationContext, result)
+        val target = result.ip
+        speakerIp.setText(target)
+        statusView.text = if (target == previous) {
+            "M5 ready at $target."
+        } else {
+            "Found M5 at $target and updated the saved address."
+        }
+    }
+
     private fun discoverSpeaker(allowScan: Boolean) {
-        if (RendererService.busy) {
-            Toast.makeText(this, "Stop the renderer before discovery.", Toast.LENGTH_SHORT).show()
+        cancelAutoDiscovery()
+        if (manualDiscoveryRunning) return
+        if (RendererService.busy || RadioService.active) {
+            Toast.makeText(this, "Stop renderer/radio playback before discovery.", Toast.LENGTH_SHORT).show()
             return
         }
 
+        val inputRevision = speakerInputRevision.get()
+        manualDiscoveryRunning = true
         MobileUi.setEnabled(discoverButton, false)
         statusView.text = if (allowScan) {
             "Discovering WAM speakers on Wi-Fi…"
@@ -152,10 +266,18 @@ class MainActivity : Activity() {
         }
 
         Thread({
-            val result = WamDiscovery.discover(applicationContext, allowScan = allowScan)
+            val result = SpeakerTarget.withDiscoveryLock {
+                WamDiscovery.discover(applicationContext, allowScan = allowScan)
+            }
             val speakers = result.speakers
             runOnUiThread {
+                manualDiscoveryRunning = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 MobileUi.setEnabled(discoverButton, true)
+                if (speakerInputRevision.get() != inputRevision) {
+                    statusView.text = "Discovery finished; keeping the address you edited."
+                    return@runOnUiThread
+                }
                 when {
                     speakers.isEmpty() && allowScan -> {
                         statusView.text = emptyScanMessage(result.scan)
@@ -216,10 +338,10 @@ class MainActivity : Activity() {
 
     private fun testSpeaker() {
         val value = saveSpeakerIp() ?: return
-        if (RendererService.busy) {
+        if (RendererService.busy || RadioService.active) {
             Toast.makeText(
                 this,
-                "Stop the renderer before probing. Active playback keeps one WAM control connection only.",
+                "Stop renderer/radio playback before probing. The M5 keeps one WAM control connection only.",
                 Toast.LENGTH_LONG,
             ).show()
             return
@@ -227,7 +349,9 @@ class MainActivity : Activity() {
 
         statusView.text = "Testing $value…"
         Thread({
-            val reachable = SamsungWamChannel.probe(applicationContext, value)
+            val reachable = SpeakerTarget.withDiscoveryLock {
+                SamsungWamChannel.probe(applicationContext, value)
+            }
             runOnUiThread {
                 statusView.text = if (reachable) {
                     "M5 answered at $value."
@@ -239,6 +363,7 @@ class MainActivity : Activity() {
     }
 
     private fun startRenderer() {
+        cancelAutoDiscovery()
         val manualTarget = speakerIp.text.toString().trim()
         if (manualTarget.isNotEmpty()) {
             if (!RendererService.isReasonableIpv4(manualTarget)) {
